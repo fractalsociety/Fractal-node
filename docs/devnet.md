@@ -15,7 +15,7 @@ This page ties together **PRD §18 M6** pieces in-repo (anchored on **`docs/prd.
 
 ## Explorer
 
-- Static UI under `tools/explorer` — chain summary, recent blocks, account + tx lookup (`tools/explorer/README.md`).
+- Static UI under `tools/explorer` — chain summary, recent blocks (click a row for tx hashes), account (balance, nonce, code) + tx lookup (`tools/explorer/README.md`).
 - From repo root: **`./scripts/serve-explorer.sh`** (optional **`EXPLORER_PORT`**).
 
 ## Docker devnet

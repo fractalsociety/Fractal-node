@@ -5,21 +5,192 @@
   <title>FractalChain explorer (dev)</title>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <style>
-    :root { color-scheme: light dark; }
-    body { font-family: system-ui, sans-serif; max-width: 52rem; margin: 0 auto; padding: 1rem 1.25rem 2rem; line-height: 1.45; }
-    h1 { font-size: 1.35rem; margin-bottom: 0.25rem; }
-    h2 { font-size: 1.05rem; margin: 1.5rem 0 0.5rem; border-bottom: 1px solid #8884; padding-bottom: 0.2rem; }
-    code, .mono { font-family: ui-monospace, monospace; font-size: 0.85rem; background: #8882; padding: 0.12rem 0.35rem; border-radius: 4px; }
-    button { margin: 0.35rem 0.35rem 0 0; padding: 0.4rem 0.85rem; cursor: pointer; }
-    input[type="text"] { width: 100%; max-width: 32rem; padding: 0.35rem 0.5rem; font-family: ui-monospace, monospace; }
-    table { width: 100%; border-collapse: collapse; font-size: 0.88rem; margin-top: 0.35rem; }
-    th, td { text-align: left; padding: 0.35rem 0.5rem; border-bottom: 1px solid #8883; }
-    th { font-weight: 600; }
-    .muted { color: #666; font-size: 0.88rem; }
-    .err { color: #b00; white-space: pre-wrap; }
-    pre { overflow: auto; max-height: 22rem; background: #8881; padding: 0.75rem; border-radius: 6px; font-size: 0.8rem; }
+    /* Explicit palettes — avoids UA “dark scheme” light text on our pale .mono/table rows. */
+    :root {
+      color-scheme: light;
+      --bg: #ffffff;
+      --fg: #0f172a;
+      --fg-muted: #475569;
+      --border: #cbd5e1;
+      --surface: #f8fafc;
+      --mono-bg: #e2e8f0;
+      --mono-fg: #0f172a;
+      --row-hover: #dbeafe;
+      --link: #1d4ed8;
+      --link-hover: #1e40af;
+      --err: #b91c1c;
+      --pre-bg: #f1f5f9;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        color-scheme: dark;
+        --bg: #0f172a;
+        --fg: #f1f5f9;
+        --fg-muted: #94a3b8;
+        --border: #334155;
+        --surface: #1e293b;
+        --mono-bg: #334155;
+        --mono-fg: #f8fafc;
+        --row-hover: #1e3a5f;
+        --link: #93c5fd;
+        --link-hover: #bfdbfe;
+        --err: #f87171;
+        --pre-bg: #1e293b;
+      }
+    }
+    body {
+      font-family: system-ui, sans-serif;
+      max-width: 52rem;
+      margin: 0 auto;
+      padding: 1rem 1.25rem 2rem;
+      line-height: 1.45;
+      color: var(--fg);
+      background: var(--bg);
+    }
+    h1 { font-size: 1.35rem; margin-bottom: 0.25rem; color: var(--fg); }
+    h2 {
+      font-size: 1.05rem;
+      margin: 1.5rem 0 0.5rem;
+      border-bottom: 1px solid var(--border);
+      padding-bottom: 0.2rem;
+      color: var(--fg);
+    }
+    code, .mono {
+      font-family: ui-monospace, monospace;
+      font-size: 0.85rem;
+      background: var(--mono-bg);
+      color: var(--mono-fg);
+      padding: 0.12rem 0.35rem;
+      border-radius: 4px;
+    }
+    button {
+      margin: 0.35rem 0.35rem 0 0;
+      padding: 0.4rem 0.85rem;
+      cursor: pointer;
+      color: var(--fg);
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+    }
+    button:hover { background: var(--row-hover); }
+    input[type="text"] {
+      width: 100%;
+      max-width: 32rem;
+      padding: 0.35rem 0.5rem;
+      font-family: ui-monospace, monospace;
+      color: var(--fg);
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 0.88rem;
+      margin-top: 0.35rem;
+      color: var(--fg);
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      overflow: hidden;
+    }
+    th, td {
+      text-align: left;
+      padding: 0.35rem 0.5rem;
+      border-bottom: 1px solid var(--border);
+      color: var(--fg);
+    }
+    th { font-weight: 600; background: var(--mono-bg); color: var(--mono-fg); }
+    tr:last-child td { border-bottom: none; }
+    .muted { color: var(--fg-muted); font-size: 0.88rem; }
+    .err { color: var(--err); white-space: pre-wrap; }
+    pre {
+      overflow: auto;
+      max-height: 22rem;
+      background: var(--pre-bg);
+      color: var(--fg);
+      padding: 0.75rem;
+      border-radius: 6px;
+      font-size: 0.8rem;
+      border: 1px solid var(--border);
+      /* Long 0x… strings are one token; default `pre` clips visually without a clear x-scroll. */
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+      word-break: break-word;
+      min-width: 0;
+    }
     .row { display: flex; flex-wrap: wrap; gap: 0.5rem 1.25rem; align-items: baseline; }
-    .pill { display: inline-block; padding: 0.15rem 0.5rem; border-radius: 999px; background: #8882; font-size: 0.8rem; }
+    .pill {
+      display: inline-block;
+      padding: 0.15rem 0.5rem;
+      border-radius: 999px;
+      background: var(--mono-bg);
+      color: var(--mono-fg);
+      font-size: 0.8rem;
+      border: 1px solid var(--border);
+    }
+    tr.block-row { cursor: pointer; }
+    tr.block-row:hover { background: var(--row-hover); }
+    tr.block-row:hover td { color: var(--fg); }
+    tr.block-row td:last-child { font-weight: 600; }
+    #blockDetail { margin-top: 0.75rem; color: var(--fg); }
+    #blockDetail h3 { color: var(--fg); }
+    #blockDetail .block-hash-line {
+      font-family: ui-monospace, monospace;
+      font-size: 0.78rem;
+      word-break: break-all;
+      overflow-wrap: anywhere;
+      margin: 0 0 0.5rem;
+      padding: 0.35rem 0.5rem;
+      background: var(--pre-bg);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      color: var(--fg);
+    }
+    .tx-link {
+      background: transparent;
+      border: none;
+      color: var(--link);
+      text-decoration: underline;
+      cursor: pointer;
+      font-family: ui-monospace, monospace;
+      font-size: inherit;
+      padding: 0;
+      margin: 0.15rem 0;
+      display: block;
+      text-align: left;
+    }
+    .tx-link:hover { color: var(--link-hover); }
+    .tx-address-strip {
+      margin: 0 0 0.75rem;
+      padding: 0.65rem 0.75rem;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+    }
+    .tx-address-strip .strip-title { font-size: 0.82rem; color: var(--fg-muted); margin-bottom: 0.4rem; }
+    .addr-chip-row { display: flex; flex-wrap: wrap; gap: 0.35rem 0.5rem; align-items: center; }
+    .addr-pair { display: inline-flex; align-items: center; gap: 0.25rem; flex-wrap: wrap; font-size: 0.8rem; }
+    .addr-pair span.lbl { color: var(--fg-muted); }
+    button.addr-jump {
+      font-family: ui-monospace, monospace;
+      font-size: 0.78rem;
+      padding: 0.2rem 0.5rem;
+      margin: 0;
+    }
+    .tx-list-item { margin: 0.35rem 0; list-style: disc; }
+    .tx-list-item .tx-from-line { font-size: 0.8rem; margin: 0.2rem 0 0 0; color: var(--fg-muted); }
+    button.ghost-link {
+      background: transparent;
+      border: none;
+      color: var(--link);
+      text-decoration: underline;
+      padding: 0;
+      margin: 0;
+      font-size: 0.82rem;
+      cursor: pointer;
+    }
+    button.ghost-link:hover { color: var(--link-hover); }
   </style>
 </head>
 <body>
@@ -33,22 +204,24 @@
   <div id="summary"></div>
 
   <h2>Recent blocks</h2>
-  <p class="muted">Up to 10 blocks ending at head (gas, timestamp, tx count).</p>
+  <p class="muted">Up to 10 blocks ending at head — <strong>click a row</strong> to list transaction hashes in that block.</p>
   <div id="blocks"></div>
+  <div id="blockDetail"></div>
 
-  <h2>Account</h2>
-  <p class="muted"><code>eth_getBalance</code> + <code>eth_getTransactionCount</code></p>
+  <h2>Address lookup</h2>
+  <p class="muted">Paste a 20-byte account / contract address. Balance, nonce, and bytecode length use <code>eth_getBalance</code>, <code>eth_getTransactionCount</code>, and <code>eth_getCode</code>. You can omit the <code>0x</code> prefix; use a transaction lookup below, then click <strong>From</strong> / <strong>To</strong> to jump here.</p>
+  <p class="muted"><button type="button" class="ghost-link" id="fillHardhat0">Fill Hardhat dev signer #0</button> (common prefund key on devnet)</p>
   <div class="row">
-    <input type="text" id="acct" placeholder="0x… 20-byte address" autocomplete="off" />
-    <button type="button" id="lookupAcct">Lookup</button>
+    <input type="text" id="acct" placeholder="0x + 40 hex chars (or 40 hex without 0x)" autocomplete="off" spellcheck="false" />
+    <button type="button" id="lookupAcct">Look up address</button>
   </div>
   <div id="accountOut"></div>
 
-  <h2>Transaction</h2>
-  <p class="muted"><code>eth_getTransactionByHash</code> + <code>eth_getTransactionReceipt</code></p>
+  <h2>Transaction lookup</h2>
+  <p class="muted"><code>eth_getTransactionByHash</code> + receipt. After lookup, use the address buttons to inspect an account.</p>
   <div class="row">
-    <input type="text" id="txhash" placeholder="0x… 32-byte tx hash" autocomplete="off" />
-    <button type="button" id="lookupTx">Lookup</button>
+    <input type="text" id="txhash" placeholder="0x + 64 hex tx hash (or 64 hex without 0x)" autocomplete="off" spellcheck="false" />
+    <button type="button" id="lookupTx">Look up transaction</button>
   </div>
   <div id="txOut"></div>
 

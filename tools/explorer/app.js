@@ -29,6 +29,114 @@ function shortHash(h, n = 10) {
   return h.slice(0, n + 2) + "…" + h.slice(-6);
 }
 
+/** 0x + 40 hex, case-insensitive; also accepts 40 hex without 0x. */
+function normalizeAddress(raw) {
+  let s = String(raw).trim();
+  if (!s) return null;
+  if (!s.startsWith("0x") && /^[0-9a-fA-F]{40}$/.test(s)) s = "0x" + s;
+  if (!s.startsWith("0x") || s.length !== 42) return null;
+  if (!/^0x[0-9a-fA-F]{40}$/i.test(s)) return null;
+  return s.toLowerCase();
+}
+
+/** 0x + 64 hex; accepts 64 hex without 0x. */
+function normalizeTxHash(raw) {
+  let s = String(raw).trim();
+  if (!s) return null;
+  if (!s.startsWith("0x") && /^[0-9a-fA-F]{64}$/.test(s)) s = "0x" + s;
+  if (!s.startsWith("0x") || s.length !== 66) return null;
+  if (!/^0x[0-9a-fA-F]{64}$/i.test(s)) return null;
+  return s.toLowerCase();
+}
+
+function shortAddr(addr) {
+  if (!addr || typeof addr !== "string" || addr.length < 12) return addr || "—";
+  return addr.slice(0, 8) + "…" + addr.slice(-6);
+}
+
+function jumpToAddress(addr) {
+  const n = normalizeAddress(addr);
+  if (!n) return;
+  const acct = document.getElementById("acct");
+  const out = document.getElementById("accountOut");
+  if (acct) acct.value = n;
+  if (out) out.scrollIntoView({ behavior: "smooth", block: "nearest" });
+  lookupAccount();
+}
+
+function makeAddrJump(label, fullAddr) {
+  const n = normalizeAddress(fullAddr);
+  if (!n) return null;
+  const wrap = document.createElement("span");
+  wrap.className = "addr-pair";
+  const lbl = document.createElement("span");
+  lbl.className = "lbl";
+  lbl.textContent = label;
+  const btn = document.createElement("button");
+  btn.type = "button";
+  btn.className = "addr-jump";
+  btn.textContent = shortAddr(n);
+  btn.title = `${n} — open in Address lookup`;
+  btn.addEventListener("click", (e) => {
+    e.preventDefault();
+    jumpToAddress(n);
+  });
+  wrap.appendChild(lbl);
+  wrap.appendChild(btn);
+  return wrap;
+}
+
+function renderTxAddressStrip(container, tx, receipt) {
+  container.innerHTML = "";
+  const box = document.createElement("div");
+  box.className = "tx-address-strip";
+  const title = document.createElement("div");
+  title.className = "strip-title";
+  title.textContent = "Addresses — click a button to look up that account";
+  box.appendChild(title);
+  const row = document.createElement("div");
+  row.className = "addr-chip-row";
+
+  const from = tx && typeof tx === "object" ? tx.from : null;
+  const to = tx && typeof tx === "object" ? tx.to : null;
+  const rcFrom = receipt && typeof receipt === "object" ? receipt.from : null;
+  const rcTo = receipt && typeof receipt === "object" ? receipt.to : null;
+  const contract = receipt && typeof receipt === "object" ? receipt.contractAddress : null;
+
+  const f = from || rcFrom;
+  if (f) {
+    const el = makeAddrJump("From", f);
+    if (el) row.appendChild(el);
+  }
+  const t = to || rcTo;
+  if (t) {
+    const el = makeAddrJump("To", t);
+    if (el) row.appendChild(el);
+  }
+  if (contract) {
+    const el = makeAddrJump("Contract", contract);
+    if (el) row.appendChild(el);
+  }
+
+  if (!row.children.length) {
+    const p = document.createElement("p");
+    p.className = "muted";
+    p.style.margin = "0";
+    p.textContent =
+      "No from/to on this response (e.g. some native txs). Raw JSON is below.";
+    box.appendChild(p);
+  } else {
+    box.appendChild(row);
+  }
+  container.appendChild(box);
+}
+
+function codeByteLen(hex) {
+  if (typeof hex !== "string" || !hex.startsWith("0x")) return 0;
+  const n = (hex.length - 2) / 2;
+  return Number.isInteger(n) && n >= 0 ? n : 0;
+}
+
 async function loadSummary(el) {
   const [chainId, netVer, bnHex, gasPrice, client] = await Promise.all([
     rpc("eth_chainId"),
@@ -66,7 +174,19 @@ async function loadSummary(el) {
   el.appendChild(dl);
 }
 
+function wireBlockRowClicks(tbody) {
+  tbody.addEventListener("click", (ev) => {
+    const tr = ev.target.closest("tr[data-block-tag]");
+    if (!tr) return;
+    const tag = tr.getAttribute("data-block-tag");
+    if (tag) showBlockDetail(tag);
+  });
+}
+
 async function loadBlocks(el) {
+  const detail = document.getElementById("blockDetail");
+  if (detail) detail.innerHTML = "";
+
   const bnHex = await rpc("eth_blockNumber");
   const head = hexToBigInt(bnHex);
   const count = 10n;
@@ -84,17 +204,24 @@ async function loadBlocks(el) {
   thead.innerHTML = "<tr><th>#</th><th>Hash</th><th>Gas used</th><th>Time</th><th>Txs</th></tr>";
   table.appendChild(thead);
   const tbody = document.createElement("tbody");
+  wireBlockRowClicks(tbody);
   for (let i = 0; i < blocks.length; i++) {
     const b = blocks[i];
     const tr = document.createElement("tr");
+    tr.className = "block-row";
+    tr.setAttribute("data-block-tag", tags[i]);
+    tr.title = "Show transactions in this block";
     if (!b) {
-      tr.innerHTML = `<td colspan="5" class="muted">(missing)</td>`;
+      const td = document.createElement("td");
+      td.colSpan = 5;
+      td.className = "muted";
+      td.textContent = "(missing)";
+      tr.appendChild(td);
       tbody.appendChild(tr);
       continue;
     }
     const n = b.number ?? tags[i];
     const txc = Array.isArray(b.transactions) ? b.transactions.length : 0;
-    tr.innerHTML = "";
     for (const [x, cls] of [
       [n, "mono"],
       [shortHash(b.hash, 8), "mono"],
@@ -111,6 +238,110 @@ async function loadBlocks(el) {
   }
   table.appendChild(tbody);
   el.appendChild(table);
+}
+
+async function showBlockDetail(blockTag) {
+  const detail = document.getElementById("blockDetail");
+  if (!detail) return;
+  detail.textContent = "Loading block…";
+  try {
+    const b = await rpc("eth_getBlockByNumber", [blockTag, false]);
+    const txs = Array.isArray(b.transactions) ? b.transactions : [];
+    detail.innerHTML = "";
+
+    const h3 = document.createElement("h3");
+    h3.style.fontSize = "1rem";
+    h3.style.margin = "0 0 0.5rem";
+    h3.textContent = `Block ${b.number ?? blockTag}`;
+    detail.appendChild(h3);
+
+    if (b.hash) {
+      const hashLine = document.createElement("p");
+      hashLine.className = "block-hash-line";
+      hashLine.textContent = `hash ${b.hash}`;
+      detail.appendChild(hashLine);
+    }
+
+    const explain = document.createElement("p");
+    explain.className = "muted";
+    explain.style.margin = "0 0 0.5rem";
+    explain.innerHTML =
+      "This is <strong>block header</strong> data (identifiers + state roots). It is not a wallet “address.” " +
+      "<strong>Account addresses</strong> (20-byte <code>0x…</code>) appear on <strong>transactions</strong> " +
+      "(<code>from</code> / <code>to</code>) after you open a block that has txs, or use <strong>Address lookup</strong> below.";
+    detail.appendChild(explain);
+
+    const meta = document.createElement("pre");
+    meta.className = "block-meta-json";
+    const metaObj = {
+      number: b.number,
+      hash: b.hash,
+      parentHash: b.parentHash,
+      miner: b.miner,
+      extraData: b.extraData,
+      stateRoot: b.stateRoot,
+      transactionsRoot: b.transactionsRoot,
+      gasUsed: b.gasUsed,
+      gasLimit: b.gasLimit,
+      timestamp: b.timestamp,
+      baseFeePerGas: b.baseFeePerGas,
+      transactionCount: txs.length,
+    };
+    meta.textContent = JSON.stringify(metaObj, null, 2);
+    detail.appendChild(meta);
+
+    if (txs.length === 0) {
+      const p = document.createElement("p");
+      p.className = "muted";
+      p.innerHTML =
+        "No transactions in this block — so there are no <code>from</code>/<code>to</code> account lines to show. " +
+        "The long <code>hash</code> above is the block’s own id (32 bytes), not an Ethereum account.";
+      detail.appendChild(p);
+      return;
+    }
+
+    const txObjs = await Promise.all(
+      txs.map((th) => rpc("eth_getTransactionByHash", [th]).catch(() => null)),
+    );
+
+    const ul = document.createElement("ul");
+    ul.style.margin = "0.5rem 0 0";
+    ul.style.paddingLeft = "1.1rem";
+    for (let i = 0; i < txs.length; i++) {
+      const th = txs[i];
+      const txo = txObjs[i];
+      const li = document.createElement("li");
+      li.className = "tx-list-item";
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "tx-link mono";
+      btn.textContent = th;
+      btn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        document.getElementById("txhash").value = th;
+        document.getElementById("txOut").scrollIntoView({ behavior: "smooth", block: "nearest" });
+        lookupTxWithHash(th);
+      });
+      li.appendChild(btn);
+      const fromLine = document.createElement("div");
+      fromLine.className = "tx-from-line";
+      if (txo && typeof txo === "object" && txo.from) {
+        const j = makeAddrJump("From", txo.from);
+        if (j) fromLine.appendChild(j);
+      } else {
+        fromLine.textContent = "Sender not returned for this hash (try the tx link).";
+      }
+      li.appendChild(fromLine);
+      ul.appendChild(li);
+    }
+    detail.appendChild(ul);
+  } catch (e) {
+    detail.innerHTML = "";
+    const p = document.createElement("p");
+    p.className = "err";
+    p.textContent = String(e);
+    detail.appendChild(p);
+  }
 }
 
 async function refresh() {
@@ -131,21 +362,69 @@ async function refresh() {
 }
 
 async function lookupAccount() {
-  const raw = document.getElementById("acct").value.trim();
+  const raw = document.getElementById("acct").value;
   const out = document.getElementById("accountOut");
   out.textContent = "…";
   try {
-    if (!raw.startsWith("0x") || raw.length !== 42) {
-      out.innerHTML = '<p class="err">Enter a 20-byte hex address (0x + 40 hex chars).</p>';
+    const addr = normalizeAddress(raw);
+    if (!addr) {
+      out.innerHTML =
+        '<p class="err">Enter a 20-byte address: <code>0x</code> plus 40 hex characters, or 40 hex characters without the prefix.</p>';
       return;
     }
-    const [bal, nonce] = await Promise.all([
-      rpc("eth_getBalance", [raw, "latest"]),
-      rpc("eth_getTransactionCount", [raw, "latest"]),
+    document.getElementById("acct").value = addr;
+    const [bal, nonce, code] = await Promise.all([
+      rpc("eth_getBalance", [addr, "latest"]),
+      rpc("eth_getTransactionCount", [addr, "latest"]),
+      rpc("eth_getCode", [addr, "latest"]),
     ]);
     const pre = document.createElement("pre");
-    pre.textContent = JSON.stringify({ address: raw, balance: bal, transactionCount: nonce }, null, 2);
+    const codeLen = codeByteLen(code);
+    pre.textContent = JSON.stringify(
+      {
+        address: addr,
+        balance: bal,
+        transactionCount: nonce,
+        codeHex: code,
+        codeByteLength: codeLen,
+        isContract: codeLen > 0,
+      },
+      null,
+      2,
+    );
     out.innerHTML = "";
+    out.appendChild(pre);
+  } catch (e) {
+    out.innerHTML = "";
+    const p = document.createElement("p");
+    p.className = "err";
+    p.textContent = String(e);
+    out.appendChild(p);
+  }
+}
+
+async function lookupTxWithHash(raw) {
+  const out = document.getElementById("txOut");
+  out.textContent = "…";
+  try {
+    const h = normalizeTxHash(raw);
+    if (!h) {
+      out.innerHTML =
+        '<p class="err">Enter a 32-byte transaction hash: <code>0x</code> plus 64 hex characters, or 64 hex without the prefix.</p>';
+      return;
+    }
+    const txInput = document.getElementById("txhash");
+    if (txInput) txInput.value = h;
+    const [tx, rc] = await Promise.all([
+      rpc("eth_getTransactionByHash", [h]),
+      rpc("eth_getTransactionReceipt", [h]),
+    ]);
+    out.innerHTML = "";
+    const stripHost = document.createElement("div");
+    renderTxAddressStrip(stripHost, tx, rc);
+    out.appendChild(stripHost);
+    const pre = document.createElement("pre");
+    pre.textContent = JSON.stringify({ transaction: tx, receipt: rc }, null, 2);
     out.appendChild(pre);
   } catch (e) {
     out.innerHTML = "";
@@ -157,32 +436,19 @@ async function lookupAccount() {
 }
 
 async function lookupTx() {
-  const raw = document.getElementById("txhash").value.trim();
-  const out = document.getElementById("txOut");
-  out.textContent = "…";
-  try {
-    if (!raw.startsWith("0x") || raw.length !== 66) {
-      out.innerHTML = '<p class="err">Enter a 32-byte tx hash (0x + 64 hex chars).</p>';
-      return;
-    }
-    const [tx, rc] = await Promise.all([
-      rpc("eth_getTransactionByHash", [raw]),
-      rpc("eth_getTransactionReceipt", [raw]),
-    ]);
-    const pre = document.createElement("pre");
-    pre.textContent = JSON.stringify({ transaction: tx, receipt: rc }, null, 2);
-    out.innerHTML = "";
-    out.appendChild(pre);
-  } catch (e) {
-    out.innerHTML = "";
-    const p = document.createElement("p");
-    p.className = "err";
-    p.textContent = String(e);
-    out.appendChild(p);
-  }
+  const raw = document.getElementById("txhash").value;
+  await lookupTxWithHash(raw);
 }
 
 document.getElementById("refresh").onclick = refresh;
 document.getElementById("lookupAcct").onclick = lookupAccount;
 document.getElementById("lookupTx").onclick = lookupTx;
+const fillH = document.getElementById("fillHardhat0");
+if (fillH) {
+  fillH.addEventListener("click", () => {
+    document.getElementById("acct").value = "0xf39fd6e51aad88f6f4ce6ab8827279cfffb92266";
+    document.getElementById("accountOut").scrollIntoView({ behavior: "smooth", block: "nearest" });
+    lookupAccount();
+  });
+}
 window.addEventListener("load", refresh);

@@ -24,8 +24,8 @@ Override port: **`EXPLORER_PORT=4000 ./scripts/serve-explorer.sh`**
 ## What it shows
 
 - **Chain** — `eth_chainId`, `net_version`, head block, `eth_gasPrice`, `web3_clientVersion`, head gas/timestamp/tx count.
-- **Recent blocks** — up to **10** blocks from head downward (`eth_getBlockByNumber`).
-- **Account** — `eth_getBalance` + `eth_getTransactionCount` for a pasted `0x` address.
+- **Recent blocks** — up to **10** blocks from head downward (`eth_getBlockByNumber`). **Click a row** to show block metadata and a list of transaction hashes; each hash fills the tx field and runs lookup.
+- **Account** — `eth_getBalance` + `eth_getTransactionCount` + `eth_getCode` for a pasted `0x` address (includes bytecode length and whether it looks like a contract).
 - **Transaction** — `eth_getTransactionByHash` + `eth_getTransactionReceipt` for a pasted `0x` hash (JSON as returned by the node).
 
 See **`docs/devnet.md`** for faucet and Docker devnet.
