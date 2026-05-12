@@ -1,17 +1,28 @@
-//! Pure execution state machine (M1): mocked native calls + canonical `state_root`.
+//! Pure execution state machine: native M3 subtries + canonical `state_root`.
 //!
 //! Full Merkle Patricia Trie lives in `fractal-storage` later; here `state_root` is
 //! `keccak256(borsh(State))` with sorted `BTreeMap` fields for deterministic iteration.
 
+mod address;
 mod error;
+pub mod merkle;
+mod native_gas;
+mod native_types;
 mod state;
 mod tx;
 
 #[cfg(feature = "wallet")]
 pub mod wallet_anchor;
 
+pub use address::Address;
 pub use error::ExecError;
-pub use state::{Account, Address, State};
+pub use merkle::{merkle_proof, merkle_root, verify_merkle_proof};
+pub use native_gas::{
+    intrinsic_gas, is_native_precompile_address, native_opcode_from_precompile_address, PER_BYTE,
+    TRANSFER_GAS,
+};
+pub use native_types::*;
+pub use state::{Account, State};
 pub use tx::{NativeCall, Transaction, TxBody, VmKind};
 
 use fractal_crypto::hash::commit_borsh;
@@ -21,12 +32,15 @@ pub fn state_root(state: &State) -> Result<fractal_crypto::Hash256, std::io::Err
     commit_borsh(state)
 }
 
-/// Apply an ordered list of transactions. Stops at the first invalid tx.
-pub fn apply_block(state: &mut State, txs: &[Transaction]) -> Result<(), ExecError> {
+/// Apply an ordered list of transactions. Returns total intrinsic gas used.
+pub fn apply_block(state: &mut State, txs: &[Transaction]) -> Result<u64, ExecError> {
+    let mut sum = 0u64;
     for tx in txs {
+        let g = intrinsic_gas(tx)?;
+        sum = sum.checked_add(g).ok_or(ExecError::GasOverflow)?;
         state.apply_transaction(tx)?;
     }
-    Ok(())
+    Ok(sum)
 }
 
 #[cfg(all(test, feature = "wallet"))]

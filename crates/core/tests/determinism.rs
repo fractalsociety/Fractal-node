@@ -39,7 +39,7 @@ impl Sim {
 
     fn build_txs(&mut self, rng: &mut StdRng) -> Vec<Transaction> {
         let mut txs = Vec::with_capacity(10_000);
-        for n in 0..10_000u32 {
+        for _n in 0..10_000u32 {
             let pick = rng.gen_range(0..100u32);
             let signer_i = rng.gen_range(0..256usize);
             let signer = addr(signer_i as u16);
@@ -73,23 +73,12 @@ impl Sim {
                 self.balances[signer_i] -= amount;
                 self.balances[recv_i] += amount;
                 self.nonces[signer_i] += 1;
-            } else if pick < 92 {
-                txs.push(Transaction {
-                    signer,
-                    nonce: self.nonces[signer_i],
-                    vm: VmKind::Native,
-                    body: TxBody::Native(NativeCall::SettleBatch {
-                        batch_id: n as u64,
-                        receipt_count: rng.gen_range(1..=64),
-                    }),
-                });
-                self.nonces[signer_i] += 1;
             } else {
                 txs.push(Transaction {
                     signer,
                     nonce: self.nonces[signer_i],
                     vm: VmKind::Native,
-                    body: TxBody::Native(NativeCall::RegisterAgent),
+                    body: TxBody::Native(NativeCall::NoOp),
                 });
                 self.nonces[signer_i] += 1;
             }

@@ -6,7 +6,7 @@ use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use borsh::BorshDeserialize;
-use fractal_consensus::{execute_and_build_block, header_hash, ordered_tx_root, Block, NATIVE_TX_GAS};
+use fractal_consensus::{execute_and_build_block, header_hash, ordered_tx_root, Block};
 use fractal_core::{Address, State, Transaction};
 use fractal_crypto::hash::keccak256;
 use fractal_mempool::{next_base_fee, BaseFeeParams, Mempool, PooledTx};
@@ -30,6 +30,8 @@ pub enum SyncApplyError {
     StateRoot,
     #[error("tx root mismatch after replay")]
     TxRoot,
+    #[error("gas used mismatch: header {header}, replay {replay}")]
+    GasUsedMismatch { header: u64, replay: u64 },
     #[error(transparent)]
     Exec(#[from] fractal_core::ExecError),
     #[error(transparent)]
@@ -90,7 +92,13 @@ impl NodeInner {
             return Err(SyncApplyError::ParentHash);
         }
         let mut scratch = self.state.clone();
-        fractal_core::apply_block(&mut scratch, &block.transactions)?;
+        let gas = fractal_core::apply_block(&mut scratch, &block.transactions)?;
+        if gas != block.header.gas_used {
+            return Err(SyncApplyError::GasUsedMismatch {
+                header: block.header.gas_used,
+                replay: gas,
+            });
+        }
         let sr = fractal_core::state_root(&scratch)?;
         if sr != block.header.state_root {
             return Err(SyncApplyError::StateRoot);
@@ -146,8 +154,8 @@ pub async fn producer_loop(node: NodeHandle) {
         ticker.tick().await;
         let mut n = node.lock().await;
         let base = n.base_fee;
-        let max_txs = (n.gas_limit / NATIVE_TX_GAS).max(1) as usize;
-        let txs = n.mempool.drain_ready(max_txs, base);
+        let gas_limit_cfg = n.gas_limit;
+        let txs = n.mempool.drain_ready_gas_budget(gas_limit_cfg, base);
         let parent = n.head_hash;
         let qc = n.parent_qc_hash;
         let height = n.height + 1;

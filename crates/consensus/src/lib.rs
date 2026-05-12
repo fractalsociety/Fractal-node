@@ -18,8 +18,8 @@ pub enum BuildBlockError {
     Exec(#[from] ExecError),
 }
 
-/// Fixed per-tx gas for Phase-1 native-style txs until metering is wired to real gas tables.
-pub const NATIVE_TX_GAS: u64 = 21_000;
+/// Legacy floor gas per tx (EVM transfer); native txs use [`fractal_core::intrinsic_gas`].
+pub const MIN_TX_GAS: u64 = 21_000;
 
 #[derive(BorshSerialize, BorshDeserialize, Clone, Debug, PartialEq, Eq)]
 pub struct BlockHeader {
@@ -96,10 +96,18 @@ pub fn execute_and_build_block(
     state: &mut State,
     txs: Vec<Transaction>,
 ) -> Result<Block, BuildBlockError> {
-    fractal_core::apply_block(state, &txs)?;
+    let mut sum = 0u64;
+    for tx in &txs {
+        let g = fractal_core::intrinsic_gas(tx)?;
+        sum = sum.checked_add(g).ok_or(ExecError::GasOverflow)?;
+    }
+    if sum > gas_limit {
+        return Err(ExecError::GasLimitExceeded.into());
+    }
+    let gas_used = fractal_core::apply_block(state, &txs)?;
+    debug_assert_eq!(gas_used, sum);
     let sr = state_root(state)?;
     let tx_root = ordered_tx_root(&txs)?;
-    let gas_used = txs.len() as u64 * NATIVE_TX_GAS;
     let header = BlockHeader {
         version: 1,
         chain_id,

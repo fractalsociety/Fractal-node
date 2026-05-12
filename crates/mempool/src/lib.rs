@@ -23,6 +23,32 @@ impl Mempool {
         self.pending.push(tx);
     }
 
+    pub fn drain_ready_gas_budget(&mut self, max_gas: u64, base_fee: u128) -> Vec<Transaction> {
+        self.pending
+            .sort_by(|a, b| b.max_priority_fee_per_gas.cmp(&a.max_priority_fee_per_gas));
+        let mut taken = Vec::new();
+        let mut rest = Vec::new();
+        let mut used: u64 = 0;
+        for p in self.pending.drain(..) {
+            if p.max_fee_per_gas < base_fee {
+                rest.push(p);
+                continue;
+            }
+            let Ok(g) = fractal_core::intrinsic_gas(&p.tx) else {
+                rest.push(p);
+                continue;
+            };
+            if used.saturating_add(g) <= max_gas {
+                used = used.saturating_add(g);
+                taken.push(p.tx);
+            } else {
+                rest.push(p);
+            }
+        }
+        self.pending = rest;
+        taken
+    }
+
     /// Drain up to `max_txs` transactions that satisfy `max_fee_per_gas >= base_fee`,
     /// highest effective priority first.
     pub fn drain_ready(&mut self, max_txs: usize, base_fee: u128) -> Vec<Transaction> {
