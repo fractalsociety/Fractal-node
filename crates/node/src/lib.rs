@@ -12,7 +12,7 @@ use fractal_consensus::{execute_and_build_block, header_hash, ordered_tx_root, B
 use fractal_core::{Address, EvmEngine, State, Transaction};
 use fractal_crypto::hash::keccak256;
 use fractal_mempool::{next_base_fee, BaseFeeParams, Mempool, PooledTx};
-use fractal_rpc::ChainInteraction;
+use fractal_rpc::{make_rpc_log, logs_bloom_256, ChainInteraction};
 use libp2p::multiaddr::Protocol;
 use libp2p::Multiaddr;
 use thiserror::Error;
@@ -121,6 +121,30 @@ impl NodeInner {
         self.base_fee = next_base_fee(self.base_fee, block.header.gas_used, &self.fee_params);
         self.blocks.push(block.clone());
         Ok(())
+    }
+
+    /// Sum of log counts for transactions before `tx_index` in `block_number`.
+    fn log_index_base_in_block(&self, block_number: u64, tx_index: u32) -> u64 {
+        let Some(idx) = block_number.checked_sub(1).map(|x| x as usize) else {
+            return 0;
+        };
+        let Some(block) = self.blocks.get(idx) else {
+            return 0;
+        };
+        let mut n = 0u64;
+        for (i, tx) in block.transactions.iter().enumerate() {
+            if i >= tx_index as usize {
+                break;
+            }
+            let Ok(raw) = borsh::to_vec(tx) else {
+                continue;
+            };
+            let th = keccak256(&raw);
+            if let Some(ls) = self.state.evm_tx_logs.get(&th) {
+                n += ls.len() as u64;
+            }
+        }
+        n
     }
 }
 
@@ -260,16 +284,10 @@ impl ChainInteraction for NodeInner {
         self.state.evm_tx_gas_used.get(tx_hash).copied()
     }
 
-    fn logs_for_range(
-        &self,
-        from_block: u64,
-        to_block: u64,
-        address: Option<Address>,
-    ) -> Vec<fractal_rpc::RpcLog> {
+    fn logs_for_filter(&self, filter: &fractal_rpc::LogsFilter) -> Vec<fractal_rpc::RpcLog> {
         let mut out = Vec::new();
-        let start = from_block.max(1);
-        let end = to_block.max(1);
-        let mut log_index: u64 = 0;
+        let start = filter.from_block.max(1);
+        let end = filter.to_block.max(1);
 
         for height in start..=end {
             let idx = match height.checked_sub(1) {
@@ -277,10 +295,11 @@ impl ChainInteraction for NodeInner {
                 None => continue,
             };
             let Some(block) = self.blocks.get(idx) else { continue };
-            let _bh = match header_hash(&block.header) {
+            let bh = match header_hash(&block.header) {
                 Ok(h) => h,
                 Err(_) => continue,
             };
+            let mut block_log_index: u64 = 0;
             for (txi, tx) in block.transactions.iter().enumerate() {
                 let raw = match borsh::to_vec(tx) {
                     Ok(r) => r,
@@ -289,26 +308,65 @@ impl ChainInteraction for NodeInner {
                 let th = keccak256(&raw);
                 let Some(logs) = self.state.evm_tx_logs.get(&th) else { continue };
                 for l in logs {
-                    if let Some(a) = address {
-                        if l.address != a {
+                    if let Some(ref addrs) = filter.addresses {
+                        if !addrs.contains(&l.address) {
                             continue;
                         }
                     }
-                    out.push(fractal_rpc::RpcLog {
-                        address: format!("0x{}", hex::encode(l.address)),
-                        topics: l.topics.iter().map(|t| format!("0x{}", hex::encode(t))).collect(),
-                        data: format!("0x{}", hex::encode(&l.data)),
-                        block_number: format!("0x{:x}", height),
-                        transaction_hash: format!("0x{}", hex::encode(th)),
-                        transaction_index: format!("0x{:x}", txi),
-                        log_index: format!("0x{:x}", log_index),
-                        removed: false,
-                    });
-                    log_index += 1;
+                    if !fractal_rpc::evm_log_matches_topic_filters(l, &filter.topic_filters) {
+                        continue;
+                    }
+                    out.push(make_rpc_log(
+                        l,
+                        &bh,
+                        height,
+                        &th,
+                        txi as u32,
+                        block_log_index,
+                    ));
+                    block_log_index += 1;
                 }
             }
         }
         out
+    }
+
+    fn receipt_rpc_logs(
+        &self,
+        tx_hash: &[u8; 32],
+        block_number: u64,
+        block_hash: &[u8; 32],
+        tx_index: u32,
+    ) -> (Vec<fractal_rpc::RpcLog>, [u8; 256]) {
+        let Some(evm_logs) = self.state.evm_tx_logs.get(tx_hash) else {
+            return (Vec::new(), [0u8; 256]);
+        };
+        let bloom = logs_bloom_256(evm_logs);
+        let start = self.log_index_base_in_block(block_number, tx_index);
+        let rpc_logs = evm_logs
+            .iter()
+            .enumerate()
+            .map(|(i, l)| make_rpc_log(l, block_hash, block_number, tx_hash, tx_index, start + i as u64))
+            .collect();
+        (rpc_logs, bloom)
+    }
+
+    fn logs_bloom_for_block(&self, block: &Block) -> [u8; 256] {
+        let mut acc = [0u8; 256];
+        for tx in &block.transactions {
+            let Ok(raw) = borsh::to_vec(tx) else {
+                continue;
+            };
+            let th = keccak256(&raw);
+            let Some(logs) = self.state.evm_tx_logs.get(&th) else {
+                continue;
+            };
+            let b = logs_bloom_256(logs);
+            for i in 0..256 {
+                acc[i] |= b[i];
+            }
+        }
+        acc
     }
 }
 

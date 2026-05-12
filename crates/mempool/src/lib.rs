@@ -34,7 +34,7 @@ impl Mempool {
                 rest.push(p);
                 continue;
             }
-            let Ok(g) = fractal_core::intrinsic_gas(&p.tx) else {
+            let Ok(g) = fractal_core::tx_gas_limit(&p.tx) else {
                 rest.push(p);
                 continue;
             };

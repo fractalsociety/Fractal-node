@@ -21,11 +21,14 @@
     <div class="card">
       <h2>What I just implemented</h2>
       <ul>
+        <li><strong>Receipt logs</strong>: <code>eth_getTransactionReceipt</code> now returns a <code>logs</code> array of full log objects (same shape as <code>eth_getLogs</code>), including <code>blockHash</code>. <code>logIndex</code> is block-scoped (sum of prior logs in the block before this tx).</li>
         <li><strong>Real EVM CALL execution</strong> (devnet): <code>fractal-evm</code> now runs stored bytecode via <code>revm</code> and commits storage writes.</li>
         <li><strong>Persistent EVM storage</strong>: added <code>State.evm_storage</code> (slot map) and wired it into the EVM database bridge.</li>
         <li><strong>RPC storage reads</strong>: <code>eth_getStorageAt</code> now returns real values from <code>State.evm_storage</code>.</li>
         <li><strong>Contract bytecode eth_call path verified</strong>: added an automated test proving a contract CALL can <code>SSTORE</code> and <code>RETURN</code> 32 bytes deterministically.</li>
-        <li><strong>EVM logs capture</strong>: logs from <code>revm</code> execution are now stored per-tx and returned via <code>eth_getLogs</code> (minimal filter support).</li>
+        <li><strong><code>eth_getLogs</code> filters</strong>: <code>topics</code> (null wildcards, exact 32-byte hashes, OR-arrays per position), <code>blockHash</code> single-block mode (exclusive with <code>fromBlock</code>/<code>toBlock</code>), <code>address</code> as one address or an array (OR), block tags <code>earliest</code> / <code>pending</code> / <code>latest</code> / hex.</li>
+        <li><strong>CREATE (revm)</strong>: <code>TxBody::EvmCreate</code> uses top-level <code>TxKind::Create</code>; deployed code is init <code>RETURN</code> output; gas/logs/receipt bloom follow the same path as <code>EvmCall</code>; deployer nonce comes from revm (no double bump).</li>
+        <li><strong><code>logsBloom</code></strong>: standard 2048-bit Ethereum bloom on receipts and merged block bloom.</li>
       </ul>
     </div>
 
@@ -35,8 +38,8 @@
         <li><code>crates/core/src/state.rs</code> (adds <code>evm_storage</code>)</li>
         <li><code>crates/evm/src/engine.rs</code> (State-backed <code>revm::Database</code> + commit)</li>
         <li><code>crates/evm/tests/m4_eth_call_bytecode.rs</code> (bytecode CALL + SSTORE + RETURN test)</li>
-        <li><code>crates/rpc/src/module.rs</code> (RPC: <code>eth_getStorageAt</code> reads real storage)</li>
-        <li><code>crates/node/src/lib.rs</code> (implements <code>storage_at</code> for RPC)</li>
+        <li><code>crates/rpc/src/module.rs</code> (<code>RpcLog</code>, <code>make_rpc_log</code>, <code>eth_getTransactionReceipt.logs</code>, <code>eth_getStorageAt</code>)</li>
+        <li><code>crates/node/src/lib.rs</code> (<code>receipt_rpc_logs</code>, <code>logs_for_filter</code>, block-scoped log indices)</li>
       </ul>
     </div>
 
@@ -45,18 +48,15 @@
       <p class="ok">cargo test -q: PASS</p>
       <p class="warn">Still devnet-grade:</p>
       <ul>
-        <li>Block header <code>gas_used</code> is still intrinsic-only (receipt <code>gasUsed</code> is improved; header gasUsed will be upgraded later).</li>
-        <li>CREATE init-code execution is still simplified (we store code deterministically; full init execution is later).</li>
-        <li>EVM logs are still stubbed (<code>eth_getLogs</code> returns empty).</li>
+        <li>RPC receipt <code>status</code> is always success (<code>0x1</code>) even if a future path surfaces <code>EvmFailed</code> without mapping to <code>0x0</code>).</li>
       </ul>
     </div>
 
     <div class="card">
       <h2>Next PRD M4 step I recommend</h2>
       <ul>
-        <li><strong>Make contract calls useful from wallets:</strong> implement <code>eth_call</code> for contract bytecode (not just 0xfc precompiles) and return output data.</li>
-        <li><strong>Receipt correctness:</strong> <code>eth_getTransactionReceipt.gasUsed</code> now prefers real EVM gas used (stored deterministically per-tx).</li>
-        <li><strong>Events:</strong> start capturing EVM logs and make <code>eth_getLogs</code> non-empty.</li>
+        <li><strong>Receipt status / revert surface:</strong> map failed EVM txs to <code>status: 0x0</code> and align <code>eth_call</code> revert data where useful for wallets.</li>
+        <li><strong>CREATE2 / value / salt:</strong> extend as needed for tooling parity.</li>
       </ul>
     </div>
   </body>

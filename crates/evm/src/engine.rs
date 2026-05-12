@@ -1,11 +1,11 @@
 use borsh::BorshDeserialize;
 use fractal_core::{
-    is_native_precompile_address, Address, EvmCallOutcome, EvmEngine, EvmLog, ExecError, NativeCall,
-    State,
+    create_contract_address, is_native_precompile_address, Address, EvmCallOutcome, EvmEngine, EvmLog,
+    ExecError, NativeCall, State,
 };
 use revm::bytecode::Bytecode;
 use revm::context::Context;
-use revm::primitives::{Address as RAddress, Bytes, FixedBytes, KECCAK_EMPTY, U256};
+use revm::primitives::{Address as RAddress, Bytes, FixedBytes, KECCAK_EMPTY, Log, U256};
 use revm::state::{Account, AccountInfo};
 use revm::{Database, DatabaseCommit, ExecuteEvm, MainBuilder, MainContext};
 use sha3::Digest;
@@ -17,6 +17,7 @@ use std::convert::Infallible;
 /// Supports:
 /// - Fractal native-precompile addresses (`0xfc..`) routed to `State::apply_native_syscall`.
 /// - Devnet EVM bytecode CALL execution with persistent storage writes into `State.evm_storage`.
+/// - Top-level `CREATE` via revm (`TxKind::Create`): init code runs, runtime is deployed, caller nonce updated by revm.
 #[derive(Default)]
 pub struct RevmEngine;
 
@@ -24,47 +25,13 @@ impl RevmEngine {
     fn decode(&self, calldata: &[u8]) -> Result<NativeCall, ExecError> {
         NativeCall::try_from_slice(calldata).map_err(|_| ExecError::InvalidShape)
     }
-}
 
-impl EvmEngine for RevmEngine {
-    fn execute_call(
-        &mut self,
-        state: &mut State,
-        caller: Address,
-        to: Address,
-        _value: u128,
-        calldata: Vec<u8>,
-        _gas_limit: u64,
-    ) -> Result<EvmCallOutcome, ExecError> {
-        // Fast-path: Fractal native syscalls.
-        if is_native_precompile_address(&to) {
-            let call = self.decode(&calldata)?;
-            state.apply_native_syscall(caller, &call)?;
-            return Ok(EvmCallOutcome {
-                gas_used: 0,
-                return_data: Vec::new(),
-                logs: Vec::new(),
-            });
-        }
+    fn caller_nonce(state: &State, caller: Address) -> u64 {
+        state.accounts.get(&caller).map(|a| a.nonce).unwrap_or(0)
+    }
 
-        // Devnet EVM CALL: execute stored bytecode using revm with a State-backed DB.
-        let mut db = StateDb { st: state };
-
-        let mut evm = Context::mainnet().with_db(&mut db).build_mainnet();
-        let mut tx = evm.ctx.tx.clone();
-        tx.caller = to_raddr(caller);
-        tx.kind = revm::primitives::TxKind::Call(to_raddr(to));
-        tx.data = Bytes::from(calldata);
-        tx.value = U256::from(0u64);
-        tx.gas_limit = _gas_limit;
-
-        let out = evm.transact(tx).map_err(|_| ExecError::InvalidShape)?;
-        // Commit state changes (storage/code/balance/nonce) back into StateDb.
-        db.commit(out.state);
-
-        let logs = out
-            .result
-            .logs()
+    fn map_logs(logs: &[Log]) -> Vec<EvmLog> {
+        logs
             .iter()
             .map(|l| EvmLog {
                 address: {
@@ -80,7 +47,99 @@ impl EvmEngine for RevmEngine {
                     .collect(),
                 data: l.data.data.to_vec(),
             })
-            .collect::<Vec<_>>();
+            .collect()
+    }
+}
+
+impl EvmEngine for RevmEngine {
+    fn execute_call(
+        &mut self,
+        state: &mut State,
+        caller: Address,
+        to: Address,
+        _value: u128,
+        calldata: Vec<u8>,
+        gas_limit: u64,
+    ) -> Result<EvmCallOutcome, ExecError> {
+        if is_native_precompile_address(&to) {
+            let call = self.decode(&calldata)?;
+            state.apply_native_syscall(caller, &call)?;
+            return Ok(EvmCallOutcome {
+                gas_used: 0,
+                return_data: Vec::new(),
+                logs: Vec::new(),
+            });
+        }
+
+        let caller_nonce = Self::caller_nonce(state, caller);
+        let mut db = StateDb { st: state };
+
+        let mut evm = Context::mainnet().with_db(&mut db).build_mainnet();
+        let mut tx = evm.ctx.tx.clone();
+        tx.caller = to_raddr(caller);
+        tx.kind = revm::primitives::TxKind::Call(to_raddr(to));
+        tx.data = Bytes::from(calldata);
+        tx.value = U256::from(0u64);
+        tx.gas_limit = gas_limit;
+        tx.nonce = caller_nonce;
+
+        let out = evm.transact(tx).map_err(|_| ExecError::InvalidShape)?;
+        if !out.result.is_success() {
+            return Err(ExecError::EvmFailed);
+        }
+        db.commit(out.state);
+
+        let logs = Self::map_logs(out.result.logs());
+
+        Ok(EvmCallOutcome {
+            gas_used: out.result.tx_gas_used(),
+            return_data: out
+                .result
+                .output()
+                .map(|b| b.to_vec())
+                .unwrap_or_default(),
+            logs,
+        })
+    }
+
+    fn execute_create(
+        &mut self,
+        state: &mut State,
+        caller: Address,
+        value: u128,
+        init_code: Vec<u8>,
+        gas_limit: u64,
+    ) -> Result<EvmCallOutcome, ExecError> {
+        let nonce = Self::caller_nonce(state, caller);
+        let expected_addr = create_contract_address(caller, nonce);
+
+        let mut db = StateDb { st: state };
+        let mut evm = Context::mainnet().with_db(&mut db).build_mainnet();
+        let mut tx = evm.ctx.tx.clone();
+        tx.caller = to_raddr(caller);
+        tx.kind = revm::primitives::TxKind::Create;
+        tx.data = Bytes::from(init_code);
+        tx.value = U256::from(value);
+        tx.gas_limit = gas_limit;
+        tx.nonce = nonce;
+
+        let out = evm.transact(tx).map_err(|_| ExecError::InvalidShape)?;
+        if !out.result.is_success() {
+            return Err(ExecError::EvmFailed);
+        }
+
+        let Some(dep) = out.result.created_address() else {
+            return Err(ExecError::EvmFailed);
+        };
+        let mut deployed = [0u8; 20];
+        deployed.copy_from_slice(dep.as_slice());
+        if deployed != expected_addr {
+            return Err(ExecError::InvalidShape);
+        }
+
+        db.commit(out.state);
+
+        let logs = Self::map_logs(out.result.logs());
 
         Ok(EvmCallOutcome {
             gas_used: out.result.tx_gas_used(),
@@ -134,7 +193,6 @@ impl<'a> Database for StateDb<'a> {
         };
 
         let mut info = AccountInfo::new(U256::from(balance), nonce, code_hash, Bytecode::new_raw(Bytes::from(code)));
-        // If code is empty, keep default empty bytecode.
         if info.code_hash == KECCAK_EMPTY {
             info.code = Some(Bytecode::default());
         }
@@ -145,7 +203,6 @@ impl<'a> Database for StateDb<'a> {
         if code_hash == KECCAK_EMPTY {
             return Ok(Bytecode::default());
         }
-        // linear scan: devnet only.
         for code in self.st.evm_code.values() {
             if !code.is_empty() && FixedBytes::<32>::from(keccak(code)) == code_hash {
                 return Ok(Bytecode::new_raw(Bytes::from(code.clone())));
@@ -179,22 +236,22 @@ impl<'a> DatabaseCommit for StateDb<'a> {
             a.copy_from_slice(addr.as_slice());
 
             let info = acc.info;
-                self.st
-                    .accounts
-                    .entry(a)
-                    .or_insert(fractal_core::Account { nonce: 0, balance: 0 })
-                    .balance = info.balance.try_into().unwrap_or(0);
-                self.st
-                    .accounts
-                    .entry(a)
-                    .or_insert(fractal_core::Account { nonce: 0, balance: 0 })
-                    .nonce = info.nonce;
-                if let Some(code) = info.code {
-                    let raw = code.bytecode().to_vec();
-                    if !raw.is_empty() {
-                        self.st.evm_code.insert(a, raw);
-                    }
+            self.st
+                .accounts
+                .entry(a)
+                .or_insert(fractal_core::Account { nonce: 0, balance: 0 })
+                .balance = info.balance.try_into().unwrap_or(0);
+            self.st
+                .accounts
+                .entry(a)
+                .or_insert(fractal_core::Account { nonce: 0, balance: 0 })
+                .nonce = info.nonce;
+            if let Some(code) = info.code {
+                let raw = code.bytecode().to_vec();
+                if !raw.is_empty() {
+                    self.st.evm_code.insert(a, raw);
                 }
+            }
 
             for (k, v) in acc.storage {
                 let key = to_h256(k);
@@ -204,4 +261,3 @@ impl<'a> DatabaseCommit for StateDb<'a> {
         }
     }
 }
-

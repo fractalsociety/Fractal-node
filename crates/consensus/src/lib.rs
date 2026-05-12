@@ -96,17 +96,17 @@ pub fn execute_and_build_block(
     state: &mut State,
     txs: Vec<Transaction>,
 ) -> Result<Block, BuildBlockError> {
-    let mut sum = 0u64;
+    let mut budget_sum = 0u64;
     for tx in &txs {
-        let g = fractal_core::intrinsic_gas(tx)?;
-        sum = sum.checked_add(g).ok_or(ExecError::GasOverflow)?;
+        let g = fractal_core::tx_gas_limit(tx)?;
+        budget_sum = budget_sum.checked_add(g).ok_or(ExecError::GasOverflow)?;
     }
-    if sum > gas_limit {
+    if budget_sum > gas_limit {
         return Err(ExecError::GasLimitExceeded.into());
     }
     let mut evm = fractal_evm::RevmEngine::default();
     let gas_used = fractal_core::apply_block_with_evm(state, &txs, &mut evm)?;
-    debug_assert_eq!(gas_used, sum);
+    debug_assert!(gas_used <= budget_sum);
     let sr = state_root(state)?;
     let tx_root = ordered_tx_root(&txs)?;
     let header = BlockHeader {

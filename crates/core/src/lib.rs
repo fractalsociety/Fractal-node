@@ -15,12 +15,12 @@ mod tx;
 #[cfg(feature = "wallet")]
 pub mod wallet_anchor;
 
-pub use address::Address;
+pub use address::{create_contract_address, Address};
 pub use evm_engine::{EvmCallOutcome, EvmEngine};
 pub use error::ExecError;
 pub use merkle::{merkle_proof, merkle_root, verify_merkle_proof};
 pub use native_gas::{
-    intrinsic_gas, is_native_precompile_address, native_opcode_from_precompile_address, PER_BYTE,
+    intrinsic_gas, is_native_precompile_address, native_opcode_from_precompile_address, tx_gas_limit, PER_BYTE,
     EVM_CALL_BASE_GAS, TRANSFER_GAS,
 };
 pub use native_types::*;
@@ -28,7 +28,7 @@ pub use state::{Account, State};
 pub use state::EvmLog;
 pub use tx::{NativeCall, Transaction, TxBody, VmKind};
 
-use fractal_crypto::hash::commit_borsh;
+use fractal_crypto::hash::{commit_borsh, keccak256};
 
 /// Deterministic state commitment (EVM-style root uses keccak over canonical bytes).
 pub fn state_root(state: &State) -> Result<fractal_crypto::Hash256, std::io::Error> {
@@ -46,7 +46,19 @@ pub fn apply_block(state: &mut State, txs: &[Transaction]) -> Result<u64, ExecEr
     Ok(sum)
 }
 
+/// Gas charged for `tx` after a successful `apply_transaction_with_evm` (revm `tx_gas_used` for `EvmCall`, else intrinsic).
+pub fn gas_used_after_apply(state: &State, tx: &Transaction) -> Result<u64, ExecError> {
+    let raw = borsh::to_vec(tx).map_err(|_| ExecError::InvalidShape)?;
+    let h = keccak256(&raw);
+    if let Some(g) = state.evm_tx_gas_used.get(&h) {
+        return Ok(*g);
+    }
+    intrinsic_gas(tx)
+}
+
 /// Apply a block that may contain EVM calls, using the provided `EvmEngine`.
+///
+/// Returns the sum of per-transaction gas used (measured EVM gas for `EvmCall`, intrinsic for other kinds).
 pub fn apply_block_with_evm(
     state: &mut State,
     txs: &[Transaction],
@@ -54,9 +66,9 @@ pub fn apply_block_with_evm(
 ) -> Result<u64, ExecError> {
     let mut sum = 0u64;
     for tx in txs {
-        let g = intrinsic_gas(tx)?;
-        sum = sum.checked_add(g).ok_or(ExecError::GasOverflow)?;
         state.apply_transaction_with_evm(tx, evm)?;
+        let g = gas_used_after_apply(state, tx)?;
+        sum = sum.checked_add(g).ok_or(ExecError::GasOverflow)?;
     }
     Ok(sum)
 }

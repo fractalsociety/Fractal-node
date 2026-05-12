@@ -32,4 +32,6 @@ pub enum ExecError {
     GasOverflow,
     #[error("invalid signature")]
     BadSignature,
+    #[error("EVM execution reverted or halted")]
+    EvmFailed,
 }

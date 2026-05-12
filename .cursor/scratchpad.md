@@ -51,7 +51,7 @@ FractalChain L1 testnet (PRD v0.1) is an AI-agent-first chain: HotStuff-2 consen
 - [ ] M4-m (in progress): real EVM CALL execution (devnet): add `State.evm_storage`, implement `revm` DB/commit bridge in `fractal-evm`, and wire `eth_getStorageAt` to return real storage values.
 - [ ] M4-n (in progress): receipts gasUsed: record per-tx EVM gas used deterministically (`State.evm_tx_gas_used`) and expose via `eth_getTransactionReceipt.gasUsed`.
 - [ ] M4-o (in progress): contract CALL correctness: add a bytecode execution test proving CALL can SSTORE + RETURN (foundation for `eth_call` on contract bytecode).
-- [ ] M4-p (in progress): EVM logs/events: capture logs from `revm` execution, store deterministically per-tx, and implement `eth_getLogs` (minimal filter support).
+- [ ] M4-p (in progress): EVM logs/events: capture logs from `revm` execution, store deterministically per-tx, `eth_getLogs` (minimal filters), **`eth_getTransactionReceipt.logs`** with `blockHash` + block-scoped `logIndex`, shared `make_rpc_log`.
 
 ## Current Status / Progress Tracking
 
@@ -62,7 +62,10 @@ FractalChain L1 testnet (PRD v0.1) is an AI-agent-first chain: HotStuff-2 consen
 - **Wallet:** `settle_trusted` remains as thin wrapper over `settle_after_window` using stored deadline (Trusted tier).
 - **Chain M3 (2026-05-11, started):** `fractal-core` expanded `NativeCall` (13 PRD opcodes + `NoOp`), `State` subtries (`agents`, `receipts`, `batches`, `disputes`, `stakes`, `delegated`, …), `merkle.rs`, `native_gas.rs` / `intrinsic_gas`, `apply_block` returns total gas; `fractal-consensus` pre-checks `gas_limit` (`GasLimitExceeded`); `fractal-mempool` `drain_ready_gas_budget`; `fractal-evm` `precompile.rs` (`0xfc` prefix + borsh decode). Test `crates/core/tests/m3_settle_claim.rs` covers PRD M3 exit line (100 receipts + 100 Merkle claims). Still out of scope in this slice: `native_event_root` in block header, revm wiring, rich Solidity ABI, full stake/unbond/rewards economics.
 - **Chain M4 (2026-05-12, started):** introduced core `EvmEngine` trait + `apply_block_with_evm`; added `TxBody::EvmCall` and `State::apply_native_syscall` (no nonce bump) for EVM→native bridging; `fractal-evm` now depends on `revm` and provides `RevmEngine` (initial stub: routes only `0xfc..` addresses). Workspace `cargo test` passed; awaiting manual validation before checking off M4-a.
-- **Chain M4 (2026-05-12, started):** introduced core `EvmEngine` trait + `apply_block_with_evm`; added `TxBody::EvmCall` and `State::apply_native_syscall` (no nonce bump) for EVM→native bridging; `fractal-evm` now depends on `revm` and provides `RevmEngine` (initial stub: routes only `0xfc..` addresses). Manual `cargo test -q` on user machine: ✅. Ready for Planner sign-off on M4-a.
+- **Chain M4 (2026-05-12):** `eth_getTransactionReceipt` returns populated `logs` (same object shape as `eth_getLogs`); `RpcLog` includes `blockHash`; `logIndex` is block-scoped in both receipt and `eth_getLogs`. `cargo test -q`: ✅.
+- **Chain M4 (2026-05-12, Executor):** `EvmCreate` runs init code through revm (`TxKind::Create`); runtime is deployed bytecode (RETURN data), `evm_tx_gas_used` / logs recorded, deployer nonce updated by revm (no extra `bump_nonce`). `create_contract_address` in `fractal-core`; `ExecError::EvmFailed`; CALL path commits only on `is_success` and sets `tx.nonce`. Tests: `crates/consensus/tests/m4_create_init_code.rs`. `cargo test -q`: ✅.
+- **Chain M4 (2026-05-12, Executor):** Ethereum `logsBloom` on receipts + merged block bloom (`fractal-rpc`). `cargo test -q`: ✅.
+
 - **Chain M2:** remains as delivered earlier (QUIC sync, follower, `quic_sync` test).
 
 ## Executor's Feedback or Assistance Requests

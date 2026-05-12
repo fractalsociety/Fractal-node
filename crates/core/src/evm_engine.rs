@@ -21,6 +21,16 @@ pub trait EvmEngine {
         gas_limit: u64,
     ) -> Result<EvmCallOutcome, ExecError>;
 
+    /// Execute a top-level `CREATE` (init code); on success the runtime bytecode is committed by the engine.
+    fn execute_create(
+        &mut self,
+        state: &mut State,
+        caller: Address,
+        value: u128,
+        init_code: Vec<u8>,
+        gas_limit: u64,
+    ) -> Result<EvmCallOutcome, ExecError>;
+
     /// Decode native syscalls when routed from EVM precompiles.
     ///
     /// Default implementation uses borsh M3 wire format.

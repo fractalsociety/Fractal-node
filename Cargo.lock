@@ -1511,7 +1511,6 @@ dependencies = [
  "fractal-crypto",
  "hex",
  "jsonrpsee",
- "rlp",
  "serde",
  "serde_json",
  "tokio",

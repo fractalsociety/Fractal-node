@@ -8,6 +8,16 @@ pub const PER_BYTE: u64 = 4;
 pub const TRANSFER_GAS: u64 = 21_000;
 pub const EVM_CALL_BASE_GAS: u64 = 21_000;
 
+/// Maximum gas this transaction may consume against the block limit (EIP-style `gas` on EVM txs).
+pub fn tx_gas_limit(tx: &Transaction) -> Result<u64, ExecError> {
+    match (&tx.vm, &tx.body) {
+        (VmKind::Evm, TxBody::EvmCall { gas_limit, .. }) | (VmKind::Evm, TxBody::EvmCreate { gas_limit, .. }) => {
+            Ok(*gas_limit)
+        }
+        _ => intrinsic_gas(tx),
+    }
+}
+
 pub fn intrinsic_gas(tx: &Transaction) -> Result<u64, ExecError> {
     match (&tx.vm, &tx.body) {
         (VmKind::Native, TxBody::Native(c)) => {

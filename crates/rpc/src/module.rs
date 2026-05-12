@@ -117,7 +117,7 @@ struct RpcReceipt {
     cumulative_gas_used: String,
     gas_used: String,
     contract_address: Option<String>,
-    logs: Vec<String>,
+    logs: Vec<RpcLog>,
     logs_bloom: String,
     status: String,
 }
@@ -137,11 +137,146 @@ pub struct RpcLog {
     pub address: String,
     pub topics: Vec<String>,
     pub data: String,
+    pub block_hash: String,
     pub block_number: String,
     pub transaction_hash: String,
     pub transaction_index: String,
     pub log_index: String,
     pub removed: bool,
+}
+
+/// `eth_getLogs` filter after JSON-RPC parsing (`addresses == None` means any contract).
+#[derive(Clone, Debug, Default)]
+pub struct LogsFilter {
+    pub from_block: u64,
+    pub to_block: u64,
+    pub addresses: Option<Vec<Address>>,
+    pub topic_filters: Vec<Option<TopicMatch>>,
+}
+
+/// One indexed topic position in the filter (`eth_getLogs` `topics` array).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum TopicMatch {
+    Exact([u8; 32]),
+    AnyOf(Vec<[u8; 32]>),
+}
+
+/// Whether `log` satisfies `topic_filters` (same rules as Ethereum JSON-RPC `topics`).
+pub fn evm_log_matches_topic_filters(log: &fractal_core::EvmLog, topic_filters: &[Option<TopicMatch>]) -> bool {
+    for (i, slot) in topic_filters.iter().enumerate() {
+        let Some(tm) = slot else {
+            continue;
+        };
+        let Some(log_topic) = log.topics.get(i) else {
+            return false;
+        };
+        match tm {
+            TopicMatch::Exact(h) => {
+                if log_topic != h {
+                    return false;
+                }
+            }
+            TopicMatch::AnyOf(hs) => {
+                if !hs.iter().any(|h| h == log_topic) {
+                    return false;
+                }
+            }
+        }
+    }
+    true
+}
+
+fn parse_topic_filters(topics: Option<Vec<serde_json::Value>>) -> Result<Vec<Option<TopicMatch>>, ErrorObjectOwned> {
+    let Some(rows) = topics else {
+        return Ok(Vec::new());
+    };
+    let mut out = Vec::with_capacity(rows.len());
+    for val in rows {
+        match val {
+            serde_json::Value::Null => out.push(None),
+            serde_json::Value::String(s) => {
+                let h = parse_hash256_hex(&s)?;
+                out.push(Some(TopicMatch::Exact(h)));
+            }
+            serde_json::Value::Array(items) => {
+                if items.is_empty() {
+                    return Err(err_invalid_params("empty topics OR list"));
+                }
+                let mut hs = Vec::with_capacity(items.len());
+                for it in items {
+                    let serde_json::Value::String(s) = it else {
+                        return Err(err_invalid_params("topic OR list must contain only hex strings"));
+                    };
+                    hs.push(parse_hash256_hex(&s)?);
+                }
+                out.push(Some(TopicMatch::AnyOf(hs)));
+            }
+            _ => return Err(err_invalid_params("invalid topic filter entry")),
+        }
+    }
+    Ok(out)
+}
+
+fn parse_filter_addresses(v: Option<serde_json::Value>) -> Result<Option<Vec<Address>>, ErrorObjectOwned> {
+    match v {
+        None => Ok(None),
+        Some(serde_json::Value::String(s)) => Ok(Some(vec![parse_address_hex(&s)?])),
+        Some(serde_json::Value::Array(a)) => {
+            let mut out = Vec::with_capacity(a.len());
+            for x in a {
+                let serde_json::Value::String(s) = x else {
+                    return Err(err_invalid_params("address filter must be string or array of strings"));
+                };
+                out.push(parse_address_hex(&s)?);
+            }
+            Ok(Some(out))
+        }
+        _ => Err(err_invalid_params("address must be string or array of strings")),
+    }
+}
+
+fn parse_block_quantity_or_tag(s: &str, latest: u64) -> Result<u64, ErrorObjectOwned> {
+    match s {
+        "latest" | "pending" => Ok(latest),
+        "earliest" => Ok(1),
+        s if s.starts_with("0x") => u64::from_str_radix(s.strip_prefix("0x").unwrap_or(s), 16)
+            .map_err(|_| err_invalid_params("invalid block quantity hex")),
+        _ => Err(err_invalid_params("unsupported block tag")),
+    }
+}
+
+/// Ethereum 2048-bit logs bloom (same construction as go-ethereum `core/types/bloom9.go`).
+pub fn logs_bloom_256(evm_logs: &[fractal_core::EvmLog]) -> [u8; 256] {
+    let mut bloom = [0u8; 256];
+    for log in evm_logs {
+        bloom_add(&mut bloom, &log.address);
+        for t in &log.topics {
+            bloom_add(&mut bloom, t);
+        }
+    }
+    bloom
+}
+
+fn bloom_add(bloom: &mut [u8; 256], data: &[u8]) {
+    let h = keccak256(data);
+    let v1 = 1u8 << (h[1] & 0x7);
+    let v2 = 1u8 << (h[3] & 0x7);
+    let v3 = 1u8 << (h[5] & 0x7);
+    let u16be = |a: usize| u16::from_be_bytes([h[a], h[a + 1]]);
+    let idx = |pair_start: usize| -> usize {
+        256usize - (((u16be(pair_start) & 0x7ff) >> 3) as usize) - 1
+    };
+    let i1 = idx(0);
+    let i2 = idx(2);
+    let i3 = idx(4);
+    bloom[i1] |= v1;
+    bloom[i2] |= v2;
+    bloom[i3] |= v3;
+}
+
+/// `0x` + 512 hex chars (256 bytes).
+pub fn logs_bloom_hex(bloom: &[u8; 256]) -> String {
+    format!("0x{}", hex::encode(bloom))
 }
 
 /// Minimal chain surface for JSON-RPC (implemented by `fractal-node`).
@@ -177,12 +312,20 @@ pub trait ChainInteraction: Send {
 
     fn gas_used_for_tx(&self, tx_hash: &[u8; 32]) -> Option<u64>;
 
-    fn logs_for_range(
+    fn logs_for_filter(&self, filter: &LogsFilter) -> Vec<RpcLog>;
+
+    /// Logs for `eth_getTransactionReceipt`, with `logIndex` as index within the block,
+    /// plus Ethereum `logsBloom` bits for those logs.
+    fn receipt_rpc_logs(
         &self,
-        from_block: u64,
-        to_block: u64,
-        address: Option<Address>,
-    ) -> Vec<RpcLog>;
+        tx_hash: &[u8; 32],
+        block_number: u64,
+        block_hash: &[u8; 32],
+        tx_index: u32,
+    ) -> (Vec<RpcLog>, [u8; 256]);
+
+    /// Bitwise OR of each mined tx receipt bloom in `block` (from stored execution logs).
+    fn logs_bloom_for_block(&self, block: &fractal_consensus::Block) -> [u8; 256];
 }
 
 pub type SharedChain = Arc<Mutex<dyn ChainInteraction + Send>>;
@@ -249,7 +392,8 @@ pub fn build_module(ctx: SharedChain) -> RpcModule<SharedChain> {
                 };
                 let h = g.block_hash_by_number(number).ok_or_else(|| ErrorObjectOwned::owned(-32000, "block not found", None::<()>))?;
                 let b = g.block_by_hash(&h).ok_or_else(|| ErrorObjectOwned::owned(-32000, "block not found", None::<()>))?;
-                Ok::<RpcBlock, ErrorObjectOwned>(rpc_block_from_consensus(&b, Some(h)))
+                let lb = g.logs_bloom_for_block(&b);
+                Ok::<RpcBlock, ErrorObjectOwned>(rpc_block_from_consensus(&b, Some(h), lb))
             }
         })
         .expect("register eth_getBlockByNumber");
@@ -264,7 +408,8 @@ pub fn build_module(ctx: SharedChain) -> RpcModule<SharedChain> {
                 let h = parse_hash256_hex(&hash_hex)?;
                 let g = ctx.lock().await;
                 let b = g.block_by_hash(&h).ok_or_else(|| ErrorObjectOwned::owned(-32000, "block not found", None::<()>))?;
-                Ok::<RpcBlock, ErrorObjectOwned>(rpc_block_from_consensus(&b, Some(h)))
+                let lb = g.logs_bloom_for_block(&b);
+                Ok::<RpcBlock, ErrorObjectOwned>(rpc_block_from_consensus(&b, Some(h), lb))
             }
         })
         .expect("register eth_getBlockByHash");
@@ -422,6 +567,7 @@ pub fn build_module(ctx: SharedChain) -> RpcModule<SharedChain> {
                 let gas_used = g
                     .gas_used_for_tx(&h)
                     .unwrap_or_else(|| fractal_core::intrinsic_gas(&tx).unwrap_or(0));
+                let (logs, logs_bloom) = g.receipt_rpc_logs(&h, bn, &bh, idx);
                 Ok::<Option<RpcReceipt>, ErrorObjectOwned>(Some(rpc_receipt_from_core(
                     &tx,
                     &h,
@@ -429,6 +575,8 @@ pub fn build_module(ctx: SharedChain) -> RpcModule<SharedChain> {
                     &bh,
                     idx,
                     gas_used,
+                    logs,
+                    logs_bloom,
                 )))
             }
         })
@@ -643,38 +791,61 @@ pub fn build_module(ctx: SharedChain) -> RpcModule<SharedChain> {
             let ctx = ctx.clone();
             async move {
                 #[derive(serde::Deserialize)]
+                #[serde(rename_all = "camelCase")]
                 struct Filter {
-                    #[serde(default)]
                     from_block: Option<String>,
-                    #[serde(default)]
                     to_block: Option<String>,
-                    #[serde(default)]
+                    block_hash: Option<String>,
                     address: Option<serde_json::Value>,
+                    topics: Option<Vec<serde_json::Value>>,
                 }
                 let filter: Filter = params.one().map_err(|_| err_invalid_params("expected filter object"))?;
                 let g = ctx.lock().await;
 
                 let latest = g.block_number();
-                let from_block = match filter.from_block.as_deref().unwrap_or("latest") {
-                    "latest" => latest,
-                    s if s.starts_with("0x") => u64::from_str_radix(&s[2..], 16)
-                        .map_err(|_| err_invalid_params("invalid fromBlock"))?,
-                    _ => return Err(err_invalid_params("unsupported fromBlock")),
-                };
-                let to_block = match filter.to_block.as_deref().unwrap_or("latest") {
-                    "latest" => latest,
-                    s if s.starts_with("0x") => u64::from_str_radix(&s[2..], 16)
-                        .map_err(|_| err_invalid_params("invalid toBlock"))?,
-                    _ => return Err(err_invalid_params("unsupported toBlock")),
+
+                if filter.block_hash.is_some() && (filter.from_block.is_some() || filter.to_block.is_some()) {
+                    return Err(err_invalid_params(
+                        "blockHash is mutually exclusive with fromBlock and toBlock",
+                    ));
+                }
+
+                let (mut from_block, mut to_block) = if let Some(ref bh) = filter.block_hash {
+                    let h = parse_hash256_hex(bh)?;
+                    let Some(block) = g.block_by_hash(&h) else {
+                        return Ok::<Vec<RpcLog>, ErrorObjectOwned>(Vec::new());
+                    };
+                    let bn = block.header.height;
+                    (bn, bn)
+                } else {
+                    let from_block = parse_block_quantity_or_tag(
+                        filter.from_block.as_deref().unwrap_or("latest"),
+                        latest,
+                    )?;
+                    let to_block = parse_block_quantity_or_tag(
+                        filter.to_block.as_deref().unwrap_or("latest"),
+                        latest,
+                    )?;
+                    (from_block, to_block)
                 };
 
-                let addr = match filter.address {
-                    None => None,
-                    Some(serde_json::Value::String(s)) => Some(parse_address_hex(&s)?),
-                    _ => return Err(err_invalid_params("address must be string")),
-                };
+                if from_block > to_block {
+                    std::mem::swap(&mut from_block, &mut to_block);
+                }
 
-                let logs = g.logs_for_range(from_block, to_block, addr);
+                let addresses = parse_filter_addresses(filter.address)?;
+                if addresses.as_ref().is_some_and(|a| a.is_empty()) {
+                    return Ok::<Vec<RpcLog>, ErrorObjectOwned>(Vec::new());
+                }
+                let topic_filters = parse_topic_filters(filter.topics)?;
+
+                let lf = LogsFilter {
+                    from_block,
+                    to_block,
+                    addresses,
+                    topic_filters,
+                };
+                let logs = g.logs_for_filter(&lf);
                 Ok::<Vec<RpcLog>, ErrorObjectOwned>(logs)
             }
         })
@@ -683,7 +854,7 @@ pub fn build_module(ctx: SharedChain) -> RpcModule<SharedChain> {
     module
 }
 
-fn rpc_block_from_consensus(b: &fractal_consensus::Block, hash: Option<[u8; 32]>) -> RpcBlock {
+fn rpc_block_from_consensus(b: &fractal_consensus::Block, hash: Option<[u8; 32]>, logs_bloom: [u8; 256]) -> RpcBlock {
     let h = hash.unwrap_or([0u8; 32]);
     let tx_hashes: Vec<String> = b
         .transactions
@@ -699,7 +870,7 @@ fn rpc_block_from_consensus(b: &fractal_consensus::Block, hash: Option<[u8; 32]>
         parent_hash: hash_hex(&b.header.parent_hash),
         nonce: "0x0000000000000000".into(),
         sha3_uncles: hash_hex(&[0u8; 32]),
-        logs_bloom: format!("0x{:0width$x}", 0u8, width = 512),
+        logs_bloom: logs_bloom_hex(&logs_bloom),
         transactions_root: hash_hex(&b.header.tx_root),
         state_root: hash_hex(&b.header.state_root),
         receipts_root: hash_hex(&[0u8; 32]),
@@ -756,6 +927,27 @@ fn rpc_tx_from_core(
     }
 }
 
+pub fn make_rpc_log(
+    l: &fractal_core::EvmLog,
+    block_hash: &[u8; 32],
+    block_number: u64,
+    tx_hash: &[u8; 32],
+    tx_index: u32,
+    log_index: u64,
+) -> RpcLog {
+    RpcLog {
+        address: format!("0x{}", hex::encode(l.address)),
+        topics: l.topics.iter().map(|t| format!("0x{}", hex::encode(t))).collect(),
+        data: format!("0x{}", hex::encode(&l.data)),
+        block_hash: hash_hex(block_hash),
+        block_number: quantity_hex_u64(block_number),
+        transaction_hash: hash_hex(tx_hash),
+        transaction_index: quantity_hex_u64(tx_index as u64),
+        log_index: quantity_hex_u64(log_index),
+        removed: false,
+    }
+}
+
 fn rpc_receipt_from_core(
     tx: &fractal_core::Transaction,
     hash: &[u8; 32],
@@ -763,6 +955,8 @@ fn rpc_receipt_from_core(
     block_hash: &[u8; 32],
     tx_index: u32,
     gas_used: u64,
+    logs: Vec<RpcLog>,
+    logs_bloom: [u8; 256],
 ) -> RpcReceipt {
     let to = match &tx.body {
         fractal_core::TxBody::Transfer { to, .. } => Some(addr_hex(to)),
@@ -772,13 +966,7 @@ fn rpc_receipt_from_core(
     };
     let contract_address = match &tx.body {
         fractal_core::TxBody::EvmCreate { .. } => {
-            // Duplicate of State's CREATE address derivation (devnet).
-            let mut s = rlp::RlpStream::new_list(2);
-            s.append(&tx.signer.as_slice());
-            s.append(&tx.nonce);
-            let h = keccak256(&s.out());
-            let mut a = [0u8; 20];
-            a.copy_from_slice(&h[12..]);
+            let a = fractal_core::create_contract_address(tx.signer, tx.nonce);
             Some(addr_hex(&a))
         }
         _ => None,
@@ -793,9 +981,80 @@ fn rpc_receipt_from_core(
         cumulative_gas_used: quantity_hex_u64(gas_used),
         gas_used: quantity_hex_u64(gas_used),
         contract_address,
-        logs: Vec::new(),
-        logs_bloom: format!("0x{:0width$x}", 0u8, width = 512),
+        logs,
+        logs_bloom: logs_bloom_hex(&logs_bloom),
         status: "0x1".into(),
+    }
+}
+
+#[cfg(test)]
+mod eth_get_logs_filter_tests {
+    use super::*;
+    use fractal_core::EvmLog;
+
+    fn log_with_topics(topics: Vec<[u8; 32]>) -> EvmLog {
+        EvmLog {
+            address: [1u8; 20],
+            topics,
+            data: vec![],
+        }
+    }
+
+    #[test]
+    fn topic_match_exact() {
+        let t0 = [2u8; 32];
+        let log = log_with_topics(vec![t0]);
+        let f = vec![Some(TopicMatch::Exact(t0))];
+        assert!(evm_log_matches_topic_filters(&log, &f));
+        let f2 = vec![Some(TopicMatch::Exact([0u8; 32]))];
+        assert!(!evm_log_matches_topic_filters(&log, &f2));
+    }
+
+    #[test]
+    fn topic_match_wildcard_second_position() {
+        let log = log_with_topics(vec![[5u8; 32], [7u8; 32]]);
+        let f = vec![None, Some(TopicMatch::Exact([7u8; 32]))];
+        assert!(evm_log_matches_topic_filters(&log, &f));
+    }
+
+    #[test]
+    fn topic_match_any_of() {
+        let log = log_with_topics(vec![[1u8; 32]]);
+        let f = vec![Some(TopicMatch::AnyOf(vec![[2u8; 32], [1u8; 32]]))];
+        assert!(evm_log_matches_topic_filters(&log, &f));
+    }
+
+    #[test]
+    fn topic_filter_requires_topic_at_index() {
+        let log = log_with_topics(vec![[1u8; 32]]);
+        let f = vec![None, Some(TopicMatch::Exact([2u8; 32]))];
+        assert!(!evm_log_matches_topic_filters(&log, &f));
+    }
+
+    #[test]
+    fn logs_bloom_empty_is_zero() {
+        assert_eq!(logs_bloom_256(&[]), [0u8; 256]);
+    }
+
+    #[test]
+    fn logs_bloom_merge_matches_concat() {
+        let l1 = EvmLog {
+            address: [1u8; 20],
+            topics: vec![[9u8; 32]],
+            data: vec![],
+        };
+        let l2 = EvmLog {
+            address: [2u8; 20],
+            topics: vec![],
+            data: vec![],
+        };
+        let mut or_manual = logs_bloom_256(std::slice::from_ref(&l1));
+        let b2 = logs_bloom_256(std::slice::from_ref(&l2));
+        for i in 0..256 {
+            or_manual[i] |= b2[i];
+        }
+        let merged = logs_bloom_256(&[l1, l2]);
+        assert_eq!(or_manual, merged);
     }
 }
 

@@ -123,7 +123,9 @@ fn node_accepts_eip1559_contract_create() {
     let from = addr_from_vk(sk.verifying_key());
     node.state.accounts.insert(from, fractal_core::Account { nonce: 0, balance: 10_000_000 });
 
-    let init_code = vec![0x60, 0x00, 0x60, 0x00]; // nonsense but non-empty
+    let init_code = vec![
+        0x60, 0x01, 0x60, 0x0c, 0x60, 0x00, 0x39, 0x60, 0x01, 0x60, 0x00, 0xf3, 0x00,
+    ];
     let raw = build_and_sign_1559(node.chain_id, 0, 1, 10, 1_000_000, None, 0, init_code.clone(), &sk);
     node.submit_raw_tx(&raw).expect("accept raw eth create tx");
 

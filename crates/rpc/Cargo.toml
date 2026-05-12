@@ -13,5 +13,4 @@ hex.workspace = true
 jsonrpsee.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-rlp.workspace = true
 tokio.workspace = true
