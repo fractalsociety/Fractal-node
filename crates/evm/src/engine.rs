@@ -3,6 +3,7 @@ use fractal_core::{
     create_contract_address, is_native_precompile_address, Address, EvmCallOutcome, EvmEngine, EvmLog,
     ExecError, NativeCall, State,
 };
+use revm::context::result::ExecutionResult;
 use revm::bytecode::Bytecode;
 use revm::context::Context;
 use revm::primitives::{Address as RAddress, Bytes, FixedBytes, KECCAK_EMPTY, Log, U256};
@@ -85,7 +86,12 @@ impl EvmEngine for RevmEngine {
 
         let out = evm.transact(tx).map_err(|_| ExecError::InvalidShape)?;
         if !out.result.is_success() {
-            return Err(ExecError::EvmFailed);
+            return Err(match &out.result {
+                ExecutionResult::Revert { output, .. } => ExecError::EvmRevert {
+                    return_data: output.to_vec(),
+                },
+                _ => ExecError::EvmFailed,
+            });
         }
         db.commit(out.state);
 
@@ -125,7 +131,12 @@ impl EvmEngine for RevmEngine {
 
         let out = evm.transact(tx).map_err(|_| ExecError::InvalidShape)?;
         if !out.result.is_success() {
-            return Err(ExecError::EvmFailed);
+            return Err(match &out.result {
+                ExecutionResult::Revert { output, .. } => ExecError::EvmRevert {
+                    return_data: output.to_vec(),
+                },
+                _ => ExecError::EvmFailed,
+            });
         }
 
         let Some(dep) = out.result.created_address() else {

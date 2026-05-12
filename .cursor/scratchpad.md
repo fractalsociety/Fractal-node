@@ -52,6 +52,7 @@ FractalChain L1 testnet (PRD v0.1) is an AI-agent-first chain: HotStuff-2 consen
 - [ ] M4-n (in progress): receipts gasUsed: record per-tx EVM gas used deterministically (`State.evm_tx_gas_used`) and expose via `eth_getTransactionReceipt.gasUsed`.
 - [ ] M4-o (in progress): contract CALL correctness: add a bytecode execution test proving CALL can SSTORE + RETURN (foundation for `eth_call` on contract bytecode).
 - [ ] M4-p (in progress): EVM logs/events: capture logs from `revm` execution, store deterministically per-tx, `eth_getLogs` (minimal filters), **`eth_getTransactionReceipt.logs`** with `blockHash` + block-scoped `logIndex`, shared `make_rpc_log`.
+- [ ] M4-q (Executor slice, 2026-05-12): PRD M4 **example contract + Solidity dev docs** — `contracts/examples/*`, `docs/solidity-dev.md`, borsh snapshot test for `NativeCall::NoOp`. **Planner:** confirm vs full “Hardhat deploy” checklist (no Hardhat project scaffold in-repo yet).
 
 ## Current Status / Progress Tracking
 
@@ -65,12 +66,16 @@ FractalChain L1 testnet (PRD v0.1) is an AI-agent-first chain: HotStuff-2 consen
 - **Chain M4 (2026-05-12):** `eth_getTransactionReceipt` returns populated `logs` (same object shape as `eth_getLogs`); `RpcLog` includes `blockHash`; `logIndex` is block-scoped in both receipt and `eth_getLogs`. `cargo test -q`: ✅.
 - **Chain M4 (2026-05-12, Executor):** `EvmCreate` runs init code through revm (`TxKind::Create`); runtime is deployed bytecode (RETURN data), `evm_tx_gas_used` / logs recorded, deployer nonce updated by revm (no extra `bump_nonce`). `create_contract_address` in `fractal-core`; `ExecError::EvmFailed`; CALL path commits only on `is_success` and sets `tx.nonce`. Tests: `crates/consensus/tests/m4_create_init_code.rs`. `cargo test -q`: ✅.
 - **Chain M4 (2026-05-12, Executor):** Ethereum `logsBloom` on receipts + merged block bloom (`fractal-rpc`). `cargo test -q`: ✅.
+- **Chain M4 (2026-05-12, Executor):** Receipt `status` (`0x1`/`0x0`) from `State.evm_tx_success` + `evm_receipt_success` default; `ExecError::EvmRevert` from revm `Revert`; `eth_call` / `eth_estimateGas` return JSON-RPC code `3` + hex `data` on revert; `eth_estimateGas` uses simulated `gas_used`. Tests: `m4_evm_revert.rs`, `m4_evm_receipt_success.rs`. `cargo test -q`: ✅.
+- **Chain M4 (2026-05-12, Executor / PRD M4 deliverables):** Added `contracts/examples/FractalNative.sol`, `contracts/examples/AgentBountyEscrow.sol`, `docs/solidity-dev.md` (precompile addressing, NoOp borsh `0x0d`, Hardhat/MetaMask notes); `crates/core/tests/native_call_borsh_snapshots.rs` locks `NoOp` wire format. PRD §18 M4 bullets updated to reference paths. `cargo test -q`: ✅.
 
 - **Chain M2:** remains as delivered earlier (QUIC sync, follower, `quic_sync` test).
 
 ## Executor's Feedback or Assistance Requests
 
 - **BLS**: `fractal-crypto::bls` is a type-safe placeholder until M7 wiring; avoids `blst` native build in early CI.
+- **M4 slice (receipt status / revert RPC):** Implementation complete; `cargo test -q` passed locally. **Planner:** please cross-check behavior vs MetaMask/ethers expectations (error `data` as plain hex string) and confirm whether to mark the corresponding status-board item done.
+- **M4 PRD slice (example + docs):** Landed `contracts/examples`, `docs/solidity-dev.md`, and `native_call_borsh_snapshots` test. **Planner:** next gap vs M4 exit criteria is likely an in-repo **Hardhat** (or Foundry) scaffold + scripted deploy, or **M5** if M4 is declared sufficient.
 - **Next chain milestone:** PRD §18 **M4** — `revm`, full JSON-RPC EVM surface, MetaMask path, real precompile dispatch from EVM execution.
 - **Wallet W6**: off-chain clients / SDK packaging not started; `fractal-sdk` still re-exports `fractal-core` only.
 
@@ -84,3 +89,4 @@ FractalChain L1 testnet (PRD v0.1) is an AI-agent-first chain: HotStuff-2 consen
 - **Producer vs RPC:** `producer_loop` must hold `Arc<Mutex<NodeInner>>` so it can read `mempool` / `state`; RPC uses `CoerceUnsized` to `SharedChain` from the same `Arc`. Do not type the producer as `SharedChain` (`dyn` loses fields).
 - **libp2p request-response:** overlapping `GetTip`/`GetBlocks` requests can deliver responses out of order and break followers (e.g. duplicate height-1 apply). Serialize with an `outstanding` flag or single-pending RPC.
 - **`NativeCall::try_from_slice` outside `fractal-core`:** import `borsh::BorshDeserialize` (methods are on the trait).
+- **jsonrpsee / MetaMask:** `eth_call` revert uses RPC error code `3` and `data` as a JSON string value holding `0x` + hex return data (common wallet pattern).

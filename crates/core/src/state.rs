@@ -51,6 +51,8 @@ pub struct State {
     pub evm_tx_gas_used: BTreeMap<fractal_crypto::Hash256, u64>,
     /// Devnet per-tx EVM logs (M4): tx_hash -> logs.
     pub evm_tx_logs: BTreeMap<fractal_crypto::Hash256, Vec<EvmLog>>,
+    /// Receipt `status`: `true` = `0x1` (success). Only written for successful `EvmCall` / `EvmCreate`; absent defaults to success for legacy state.
+    pub evm_tx_success: BTreeMap<fractal_crypto::Hash256, bool>,
 }
 
 impl Default for State {
@@ -72,6 +74,7 @@ impl Default for State {
             evm_storage: BTreeMap::new(),
             evm_tx_gas_used: BTreeMap::new(),
             evm_tx_logs: BTreeMap::new(),
+            evm_tx_success: BTreeMap::new(),
         }
     }
 }
@@ -138,6 +141,7 @@ impl State {
                     let h = keccak256(&raw);
                     self.evm_tx_gas_used.insert(h, outcome.gas_used);
                     self.evm_tx_logs.insert(h, outcome.logs);
+                    self.evm_tx_success.insert(h, true);
                 }
                 self.bump_nonce(signer);
                 Ok(())
@@ -155,6 +159,7 @@ impl State {
                     let h = keccak256(&raw);
                     self.evm_tx_gas_used.insert(h, outcome.gas_used);
                     self.evm_tx_logs.insert(h, outcome.logs);
+                    self.evm_tx_success.insert(h, true);
                 }
                 // Caller nonce was incremented inside revm for top-level CREATE.
                 Ok(())

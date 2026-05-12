@@ -253,19 +253,30 @@ impl ChainInteraction for NodeInner {
         self.mined_txs.get(hash).cloned()
     }
 
-    fn simulate_eth_call(&self, from: Address, to: Address, value: u128, data: Vec<u8>) -> Result<Vec<u8>, String> {
+    fn simulate_eth_call(
+        &self,
+        from: Address,
+        to: Address,
+        value: u128,
+        data: Vec<u8>,
+    ) -> Result<Vec<u8>, fractal_core::ExecError> {
         let mut scratch = self.state.clone();
         let mut evm = fractal_evm::RevmEngine::default();
         evm.execute_call(&mut scratch, from, to, value, data, self.gas_limit)
             .map(|o| o.return_data)
-            .map_err(|e| format!("{e}"))
     }
 
-    fn estimate_eth_gas(&self, _from: Address, _to: Address, _value: u128, data: Vec<u8>) -> Result<u64, String> {
-        // Devnet estimate: same rule-of-thumb as intrinsic gas (21k + 4/byte).
-        Ok(fractal_core::EVM_CALL_BASE_GAS.saturating_add(
-            fractal_core::PER_BYTE.saturating_mul(data.len() as u64),
-        ))
+    fn estimate_eth_gas(
+        &self,
+        from: Address,
+        to: Address,
+        value: u128,
+        data: Vec<u8>,
+    ) -> Result<u64, fractal_core::ExecError> {
+        let mut scratch = self.state.clone();
+        let mut evm = fractal_evm::RevmEngine::default();
+        evm.execute_call(&mut scratch, from, to, value, data, self.gas_limit)
+            .map(|o| o.gas_used)
     }
 
     fn code_at(&self, addr: &Address) -> Vec<u8> {
@@ -282,6 +293,14 @@ impl ChainInteraction for NodeInner {
 
     fn gas_used_for_tx(&self, tx_hash: &[u8; 32]) -> Option<u64> {
         self.state.evm_tx_gas_used.get(tx_hash).copied()
+    }
+
+    fn evm_receipt_success(&self, tx_hash: &[u8; 32]) -> bool {
+        self.state
+            .evm_tx_success
+            .get(tx_hash)
+            .copied()
+            .unwrap_or(true)
     }
 
     fn logs_for_filter(&self, filter: &fractal_rpc::LogsFilter) -> Vec<fractal_rpc::RpcLog> {

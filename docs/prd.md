@@ -936,8 +936,8 @@ Exit criteria: settle 100 receipts via `SETTLE_BATCH`, agents claim payouts via 
 Deliverables:
 * revm integration
 * Full EVM JSON-RPC compatibility (MetaMask connects, ethers.js works)
-* Example contract: AgentBountyEscrow using native precompiles
-* Solidity dev docs
+* Example contract: AgentBountyEscrow using native precompiles (`contracts/examples/AgentBountyEscrow.sol` + `FractalNative.sol`)
+* Solidity dev docs (`docs/solidity-dev.md`)
 
 Exit criteria: deploy a contract via Hardhat; call native precompiles from it; MetaMask shows tFRAC balances.
 

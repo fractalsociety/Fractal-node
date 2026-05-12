@@ -34,4 +34,7 @@ pub enum ExecError {
     BadSignature,
     #[error("EVM execution reverted or halted")]
     EvmFailed,
+    /// `REVERT` return data (often ABI-encoded `Error(string)`); empty when revert has no payload.
+    #[error("execution reverted")]
+    EvmRevert { return_data: Vec<u8> },
 }

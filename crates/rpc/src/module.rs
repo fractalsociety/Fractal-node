@@ -13,6 +13,16 @@ fn err_invalid_params(msg: &'static str) -> ErrorObjectOwned {
     ErrorObjectOwned::owned(-32602, msg, None::<()>)
 }
 
+fn exec_error_to_rpc(e: fractal_core::ExecError) -> ErrorObjectOwned {
+    match e {
+        fractal_core::ExecError::EvmRevert { return_data } => {
+            let data_hex = format!("0x{}", hex::encode(return_data));
+            ErrorObjectOwned::owned(3, "execution reverted", Some(serde_json::Value::String(data_hex)))
+        }
+        other => ErrorObjectOwned::owned(-32000, other.to_string(), None::<()>),
+    }
+}
+
 fn u256_quantity_hex(v: u128) -> String {
     format!("0x{:064x}", v)
 }
@@ -302,15 +312,30 @@ pub trait ChainInteraction: Send {
 
     fn mined_tx_info(&self, hash: &[u8; 32]) -> Option<(u64, [u8; 32], u32)>;
 
-    fn simulate_eth_call(&self, from: Address, to: Address, value: u128, data: Vec<u8>) -> Result<Vec<u8>, String>;
+    fn simulate_eth_call(
+        &self,
+        from: Address,
+        to: Address,
+        value: u128,
+        data: Vec<u8>,
+    ) -> Result<Vec<u8>, fractal_core::ExecError>;
 
-    fn estimate_eth_gas(&self, from: Address, to: Address, value: u128, data: Vec<u8>) -> Result<u64, String>;
+    fn estimate_eth_gas(
+        &self,
+        from: Address,
+        to: Address,
+        value: u128,
+        data: Vec<u8>,
+    ) -> Result<u64, fractal_core::ExecError>;
 
     fn code_at(&self, addr: &Address) -> Vec<u8>;
 
     fn storage_at(&self, addr: &Address, slot: [u8; 32]) -> [u8; 32];
 
     fn gas_used_for_tx(&self, tx_hash: &[u8; 32]) -> Option<u64>;
+
+    /// `false` only when a mined EVM tx explicitly failed (reserved); default success for native / legacy.
+    fn evm_receipt_success(&self, tx_hash: &[u8; 32]) -> bool;
 
     fn logs_for_filter(&self, filter: &LogsFilter) -> Vec<RpcLog>;
 
@@ -568,6 +593,7 @@ pub fn build_module(ctx: SharedChain) -> RpcModule<SharedChain> {
                     .gas_used_for_tx(&h)
                     .unwrap_or_else(|| fractal_core::intrinsic_gas(&tx).unwrap_or(0));
                 let (logs, logs_bloom) = g.receipt_rpc_logs(&h, bn, &bh, idx);
+                let receipt_ok = g.evm_receipt_success(&h);
                 Ok::<Option<RpcReceipt>, ErrorObjectOwned>(Some(rpc_receipt_from_core(
                     &tx,
                     &h,
@@ -577,6 +603,7 @@ pub fn build_module(ctx: SharedChain) -> RpcModule<SharedChain> {
                     gas_used,
                     logs,
                     logs_bloom,
+                    receipt_ok,
                 )))
             }
         })
@@ -745,7 +772,7 @@ pub fn build_module(ctx: SharedChain) -> RpcModule<SharedChain> {
                 let g = ctx.lock().await;
                 let out = g
                     .simulate_eth_call(from, to, value, data)
-                    .map_err(|e| ErrorObjectOwned::owned(-32000, e, None::<()>))?;
+                    .map_err(exec_error_to_rpc)?;
                 Ok::<String, ErrorObjectOwned>(format!("0x{}", hex::encode(out)))
             }
         })
@@ -780,7 +807,7 @@ pub fn build_module(ctx: SharedChain) -> RpcModule<SharedChain> {
                 let g = ctx.lock().await;
                 let gas = g
                     .estimate_eth_gas(from, to, value, data)
-                    .map_err(|e| ErrorObjectOwned::owned(-32000, e, None::<()>))?;
+                    .map_err(exec_error_to_rpc)?;
                 Ok::<String, ErrorObjectOwned>(quantity_hex_u64(gas))
             }
         })
@@ -957,6 +984,7 @@ fn rpc_receipt_from_core(
     gas_used: u64,
     logs: Vec<RpcLog>,
     logs_bloom: [u8; 256],
+    success: bool,
 ) -> RpcReceipt {
     let to = match &tx.body {
         fractal_core::TxBody::Transfer { to, .. } => Some(addr_hex(to)),
@@ -983,7 +1011,7 @@ fn rpc_receipt_from_core(
         contract_address,
         logs,
         logs_bloom: logs_bloom_hex(&logs_bloom),
-        status: "0x1".into(),
+        status: if success { "0x1".into() } else { "0x0".into() },
     }
 }
 
