@@ -29,3 +29,11 @@ rand = { version = "0.8", features = ["std", "std_rng"] }
 sha2 = "0.10"
 sha3 = "0.10"
 thiserror = "1.0"
+hex = "0.4"
+jsonrpsee = { version = "0.24", features = ["server", "macros"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "sync", "signal", "net"] }
+libp2p = { version = "0.56", features = ["tokio", "quic", "request-response", "macros"] }
+async-trait = "0.1"
+futures = "0.3"

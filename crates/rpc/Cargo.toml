@@ -5,3 +5,8 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+fractal-core = { path = "../core" }
+fractal-crypto = { path = "../crypto" }
+hex.workspace = true
+jsonrpsee.workspace = true
+tokio.workspace = true

@@ -5,4 +5,14 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+borsh.workspace = true
+fractal-consensus = { path = "../consensus" }
 fractal-core = { path = "../core" }
+fractal-crypto = { path = "../crypto" }
+fractal-mempool = { path = "../mempool" }
+fractal-network = { path = "../network" }
+fractal-rpc = { path = "../rpc" }
+futures.workspace = true
+libp2p.workspace = true
+thiserror.workspace = true
+tokio.workspace = true

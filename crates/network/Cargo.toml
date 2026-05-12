@@ -5,3 +5,7 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+async-trait.workspace = true
+borsh.workspace = true
+futures.workspace = true
+libp2p.workspace = true

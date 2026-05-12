@@ -34,6 +34,7 @@ FractalChain L1 testnet (PRD v0.1) is an AI-agent-first chain: HotStuff-2 consen
 - [x] M1-a: Workspace + crate skeleton + `node` binary stub
 - [x] M1-b–d: `crypto` + `core` state machine + 10k-tx determinism test (this batch)
 - [x] Wallet W1–W5: `crates/wallet` — 12 `cargo test -p fractal-wallet` tests; `fractal-core` optional `--features wallet` anchor
+- [x] M2: PRD §18 — `consensus` + `mempool` + `rpc` + `network` (libp2p 0.56 QUIC + `/fractalchain/sync/1.0.0` req-resp) + `node` (producer + follower `FRACTAL_BOOTSTRAP`, `apply_synced_block` replay verify); integration test `crates/node/tests/quic_sync.rs`
 
 ## Current Status / Progress Tracking
 
@@ -42,11 +43,12 @@ FractalChain L1 testnet (PRD v0.1) is an AI-agent-first chain: HotStuff-2 consen
 - Local `cargo test` (user machine): all crates green; `ten_k_txs_state_root_is_identical_across_ten_runs` passed. Removed unused `Sim::idx` in determinism test to clear `dead_code` warning. Awaiting Planner sign-off on M1.
 - **Wallet:** `fractal-wallet` implements W1–W5 (12 unit tests). `post_receipt` now takes `now_ms` and sets challenge deadlines (`DEFAULT_OPTIMISTIC_CHALLENGE_MS`). Use `cargo test -p fractal-core --features wallet` for `wallet_anchor` test.
 - **Wallet:** `settle_trusted` remains as thin wrapper over `settle_after_window` using stored deadline (Trusted tier).
+- **Chain M2 (2026-05-11, completed):** As above plus `fractal-network` + QUIC sync; `run_follower()` when `FRACTAL_BOOTSTRAP` is set; `FRACTAL_P2P_LISTEN` for producer bind (default `/ip4/0.0.0.0/udp/4001/quic-v1`). Follower uses one in-flight req-resp at a time to avoid duplicate block applies.
 
 ## Executor's Feedback or Assistance Requests
 
 - **BLS**: `fractal-crypto::bls` is a type-safe placeholder until M7 wiring; avoids `blst` native build in early CI.
-- Next milestone after M1 sign-off: **M2** singleton block producer (per PRD §18).
+- **Next chain milestone:** PRD §18 **M3** — Native VM opcodes (13 v0.1), subtries, EVM↔native precompile range; overlaps timeline with hardening M2 gossip if desired.
 - **Wallet W6**: off-chain clients / SDK packaging not started; `fractal-sdk` still re-exports `fractal-core` only.
 
 ## Lessons
@@ -55,3 +57,6 @@ FractalChain L1 testnet (PRD v0.1) is an AI-agent-first chain: HotStuff-2 consen
 - Agent sandbox may lack `cargo`; user-run `cargo test` is the source of truth for compile/test until CI exists.
 - **Borsh 1.5**: enums with `#[repr(u8)]` explicit discriminants require `#[borsh(use_discriminant = true)]` (or `false`) on the enum.
 - `BTreeSet<(ToolClass, TeeType)>` requires `TeeType: Ord` (derive `PartialOrd, Ord` on field-less enums).
+- **jsonrpsee 0.24:** there is no `http-abi` feature; use `features = ["server", "macros"]` in workspace `Cargo.toml`.
+- **Producer vs RPC:** `producer_loop` must hold `Arc<Mutex<NodeInner>>` so it can read `mempool` / `state`; RPC uses `CoerceUnsized` to `SharedChain` from the same `Arc`. Do not type the producer as `SharedChain` (`dyn` loses fields).
+- **libp2p request-response:** overlapping `GetTip`/`GetBlocks` requests can deliver responses out of order and break followers (e.g. duplicate height-1 apply). Serialize with an `outstanding` flag or single-pending RPC.
