@@ -1,5 +1,5 @@
 /**
- * Deploy `AgentBountyEscrow` to a running fractal-node (`run_dev`).
+ * Deploy `AgentBountyEscrow`, then `openBounty` + `pingNativeNoOp` (native precompile smoke).
  *
  * Usage: `npm run deploy` (see repo `scripts/deploy-fractal-contracts.sh`).
  */
@@ -45,6 +45,58 @@ async function main() {
       2,
     ),
   );
+
+  // PRD M4 exit criteria: call Fractal native precompile from deployed Solidity (`pingNativeNoOp` → `NativeCall::NoOp`).
+  const bountyId = ethers.id("prd-m4-example-bounty");
+  const openTx = await contract.openBounty(bountyId, feeOverrides);
+  const openRc = await openTx.wait();
+  console.log(
+    JSON.stringify(
+      {
+        step: "open_bounty_mined",
+        txHash: openRc.hash,
+        bountyId,
+      },
+      null,
+      2,
+    ),
+  );
+
+  const pingTx = await contract.pingNativeNoOp(feeOverrides);
+  const pingRc = await pingTx.wait();
+  let nativeOk = false;
+  for (const log of pingRc.logs) {
+    try {
+      const parsed = contract.interface.parseLog({ topics: log.topics, data: log.data });
+      if (parsed?.name === "NativeCallResult") {
+        nativeOk = Boolean(parsed.args.success);
+        break;
+      }
+    } catch {
+      // not this contract / event
+    }
+  }
+  console.log(
+    JSON.stringify(
+      {
+        step: "ping_native_noop_mined",
+        txHash: pingRc.hash,
+        nativeCallSuccess: nativeOk,
+        status: pingRc.status,
+      },
+      null,
+      2,
+    ),
+  );
+  if (!nativeOk) {
+    throw new Error(
+      JSON.stringify({
+        step: "ping_native_failed",
+        message: "expected NativeCallResult(true) from pingNativeNoOp",
+        receiptLogs: pingRc.logs.length,
+      }),
+    );
+  }
 }
 
 main().catch((err) => {

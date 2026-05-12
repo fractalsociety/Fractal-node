@@ -1,0 +1,23 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>FractalChain explorer (dev)</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <style>
+    body { font-family: system-ui, sans-serif; max-width: 40rem; margin: 2rem auto; padding: 0 1rem; }
+    code { background: #eee; padding: 0.1rem 0.25rem; border-radius: 3px; }
+    button { margin: 0.5rem 0.25rem 0 0; padding: 0.35rem 0.75rem; }
+  </style>
+</head>
+<body>
+  <h1>FractalChain — minimal explorer</h1>
+  <p>RPC: <code id="rpcshow"></code> — override with <code>?rpc=http://host:8545</code></p>
+  <button type="button" id="refresh">Refresh</button>
+  <div id="status"></div>
+  <script>
+    document.getElementById("rpcshow").textContent = new URLSearchParams(window.location.search).get("rpc") || "http://127.0.0.1:8545";
+  </script>
+  <script src="app.js"></script>
+</body>
+</html>

@@ -37,6 +37,8 @@ FractalChain L1 testnet (PRD v0.1) is an AI-agent-first chain: HotStuff-2 consen
 - [x] M2: PRD §18 — `consensus` + `mempool` + `rpc` + `network` (libp2p 0.56 QUIC + `/fractalchain/sync/1.0.0` req-resp) + `node` (producer + follower `FRACTAL_BOOTSTRAP`, `apply_synced_block` replay verify); integration test `crates/node/tests/quic_sync.rs`
 - [x] M3 (initial slice): native opcodes + subtrie `State`, intrinsic gas, Merkle settle/claim, `m3_settle_claim` test, `fractal-evm` precompile scaffold; see Current Status for gaps vs full PRD §18 M3.
 - [ ] M4-a (ready for Planner sign-off): add `TxBody::EvmCall` + `apply_block_with_evm` (core `EvmEngine` trait) + `fractal-evm` `revm` dependency + `RevmEngine` stub that routes `0xfc..` precompile calls into `State::apply_native_syscall`; add test `crates/evm/tests/m4_revm_precompile_dispatch.rs`. Manual `cargo test -q` on user machine: ✅.
+- [ ] M6-a (Executor slice, 2026-05-12): **PRD `docs/prd.md` M6** — CORS on JSON-RPC; `fractal-faucet` + `DEVNET_FAUCET_TREASURY`; static `tools/explorer`; `testnets/devnet` Docker Compose + bootnode template; `docs/devnet.md`. **Next:** full Blockscout fork or richer explorer; prod faucet auth; real 3+ bootnode fleet; marketing site; Discord/status links in ops runbook.
+- [ ] M5-a (Executor slice, 2026-05-12): **PRD `docs/prd.md` M5** (not `docs/wallet.md`) — `fractal-mvp-bridge` + `fractal_sdk::m5` + devnet Hardhat #1; smoke OK. **Next:** wire real off-chain receipts, post-bridge `eth_getBalance` check, CI `MVP_RECEIPT_COUNT=100` vs `fractal-node`.
 - [ ] M4-b (ready for Planner sign-off): expand JSON-RPC toward MetaMask/ethers compatibility: add `eth_chainId`, `net_version`, `eth_getTransactionCount`. User confirmed via manual run.
 - [ ] M4-c (in progress): expand JSON-RPC: add `web3_clientVersion`, `eth_getBlockByNumber`, `eth_getBlockByHash` (minimal block objects).
 - [ ] M4-d (in progress): expand JSON-RPC: add `eth_getTransactionByHash`, `eth_getTransactionReceipt` with basic tx/receipt tracking (pending + mined).
@@ -54,6 +56,7 @@ FractalChain L1 testnet (PRD v0.1) is an AI-agent-first chain: HotStuff-2 consen
 - [ ] M4-p (in progress): EVM logs/events: capture logs from `revm` execution, store deterministically per-tx, `eth_getLogs` (minimal filters), **`eth_getTransactionReceipt.logs`** with `blockHash` + block-scoped `logIndex`, shared `make_rpc_log`.
 - [x] M4-q (Executor slice, 2026-05-12): PRD M4 **example contract + Solidity dev docs** — `contracts/examples/*`, `docs/solidity-dev.md`, borsh snapshot test for `NativeCall::NoOp`.
 - [x] M4-r (Executor slice, 2026-05-12): in-repo **`contracts/` Hardhat** + **`scripts/deploy-fractal-contracts.sh`**; producer handles `PooledTx` + RPC tx hash / `eth_getTransactionByHash` EIP-1559 JSON (`r`/`s`/`yParity`) for ethers/Hardhat. **Planner:** confirm end-to-end deploy vs M4 exit criteria.
+- [x] M4-s (Executor slice, 2026-05-12): **`contracts/scripts/deploy.js`** exercises **`openBounty` + `pingNativeNoOp`** (asserts `NativeCallResult(true)`); **`m4_contract_calls_precompile`** EVM test; fixed **double caller nonce bump** for top-level `EvmCall` through revm (`crates/evm/src/engine.rs`). **Planner:** confirm M4 exit line vs MetaMask balance display.
 
 ## Current Status / Progress Tracking
 
@@ -70,6 +73,11 @@ FractalChain L1 testnet (PRD v0.1) is an AI-agent-first chain: HotStuff-2 consen
 - **Chain M4 (2026-05-12, Executor):** Receipt `status` (`0x1`/`0x0`) from `State.evm_tx_success` + `evm_receipt_success` default; `ExecError::EvmRevert` from revm `Revert`; `eth_call` / `eth_estimateGas` return JSON-RPC code `3` + hex `data` on revert; `eth_estimateGas` uses simulated `gas_used`. Tests: `m4_evm_revert.rs`, `m4_evm_receipt_success.rs`. `cargo test -q`: ✅.
 - **Chain M4 (2026-05-12, Executor / PRD M4 deliverables):** Added `contracts/examples/FractalNative.sol`, `contracts/examples/AgentBountyEscrow.sol`, `docs/solidity-dev.md` (precompile addressing, NoOp borsh `0x0d`, Hardhat/MetaMask notes); `crates/core/tests/native_call_borsh_snapshots.rs` locks `NoOp` wire format. PRD §18 M4 bullets updated to reference paths. `cargo test -q`: ✅.
 - **Chain M4 (2026-05-12, Executor):** `eth_getTransactionByHash` returns full EIP-1559 JSON from stored raw bytes when present; `eth_internal_to_rpc_tx_hash` so `eth_getLogs` uses the Ethereum tx hash in `transactionHash`; receipt logs already keyed via `internal_tx_hash_for_state`. Hardhat section added to `docs/solidity-dev.md`.
+- **Chain M4 (2026-05-12, Executor):** Deploy script validates precompile-from-contract; `fractal-evm` resets caller nonce after revm `transact` for top-level `CALL` so `State::bump_nonce` remains the single increment. Full `cargo test`: ✅.
+
+- **Chain M5 (2026-05-12, Executor / PRD `docs/prd.md` only):** `fractal_core::HARDHAT_DEFAULT_SIGNER_1` + devnet account row; `fractal_sdk::m5` builders; binary `fractal-mvp-bridge` (`crates/mvp-backend`) posts borsh `SETTLE_BATCH` + `CLAIM_PAYOUT` via `eth_sendRawTransaction`; PRD M5 deliverables bullet updated. Smoke: `MVP_RECEIPT_COUNT=3` vs local node ✅.
+
+- **Chain M6 (2026-05-12, Executor / PRD `docs/prd.md`):** permissive CORS on `serve_http`; `DEVNET_FAUCET_TREASURY` + `fractal-faucet`; `tools/explorer` static UI; `testnets/devnet` Dockerfiles + compose + `bootnodes.example.txt`; `docs/devnet.md`. `cargo test`: ✅.
 
 - **Chain M2:** remains as delivered earlier (QUIC sync, follower, `quic_sync` test).
 
@@ -77,9 +85,12 @@ FractalChain L1 testnet (PRD v0.1) is an AI-agent-first chain: HotStuff-2 consen
 
 - **BLS**: `fractal-crypto::bls` is a type-safe placeholder until M7 wiring; avoids `blst` native build in early CI.
 - **M4 slice (receipt status / revert RPC):** Implementation complete; `cargo test -q` passed locally. **Planner:** please cross-check behavior vs MetaMask/ethers expectations (error `data` as plain hex string) and confirm whether to mark the corresponding status-board item done.
-- **M4 Hardhat + deploy script:** Landed `contracts/` Hardhat package and `./scripts/deploy-fractal-contracts.sh`; fixed ethers `eth_getTransactionByHash` shape for EIP-1559. **Planner:** please run `./scripts/deploy-fractal-contracts.sh` with a live `fractal-node` and confirm M4-q/M4-r sign-off.
+- **M4 Hardhat + deploy script:** Landed `contracts/` Hardhat package and `./scripts/deploy-fractal-contracts.sh`; fixed ethers `eth_getTransactionByHash` shape for EIP-1559. **Planner:** please run `./scripts/deploy-fractal-contracts.sh` with a live `fractal-node` and confirm M4-q/M4-r/M4-s sign-off.
+- **M6 slice (PRD `docs/prd.md`):** First devnet operator pack landed (faucet, explorer, compose, CORS). **Planner:** run `docker compose -f testnets/devnet/docker-compose.yml up --build` (or host `cargo run` + `cargo run -p fractal-faucet`) and confirm MetaMask + explorer + faucet UX; Discord/status remain ops-owned.
+- **M5 bridge (PRD `docs/prd.md`, not `docs/wallet.md`):** First slice landed (`fractal-mvp-bridge`, `fractal_sdk::m5`). **Planner:** run `MVP_RECEIPT_COUNT=100` against devnet and optionally `eth_getBalance` on agent to confirm M5 exit path numerically.
+- **Next PRD milestone after M4 closure:** **M5** (Bridge to Core MVP) — off-chain backend submits `SETTLE_BATCH`, SDK claims, E2E receipts → settlement → MetaMask tFRAC. **Remaining M4 polish (Executor backlog):** MetaMask “tFRAC balance” doc / import for devnet prefund key; follower replication of `eth_signed_raw` / RPC hash maps if explorers must match leader on synced nodes.
 - **Next chain milestone:** PRD §18 **M4** — `revm`, full JSON-RPC EVM surface, MetaMask path, real precompile dispatch from EVM execution.
-- **Wallet W6**: off-chain clients / SDK packaging not started; `fractal-sdk` still re-exports `fractal-core` only.
+- **Wallet W6**: off-chain clients / SDK packaging not started beyond **`fractal_sdk::m5`** (M5 bridge builders); `fractal-sdk` still primarily re-exports `fractal-core`.
 
 ## Lessons
 
@@ -92,3 +103,5 @@ FractalChain L1 testnet (PRD v0.1) is an AI-agent-first chain: HotStuff-2 consen
 - **libp2p request-response:** overlapping `GetTip`/`GetBlocks` requests can deliver responses out of order and break followers (e.g. duplicate height-1 apply). Serialize with an `outstanding` flag or single-pending RPC.
 - **`NativeCall::try_from_slice` outside `fractal-core`:** import `borsh::BorshDeserialize` (methods are on the trait).
 - **jsonrpsee / MetaMask:** `eth_call` revert uses RPC error code `3` and `data` as a JSON string value holding `0x` + hex return data (common wallet pattern).
+- **Revm + `State::bump_nonce`:** For top-level `EvmCall` into contract bytecode, revm’s `transact` commits `caller_nonce + 1`. Core still calls `bump_nonce` after `execute_call`; reset the caller’s nonce to the pre-`transact` value in `RevmEngine::execute_call` after `db.commit` so the net increment is exactly one. Precompile fast path does not use revm and still relies on `bump_nonce` only.
+- **jsonrpsee 0.24 + `tower-http` CORS:** `ServerBuilder::set_http_middleware` expects **`tower` 0.4** `ServiceBuilder` (jsonrpsee’s dependency). Using workspace `tower` 0.5 causes a type mismatch.

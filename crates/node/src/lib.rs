@@ -42,11 +42,10 @@ pub enum SyncApplyError {
 
 const GENESIS_TAG: &[u8] = b"FRACTALCHAIN_GENESIS_V0";
 
-/// Address for Hardhat / Anvil **default signer #0** (`0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80`).
-/// Prefunded in [`NodeInner::devnet`] so `contracts/` Hardhat deploy works without extra setup.
-pub const HARDHAT_DEFAULT_SIGNER_0: Address = [
-    0xf3, 0x9F, 0xd6, 0xe5, 0x1a, 0xad, 0x88, 0xF6, 0xF4, 0xce, 0x6a, 0xB8, 0x82, 0x72, 0x79, 0xcf, 0xfF, 0xb9, 0x22, 0x66,
-];
+/// Hardhat / Anvil default signer #0 — re-exported from `fractal_core::devnet_accounts`.
+pub use fractal_core::HARDHAT_DEFAULT_SIGNER_0;
+/// Hardhat default signer #1 (M5 MVP agent for `CLAIM_PAYOUT` demos).
+pub use fractal_core::HARDHAT_DEFAULT_SIGNER_1;
 
 pub fn genesis_parent_hash() -> fractal_crypto::Hash256 {
     keccak256(GENESIS_TAG)
@@ -80,6 +79,20 @@ impl NodeInner {
         let mut state = State::default();
         state.accounts.insert(
             HARDHAT_DEFAULT_SIGNER_0,
+            fractal_core::Account {
+                nonce: 0,
+                balance: 1_000_000_000_000_000_000_000_000u128,
+            },
+        );
+        state.accounts.insert(
+            HARDHAT_DEFAULT_SIGNER_1,
+            fractal_core::Account {
+                nonce: 0,
+                balance: 0,
+            },
+        );
+        state.accounts.insert(
+            fractal_core::DEVNET_FAUCET_TREASURY,
             fractal_core::Account {
                 nonce: 0,
                 balance: 1_000_000_000_000_000_000_000_000u128,

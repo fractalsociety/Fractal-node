@@ -3,11 +3,14 @@ use std::sync::Arc;
 
 use fractal_core::Address;
 use fractal_crypto::hash::keccak256;
+use http::Method;
 use jsonrpsee::server::{ServerBuilder, ServerHandle};
 use jsonrpsee::types::{ErrorObjectOwned, Params};
 use jsonrpsee::RpcModule;
 use serde::Serialize;
 use tokio::sync::Mutex;
+use tower::ServiceBuilder;
+use tower_http::cors::{Any, CorsLayer};
 
 fn err_invalid_params(msg: &'static str) -> ErrorObjectOwned {
     ErrorObjectOwned::owned(-32602, msg, None::<()>)
@@ -1137,8 +1140,17 @@ mod eth_get_logs_filter_tests {
 }
 
 pub async fn serve_http(addr: SocketAddr, ctx: SharedChain) -> Result<(ServerHandle, SocketAddr), std::io::Error> {
+    let cors = CorsLayer::new()
+        .allow_origin(Any)
+        .allow_methods([Method::GET, Method::POST, Method::OPTIONS])
+        .allow_headers(Any);
+    let http_middleware = ServiceBuilder::new().layer(cors);
+
     let module = build_module(ctx);
-    let server = ServerBuilder::default().build(addr).await?;
+    let server = ServerBuilder::default()
+        .set_http_middleware(http_middleware)
+        .build(addr)
+        .await?;
     let bound = server.local_addr()?;
     let handle = server.start(module);
     Ok((handle, bound))

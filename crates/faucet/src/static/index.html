@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>FractalChain devnet faucet</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <style>
+    body { font-family: system-ui, sans-serif; max-width: 36rem; margin: 2rem auto; padding: 0 1rem; }
+    code { background: #f4f4f4; padding: 0.1rem 0.3rem; border-radius: 4px; }
+    button { margin-top: 0.5rem; padding: 0.4rem 0.8rem; }
+    .hint { color: #555; font-size: 0.9rem; margin-top: 1rem; }
+  </style>
+</head>
+<body>
+  <h1>FractalChain devnet faucet</h1>
+  <p>POST <code>/fund</code> with JSON <code>{"address":"0x…"}</code> (same shape as API clients).</p>
+  <p>Hardhat account #0 is prefunded on the node; this faucet tops up <strong>any</strong> 20-byte address from the treasury.</p>
+  <label>Address <input id="addr" placeholder="0x…" style="width:100%;max-width:28rem" /></label><br />
+  <button type="button" id="go">Request drip</button>
+  <pre id="out"></pre>
+  <p class="hint">Rate limit: one drip per client IP per cooldown (see <code>FAUCET_COOLDOWN_SECS</code> on the server).</p>
+  <script>
+    document.getElementById("go").onclick = async () => {
+      const address = document.getElementById("addr").value.trim();
+      const out = document.getElementById("out");
+      out.textContent = "…";
+      try {
+        const r = await fetch("/fund", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ address }),
+        });
+        const j = await r.json();
+        out.textContent = JSON.stringify(j, null, 2);
+      } catch (e) {
+        out.textContent = String(e);
+      }
+    };
+  </script>
+</body>
+</html>

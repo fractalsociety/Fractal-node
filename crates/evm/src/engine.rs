@@ -104,6 +104,12 @@ impl EvmEngine for RevmEngine {
         }
         db.commit(out.state);
 
+        // `State::apply_transaction_with_evm` bumps the signer nonce after `execute_call`. Revm
+        // already incremented the caller nonce during `transact`; reset so only `bump_nonce` applies.
+        if let Some(acc) = state.accounts.get_mut(&caller) {
+            acc.nonce = caller_nonce;
+        }
+
         let logs = Self::map_logs(out.result.logs());
 
         Ok(EvmCallOutcome {

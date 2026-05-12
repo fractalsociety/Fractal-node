@@ -944,8 +944,8 @@ Exit criteria: deploy a contract via Hardhat; call native precompiles from it; M
 ## M5: Bridge to Core MVP (Weeks 9-11)
 
 Deliverables:
-* Off-chain Core MVP backend submits real `SETTLE_BATCH` calls
-* Agents claim payouts via SDK
+* Off-chain Core MVP backend submits real `SETTLE_BATCH` calls (stub binary: `cargo run -p fractal-mvp-backend --bin fractal-mvp-bridge`, see `crates/mvp-backend`)
+* Agents claim payouts via SDK (`fractal_sdk::m5` in `crates/sdk-rust`)
 * End-to-end: post job off-chain → settle batch on-chain → agent claims tFRAC → tFRAC appears in MetaMask
 
 Exit criteria: ≥ 100 receipts flow from off-chain MVP to on-chain settlement to agent claims, with no manual intervention.
@@ -953,11 +953,11 @@ Exit criteria: ≥ 100 receipts flow from off-chain MVP to on-chain settlement t
 ## M6: Explorer, Faucet, Public Testnet (Weeks 10-12)
 
 Deliverables:
-* Block explorer (forked Blockscout or custom Next.js)
-* Faucet with rate limiting
-* Public bootnodes (3 minimum)
-* Documentation site
-* Discord + status page
+* Block explorer (forked Blockscout or custom Next.js) — minimal static explorer: `tools/explorer/` + `docs/devnet.md`
+* Faucet with rate limiting — `fractal-faucet` (`crates/faucet`) + Docker service in `testnets/devnet/docker-compose.yml`
+* Public bootnodes (3 minimum) — template `testnets/devnet/bootnodes.example.txt` + `FRACTAL_BOOTSTRAP` (see `testnets/devnet/README.md`)
+* Documentation site — operator notes: `docs/devnet.md` (full product site TBD)
+* Discord + status page — out of repo (operational); noted in `docs/devnet.md`
 
 Exit criteria: external developer can connect MetaMask, get tFRAC, deploy a contract, call native precompiles, and see everything in the explorer — without team help.
 
@@ -1001,6 +1001,7 @@ fractalchain/
     node/              # main binary, assembles all crates
     cli/               # operator CLI (start, status, stake, etc.)
     sdk-rust/          # Rust SDK
+    faucet/            # devnet HTTP faucet (M6)
 
   sdks/
     typescript/        # TypeScript SDK
@@ -1011,8 +1012,7 @@ fractalchain/
     examples/          # AgentBountyEscrow, etc.
 
   tools/
-    explorer/          # Next.js block explorer
-    faucet/            # faucet web app
+    explorer/          # static JSON-RPC explorer (M6; serve over HTTP)
     indexer/           # native event indexer with GraphQL
 
   testnets/
@@ -1022,6 +1022,7 @@ fractalchain/
 
   docs/
     prd.md
+    devnet.md          # M6 operator notes (faucet, explorer, compose)
     architecture.md
     consensus.md
     native-vm.md

@@ -9,8 +9,9 @@ use crate::state::EvmLog;
 pub trait EvmEngine {
     /// Execute an EVM CALL.
     ///
-    /// Implementations must be deterministic given the same inputs and must not bump
-    /// the transaction nonce (that is handled by `State`).
+    /// Implementations must be deterministic given the same inputs. The transaction signer nonce is
+    /// advanced exactly once by `State::apply_transaction_with_evm` after this call (for example
+    /// `RevmEngine` resets revm’s committed caller nonce after `transact` so `bump_nonce` is not doubled).
     fn execute_call(
         &mut self,
         state: &mut State,

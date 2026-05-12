@@ -43,7 +43,7 @@ The repo includes a minimal **Hardhat** package under `contracts/` (`hardhat.con
 ./scripts/deploy-fractal-contracts.sh
 ```
 
-That script installs npm dependencies, compiles, and runs `npm run deploy` against the configured network (`fractalLocal`, chain id **41**).
+That script installs npm dependencies, compiles, and runs `npm run deploy` against the configured network (`fractalLocal`, chain id **41**). The deploy script also sends **`openBounty`** and **`pingNativeNoOp`** so one run exercises the PRD path: deploy a contract, then call the Fractal native precompile from Solidity.
 
 ## JSON-RPC and transactions
 
@@ -52,7 +52,7 @@ That script installs npm dependencies, compiles, and runs `npm run deploy` again
 
 ## MetaMask
 
-Add a custom network with the dev node RPC URL and **chain id 41**. Fund the deployer account in devnet genesis / faucet flows as implemented for your environment.
+Add a custom network with the dev node RPC URL and **chain id 41**. Fund the deployer account in devnet genesis / faucet flows as implemented for your environment (see **`docs/devnet.md`**: `fractal-faucet`, `DEVNET_FAUCET_TREASURY`, static explorer under `tools/explorer`).
 
 ## Related PRD sections
 

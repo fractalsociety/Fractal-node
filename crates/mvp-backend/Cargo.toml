@@ -1,0 +1,18 @@
+[package]
+name = "fractal-mvp-backend"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "PRD M5 stub: submit SETTLE_BATCH + CLAIM_PAYOUT via JSON-RPC (borsh native txs)"
+
+[[bin]]
+name = "fractal-mvp-bridge"
+path = "src/main.rs"
+
+[dependencies]
+borsh.workspace = true
+fractal-core = { path = "../core" }
+fractal-sdk = { path = "../sdk-rust" }
+hex.workspace = true
+serde_json.workspace = true
+ureq = { version = "2.10", default-features = false, features = ["json"] }

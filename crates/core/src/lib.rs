@@ -4,6 +4,7 @@
 //! `keccak256(borsh(State))` with sorted `BTreeMap` fields for deterministic iteration.
 
 mod address;
+mod devnet_accounts;
 mod evm_engine;
 mod error;
 pub mod merkle;
@@ -16,6 +17,7 @@ mod tx;
 pub mod wallet_anchor;
 
 pub use address::{create_contract_address, Address};
+pub use devnet_accounts::{DEVNET_FAUCET_TREASURY, HARDHAT_DEFAULT_SIGNER_0, HARDHAT_DEFAULT_SIGNER_1};
 pub use evm_engine::{EvmCallOutcome, EvmEngine};
 pub use error::ExecError;
 pub use merkle::{merkle_proof, merkle_root, verify_merkle_proof};
