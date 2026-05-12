@@ -52,7 +52,8 @@ FractalChain L1 testnet (PRD v0.1) is an AI-agent-first chain: HotStuff-2 consen
 - [ ] M4-n (in progress): receipts gasUsed: record per-tx EVM gas used deterministically (`State.evm_tx_gas_used`) and expose via `eth_getTransactionReceipt.gasUsed`.
 - [ ] M4-o (in progress): contract CALL correctness: add a bytecode execution test proving CALL can SSTORE + RETURN (foundation for `eth_call` on contract bytecode).
 - [ ] M4-p (in progress): EVM logs/events: capture logs from `revm` execution, store deterministically per-tx, `eth_getLogs` (minimal filters), **`eth_getTransactionReceipt.logs`** with `blockHash` + block-scoped `logIndex`, shared `make_rpc_log`.
-- [ ] M4-q (Executor slice, 2026-05-12): PRD M4 **example contract + Solidity dev docs** — `contracts/examples/*`, `docs/solidity-dev.md`, borsh snapshot test for `NativeCall::NoOp`. **Planner:** confirm vs full “Hardhat deploy” checklist (no Hardhat project scaffold in-repo yet).
+- [x] M4-q (Executor slice, 2026-05-12): PRD M4 **example contract + Solidity dev docs** — `contracts/examples/*`, `docs/solidity-dev.md`, borsh snapshot test for `NativeCall::NoOp`.
+- [x] M4-r (Executor slice, 2026-05-12): in-repo **`contracts/` Hardhat** + **`scripts/deploy-fractal-contracts.sh`**; producer handles `PooledTx` + RPC tx hash / `eth_getTransactionByHash` EIP-1559 JSON (`r`/`s`/`yParity`) for ethers/Hardhat. **Planner:** confirm end-to-end deploy vs M4 exit criteria.
 
 ## Current Status / Progress Tracking
 
@@ -68,6 +69,7 @@ FractalChain L1 testnet (PRD v0.1) is an AI-agent-first chain: HotStuff-2 consen
 - **Chain M4 (2026-05-12, Executor):** Ethereum `logsBloom` on receipts + merged block bloom (`fractal-rpc`). `cargo test -q`: ✅.
 - **Chain M4 (2026-05-12, Executor):** Receipt `status` (`0x1`/`0x0`) from `State.evm_tx_success` + `evm_receipt_success` default; `ExecError::EvmRevert` from revm `Revert`; `eth_call` / `eth_estimateGas` return JSON-RPC code `3` + hex `data` on revert; `eth_estimateGas` uses simulated `gas_used`. Tests: `m4_evm_revert.rs`, `m4_evm_receipt_success.rs`. `cargo test -q`: ✅.
 - **Chain M4 (2026-05-12, Executor / PRD M4 deliverables):** Added `contracts/examples/FractalNative.sol`, `contracts/examples/AgentBountyEscrow.sol`, `docs/solidity-dev.md` (precompile addressing, NoOp borsh `0x0d`, Hardhat/MetaMask notes); `crates/core/tests/native_call_borsh_snapshots.rs` locks `NoOp` wire format. PRD §18 M4 bullets updated to reference paths. `cargo test -q`: ✅.
+- **Chain M4 (2026-05-12, Executor):** `eth_getTransactionByHash` returns full EIP-1559 JSON from stored raw bytes when present; `eth_internal_to_rpc_tx_hash` so `eth_getLogs` uses the Ethereum tx hash in `transactionHash`; receipt logs already keyed via `internal_tx_hash_for_state`. Hardhat section added to `docs/solidity-dev.md`.
 
 - **Chain M2:** remains as delivered earlier (QUIC sync, follower, `quic_sync` test).
 
@@ -75,7 +77,7 @@ FractalChain L1 testnet (PRD v0.1) is an AI-agent-first chain: HotStuff-2 consen
 
 - **BLS**: `fractal-crypto::bls` is a type-safe placeholder until M7 wiring; avoids `blst` native build in early CI.
 - **M4 slice (receipt status / revert RPC):** Implementation complete; `cargo test -q` passed locally. **Planner:** please cross-check behavior vs MetaMask/ethers expectations (error `data` as plain hex string) and confirm whether to mark the corresponding status-board item done.
-- **M4 PRD slice (example + docs):** Landed `contracts/examples`, `docs/solidity-dev.md`, and `native_call_borsh_snapshots` test. **Planner:** next gap vs M4 exit criteria is likely an in-repo **Hardhat** (or Foundry) scaffold + scripted deploy, or **M5** if M4 is declared sufficient.
+- **M4 Hardhat + deploy script:** Landed `contracts/` Hardhat package and `./scripts/deploy-fractal-contracts.sh`; fixed ethers `eth_getTransactionByHash` shape for EIP-1559. **Planner:** please run `./scripts/deploy-fractal-contracts.sh` with a live `fractal-node` and confirm M4-q/M4-r sign-off.
 - **Next chain milestone:** PRD §18 **M4** — `revm`, full JSON-RPC EVM surface, MetaMask path, real precompile dispatch from EVM execution.
 - **Wallet W6**: off-chain clients / SDK packaging not started; `fractal-sdk` still re-exports `fractal-core` only.
 

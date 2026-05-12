@@ -10,6 +10,7 @@ k256.workspace = true
 rlp.workspace = true
 fractal-consensus = { path = "../consensus" }
 fractal-core = { path = "../core" }
+fractal-eth-wire = { path = "../eth-wire" }
 fractal-evm = { path = "../evm" }
 fractal-crypto = { path = "../crypto" }
 fractal-mempool = { path = "../mempool" }

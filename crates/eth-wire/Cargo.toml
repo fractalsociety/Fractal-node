@@ -1,17 +1,13 @@
 [package]
-name = "fractal-rpc"
+name = "fractal-eth-wire"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 
 [dependencies]
-borsh.workspace = true
 fractal-core = { path = "../core" }
-fractal-consensus = { path = "../consensus" }
 fractal-crypto = { path = "../crypto" }
-fractal-eth-wire = { path = "../eth-wire" }
 hex.workspace = true
-jsonrpsee.workspace = true
-serde.workspace = true
+k256.workspace = true
+rlp.workspace = true
 serde_json.workspace = true
-tokio.workspace = true

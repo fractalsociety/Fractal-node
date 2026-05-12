@@ -35,6 +35,16 @@ solc --bin --optimize contracts/examples/FractalNative.sol contracts/examples/Ag
 
 or a Foundry project that lists `contracts/examples` as a source root.
 
+## In-repo Hardhat (`contracts/`)
+
+The repo includes a minimal **Hardhat** package under `contracts/` (`hardhat.config.cjs`, `scripts/deploy.js`). With **`fractal-node`** listening on JSON-RPC (default `http://127.0.0.1:8545`, overridable via `FRACTAL_RPC_URL`):
+
+```bash
+./scripts/deploy-fractal-contracts.sh
+```
+
+That script installs npm dependencies, compiles, and runs `npm run deploy` against the configured network (`fractalLocal`, chain id **41**).
+
 ## JSON-RPC and transactions
 
 - Use **`eth_sendRawTransaction`** with **EIP-1559 (type `0x02`)** bytes for `VmKind::Evm` transactions (see `crates/node/src/eth_signed.rs` and `crates/node/tests/eip1559_raw_tx.rs`).

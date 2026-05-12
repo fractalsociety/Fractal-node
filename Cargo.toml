@@ -9,6 +9,7 @@ members = [
     "crates/evm",
     "crates/storage",
     "crates/mempool",
+    "crates/eth-wire",
     "crates/rpc",
     "crates/node",
     "crates/cli",

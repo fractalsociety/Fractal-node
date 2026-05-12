@@ -42,6 +42,12 @@ pub enum SyncApplyError {
 
 const GENESIS_TAG: &[u8] = b"FRACTALCHAIN_GENESIS_V0";
 
+/// Address for Hardhat / Anvil **default signer #0** (`0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80`).
+/// Prefunded in [`NodeInner::devnet`] so `contracts/` Hardhat deploy works without extra setup.
+pub const HARDHAT_DEFAULT_SIGNER_0: Address = [
+    0xf3, 0x9F, 0xd6, 0xe5, 0x1a, 0xad, 0x88, 0xF6, 0xF4, 0xce, 0x6a, 0xB8, 0x82, 0x72, 0x79, 0xcf, 0xfF, 0xb9, 0x22, 0x66,
+];
+
 pub fn genesis_parent_hash() -> fractal_crypto::Hash256 {
     keccak256(GENESIS_TAG)
 }
@@ -61,10 +67,24 @@ pub struct NodeInner {
     pub blocks: Vec<Block>,
     pub pending_txs: BTreeMap<fractal_crypto::Hash256, Transaction>,
     pub mined_txs: BTreeMap<fractal_crypto::Hash256, (u64, fractal_crypto::Hash256, u32)>,
+    /// Signed EIP-1559 bytes keyed by `keccak256(raw)` (RPC tx hash).
+    pub eth_signed_raw: BTreeMap<fractal_crypto::Hash256, Vec<u8>>,
+    /// When RPC hash differs from `keccak(borsh(tx))` (EVM state keys), map RPC → internal.
+    pub eth_rpc_to_internal_tx_hash: BTreeMap<fractal_crypto::Hash256, fractal_crypto::Hash256>,
+    /// Inverse of the above for log `transactionHash` fields (`eth_getLogs`).
+    pub eth_internal_to_rpc_tx_hash: BTreeMap<fractal_crypto::Hash256, fractal_crypto::Hash256>,
 }
 
 impl NodeInner {
     pub fn devnet() -> Self {
+        let mut state = State::default();
+        state.accounts.insert(
+            HARDHAT_DEFAULT_SIGNER_0,
+            fractal_core::Account {
+                nonce: 0,
+                balance: 1_000_000_000_000_000_000_000_000u128,
+            },
+        );
         Self {
             chain_id: 41,
             height: 0,
@@ -72,7 +92,7 @@ impl NodeInner {
             head_hash: genesis_parent_hash(),
             parent_qc_hash: [0u8; 32],
             proposer: [0u8; 32],
-            state: State::default(),
+            state,
             mempool: Mempool::default(),
             base_fee: 1,
             gas_limit: 60_000_000,
@@ -80,6 +100,9 @@ impl NodeInner {
             blocks: Vec::new(),
             pending_txs: BTreeMap::new(),
             mined_txs: BTreeMap::new(),
+            eth_signed_raw: BTreeMap::new(),
+            eth_rpc_to_internal_tx_hash: BTreeMap::new(),
+            eth_internal_to_rpc_tx_hash: BTreeMap::new(),
         }
     }
 
@@ -146,6 +169,13 @@ impl NodeInner {
         }
         n
     }
+
+    fn internal_tx_hash_for_state(&self, rpc_hash: &[u8; 32]) -> fractal_crypto::Hash256 {
+        self.eth_rpc_to_internal_tx_hash
+            .get(rpc_hash)
+            .copied()
+            .unwrap_or(*rpc_hash)
+    }
 }
 
 impl ChainInteraction for NodeInner {
@@ -175,6 +205,7 @@ impl ChainInteraction for NodeInner {
                 tx,
                 max_priority_fee_per_gas: 1,
                 max_fee_per_gas: u128::MAX,
+                eth_signed_raw: None,
             });
             return Ok(());
         }
@@ -182,10 +213,12 @@ impl ChainInteraction for NodeInner {
         let (tx, h, max_priority_fee_per_gas, max_fee_per_gas) =
             eth_signed::to_core_tx(raw, self.chain_id)?;
         self.pending_txs.insert(h, tx.clone());
+        self.eth_signed_raw.insert(h, raw.to_vec());
         self.mempool.insert(PooledTx {
             tx,
             max_priority_fee_per_gas,
             max_fee_per_gas,
+            eth_signed_raw: Some(raw.to_vec()),
         });
         Ok(())
     }
@@ -235,8 +268,13 @@ impl ChainInteraction for NodeInner {
         if let Some(tx) = self.pending_txs.get(hash) {
             return Some(tx.clone());
         }
-        if let Some((bn, bh, idx)) = self.mined_txs.get(hash) {
-            let _ = (bn, bh, idx);
+        if let Some((bn, _bh, idx)) = self.mined_txs.get(hash) {
+            if *bn == 0 {
+                return None;
+            }
+            let bi = (*bn as usize).checked_sub(1)?;
+            let block = self.blocks.get(bi)?;
+            return block.transactions.get(*idx as usize).cloned();
         }
         for b in &self.blocks {
             for tx in &b.transactions {
@@ -253,30 +291,46 @@ impl ChainInteraction for NodeInner {
         self.mined_txs.get(hash).cloned()
     }
 
+    fn eth_signed_raw(&self, tx_hash: &[u8; 32]) -> Option<Vec<u8>> {
+        self.eth_signed_raw.get(tx_hash).cloned()
+    }
+
     fn simulate_eth_call(
         &self,
         from: Address,
-        to: Address,
+        to: Option<Address>,
         value: u128,
         data: Vec<u8>,
     ) -> Result<Vec<u8>, fractal_core::ExecError> {
         let mut scratch = self.state.clone();
         let mut evm = fractal_evm::RevmEngine::default();
-        evm.execute_call(&mut scratch, from, to, value, data, self.gas_limit)
-            .map(|o| o.return_data)
+        match to {
+            Some(to) => evm
+                .execute_call(&mut scratch, from, to, value, data, self.gas_limit)
+                .map(|o| o.return_data),
+            None => evm
+                .execute_create(&mut scratch, from, value, data, self.gas_limit)
+                .map(|o| o.return_data),
+        }
     }
 
     fn estimate_eth_gas(
         &self,
         from: Address,
-        to: Address,
+        to: Option<Address>,
         value: u128,
         data: Vec<u8>,
     ) -> Result<u64, fractal_core::ExecError> {
         let mut scratch = self.state.clone();
         let mut evm = fractal_evm::RevmEngine::default();
-        evm.execute_call(&mut scratch, from, to, value, data, self.gas_limit)
-            .map(|o| o.gas_used)
+        match to {
+            Some(to) => evm
+                .execute_call(&mut scratch, from, to, value, data, self.gas_limit)
+                .map(|o| o.gas_used),
+            None => evm
+                .execute_create(&mut scratch, from, value, data, self.gas_limit)
+                .map(|o| o.gas_used),
+        }
     }
 
     fn code_at(&self, addr: &Address) -> Vec<u8> {
@@ -292,13 +346,15 @@ impl ChainInteraction for NodeInner {
     }
 
     fn gas_used_for_tx(&self, tx_hash: &[u8; 32]) -> Option<u64> {
-        self.state.evm_tx_gas_used.get(tx_hash).copied()
+        let k = self.internal_tx_hash_for_state(tx_hash);
+        self.state.evm_tx_gas_used.get(&k).copied()
     }
 
     fn evm_receipt_success(&self, tx_hash: &[u8; 32]) -> bool {
+        let k = self.internal_tx_hash_for_state(tx_hash);
         self.state
             .evm_tx_success
-            .get(tx_hash)
+            .get(&k)
             .copied()
             .unwrap_or(true)
     }
@@ -325,6 +381,11 @@ impl ChainInteraction for NodeInner {
                     Err(_) => continue,
                 };
                 let th = keccak256(&raw);
+                let rpc_h = self
+                    .eth_internal_to_rpc_tx_hash
+                    .get(&th)
+                    .copied()
+                    .unwrap_or(th);
                 let Some(logs) = self.state.evm_tx_logs.get(&th) else { continue };
                 for l in logs {
                     if let Some(ref addrs) = filter.addresses {
@@ -339,7 +400,7 @@ impl ChainInteraction for NodeInner {
                         l,
                         &bh,
                         height,
-                        &th,
+                        &rpc_h,
                         txi as u32,
                         block_log_index,
                     ));
@@ -357,7 +418,8 @@ impl ChainInteraction for NodeInner {
         block_hash: &[u8; 32],
         tx_index: u32,
     ) -> (Vec<fractal_rpc::RpcLog>, [u8; 256]) {
-        let Some(evm_logs) = self.state.evm_tx_logs.get(tx_hash) else {
+        let k = self.internal_tx_hash_for_state(tx_hash);
+        let Some(evm_logs) = self.state.evm_tx_logs.get(&k) else {
             return (Vec::new(), [0u8; 256]);
         };
         let bloom = logs_bloom_256(evm_logs);
@@ -403,7 +465,9 @@ pub async fn producer_loop(node: NodeHandle) {
         let mut n = node.lock().await;
         let base = n.base_fee;
         let gas_limit_cfg = n.gas_limit;
-        let txs = n.mempool.drain_ready_gas_budget(gas_limit_cfg, base);
+        let pooled = n.mempool.drain_ready_gas_budget(gas_limit_cfg, base);
+        let eth_raws: Vec<Option<Vec<u8>>> = pooled.iter().map(|p| p.eth_signed_raw.clone()).collect();
+        let txs: Vec<Transaction> = pooled.into_iter().map(|p| p.tx).collect();
         let parent = n.head_hash;
         let qc = n.parent_qc_hash;
         let height = n.height + 1;
@@ -432,11 +496,24 @@ pub async fn producer_loop(node: NodeHandle) {
                 n.base_fee = next_base_fee(n.base_fee, block.header.gas_used, &n.fee_params);
                 // Mark txs as mined for RPC.
                 for (i, tx) in block.transactions.iter().enumerate() {
-                    if let Ok(raw) = borsh::to_vec(tx) {
-                        let th = keccak256(&raw);
-                        n.pending_txs.remove(&th);
-                        n.mined_txs.insert(th, (block.header.height, hh, i as u32));
-                    }
+                    let Ok(borsh_raw) = borsh::to_vec(tx) else {
+                        continue;
+                    };
+                    let ih = keccak256(&borsh_raw);
+                    let rpc_h = if let Some(Some(eth_raw)) = eth_raws.get(i) {
+                        let eh = keccak256(eth_raw);
+                        if eh != ih {
+                            n.eth_rpc_to_internal_tx_hash.insert(eh, ih);
+                            n.eth_internal_to_rpc_tx_hash.insert(ih, eh);
+                        }
+                        n.eth_signed_raw.insert(eh, eth_raw.clone());
+                        eh
+                    } else {
+                        ih
+                    };
+                    n.pending_txs.remove(&rpc_h);
+                    n.mined_txs
+                        .insert(rpc_h, (block.header.height, hh, i as u32));
                 }
                 n.blocks.push(block);
             }

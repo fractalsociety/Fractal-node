@@ -7,6 +7,8 @@ pub struct PooledTx {
     pub tx: Transaction,
     pub max_priority_fee_per_gas: u128,
     pub max_fee_per_gas: u128,
+    /// Original signed EIP-1559 bytes (`keccak256(raw)` is the canonical tx hash for RPC).
+    pub eth_signed_raw: Option<Vec<u8>>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -23,7 +25,7 @@ impl Mempool {
         self.pending.push(tx);
     }
 
-    pub fn drain_ready_gas_budget(&mut self, max_gas: u64, base_fee: u128) -> Vec<Transaction> {
+    pub fn drain_ready_gas_budget(&mut self, max_gas: u64, base_fee: u128) -> Vec<PooledTx> {
         self.pending
             .sort_by(|a, b| b.max_priority_fee_per_gas.cmp(&a.max_priority_fee_per_gas));
         let mut taken = Vec::new();
@@ -40,7 +42,7 @@ impl Mempool {
             };
             if used.saturating_add(g) <= max_gas {
                 used = used.saturating_add(g);
-                taken.push(p.tx);
+                taken.push(p);
             } else {
                 rest.push(p);
             }

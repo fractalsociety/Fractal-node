@@ -1,0 +1,14 @@
+{
+  "name": "@fractalchain/contracts",
+  "private": true,
+  "description": "Hardhat tooling for FractalChain example Solidity (PRD M4)",
+  "scripts": {
+    "compile": "hardhat compile",
+    "deploy": "hardhat run scripts/deploy.js --network fractalLocal"
+  },
+  "devDependencies": {
+    "@nomicfoundation/hardhat-ethers": "^3.0.8",
+    "ethers": "^6.13.5",
+    "hardhat": "^2.22.17"
+  }
+}

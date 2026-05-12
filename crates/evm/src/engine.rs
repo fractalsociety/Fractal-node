@@ -13,6 +13,11 @@ use sha3::Digest;
 use std::collections::HashMap;
 use std::convert::Infallible;
 
+/// Must match `NodeInner::devnet().chain_id` (PRD testnet proposal).
+const FRACTAL_DEFAULT_CHAIN_ID: u64 = 41;
+/// Must be ≥ fractal-node block `gas_limit` so Hardhat-style 60M gas txs validate in revm (EIP-7825 cap).
+const FRACTAL_TX_GAS_CAP: u64 = 60_000_000;
+
 /// Minimal `revm`-backed engine (M4 initial slice).
 ///
 /// Supports:
@@ -76,6 +81,9 @@ impl EvmEngine for RevmEngine {
         let mut db = StateDb { st: state };
 
         let mut evm = Context::mainnet().with_db(&mut db).build_mainnet();
+        evm.ctx.block.gas_limit = evm.ctx.block.gas_limit.max(gas_limit);
+        evm.ctx.cfg.chain_id = FRACTAL_DEFAULT_CHAIN_ID;
+        evm.ctx.cfg.tx_gas_limit_cap = Some(FRACTAL_TX_GAS_CAP);
         let mut tx = evm.ctx.tx.clone();
         tx.caller = to_raddr(caller);
         tx.kind = revm::primitives::TxKind::Call(to_raddr(to));
@@ -83,6 +91,7 @@ impl EvmEngine for RevmEngine {
         tx.value = U256::from(0u64);
         tx.gas_limit = gas_limit;
         tx.nonce = caller_nonce;
+        tx.chain_id = Some(FRACTAL_DEFAULT_CHAIN_ID);
 
         let out = evm.transact(tx).map_err(|_| ExecError::InvalidShape)?;
         if !out.result.is_success() {
@@ -121,6 +130,9 @@ impl EvmEngine for RevmEngine {
 
         let mut db = StateDb { st: state };
         let mut evm = Context::mainnet().with_db(&mut db).build_mainnet();
+        evm.ctx.block.gas_limit = evm.ctx.block.gas_limit.max(gas_limit);
+        evm.ctx.cfg.chain_id = FRACTAL_DEFAULT_CHAIN_ID;
+        evm.ctx.cfg.tx_gas_limit_cap = Some(FRACTAL_TX_GAS_CAP);
         let mut tx = evm.ctx.tx.clone();
         tx.caller = to_raddr(caller);
         tx.kind = revm::primitives::TxKind::Create;
@@ -128,6 +140,7 @@ impl EvmEngine for RevmEngine {
         tx.value = U256::from(value);
         tx.gas_limit = gas_limit;
         tx.nonce = nonce;
+        tx.chain_id = Some(FRACTAL_DEFAULT_CHAIN_ID);
 
         let out = evm.transact(tx).map_err(|_| ExecError::InvalidShape)?;
         if !out.result.is_success() {

@@ -3,6 +3,7 @@ use rlp::RlpStream;
 
 use fractal_core::{TxBody, VmKind};
 use fractal_crypto::hash::keccak256;
+use fractal_eth_wire::eip1559_signed_tx_to_json;
 use fractal_node::NodeInner;
 use fractal_rpc::ChainInteraction;
 
@@ -136,5 +137,23 @@ fn node_accepts_eip1559_contract_create() {
         TxBody::EvmCreate { init_code: got, .. } => assert_eq!(got, &init_code),
         _ => panic!("expected EvmCreate tx"),
     }
+}
+
+#[test]
+fn eip1559_signed_json_has_type2_and_signature_components() {
+    let mut node = NodeInner::devnet();
+    let sk = SigningKey::from_bytes(&[11u8; 32].into()).unwrap();
+    let from = addr_from_vk(sk.verifying_key());
+    node.state.accounts.insert(from, fractal_core::Account { nonce: 0, balance: 10_000_000 });
+    let to = [0x22u8; 20];
+    let raw = build_and_sign_1559(node.chain_id, 0, 1, 10, 21_000, Some(to), 0, vec![], &sk);
+    node.submit_raw_tx(&raw).expect("accept raw eth tx");
+    let h = keccak256(&raw);
+    let got = node.eth_signed_raw(&h).expect("raw bytes stored");
+    let j = eip1559_signed_tx_to_json(&got, None).expect("json");
+    assert_eq!(j["type"], "0x2");
+    assert!(j["r"].as_str().unwrap().starts_with("0x"));
+    assert!(j["s"].as_str().unwrap().starts_with("0x"));
+    assert!(j.get("yParity").is_some());
 }
 

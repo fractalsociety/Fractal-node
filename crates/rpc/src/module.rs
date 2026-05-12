@@ -24,7 +24,7 @@ fn exec_error_to_rpc(e: fractal_core::ExecError) -> ErrorObjectOwned {
 }
 
 fn u256_quantity_hex(v: u128) -> String {
-    format!("0x{:064x}", v)
+    format!("0x{:x}", v)
 }
 
 fn parse_address_hex(s: &str) -> Result<Address, ErrorObjectOwned> {
@@ -75,6 +75,65 @@ fn parse_bytes_hex(s: &str) -> Result<Vec<u8>, ErrorObjectOwned> {
     hex::decode(s).map_err(|_| err_invalid_params("invalid bytes hex"))
 }
 
+/// `eth_call` / `eth_estimateGas` transaction object (ethers may send only one top-level param).
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct EthCallObject {
+    #[serde(default)]
+    from: Option<String>,
+    /// Omitted or null for contract-creation gas estimation (`eth_estimateGas` / some `eth_call` paths).
+    #[serde(default)]
+    to: Option<String>,
+    #[serde(default)]
+    data: Option<String>,
+    #[serde(default)]
+    value: Option<String>,
+}
+
+fn parse_eth_call_params(params: Params<'static>) -> Result<(Address, Option<Address>, u128, Vec<u8>, String), ErrorObjectOwned> {
+    let vs: Vec<serde_json::Value> = params
+        .parse()
+        .map_err(|_| err_invalid_params("expected [callObject] or [callObject, blockTag]"))?;
+    if vs.is_empty() {
+        return Err(err_invalid_params("empty params"));
+    }
+    let obj: EthCallObject = serde_json::from_value(vs[0].clone())
+        .map_err(|_| err_invalid_params("invalid call object"))?;
+    let tag = vs
+        .get(1)
+        .and_then(|v| {
+            if v.is_null() {
+                None
+            } else {
+                v.as_str().map(String::from)
+            }
+        })
+        .unwrap_or_else(|| "latest".into());
+    let from = obj
+        .from
+        .as_deref()
+        .map(parse_address_hex)
+        .transpose()?
+        .unwrap_or([0u8; 20]);
+    let to = match obj.to.as_deref() {
+        None | Some("") | Some("0x") | Some("0X") => None,
+        Some(s) => Some(parse_address_hex(s)?),
+    };
+    let data = obj
+        .data
+        .as_deref()
+        .map(parse_bytes_hex)
+        .transpose()?
+        .unwrap_or_default();
+    let value = obj
+        .value
+        .as_deref()
+        .map(parse_u256_hex_u128)
+        .transpose()?
+        .unwrap_or(0);
+    Ok((from, to, value, data, tag))
+}
+
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct RpcBlock {
@@ -95,6 +154,8 @@ struct RpcBlock {
     gas_limit: String,
     gas_used: String,
     timestamp: String,
+    /// Post-London field; required for ethers.js / Hardhat to pick EIP-1559 txs.
+    base_fee_per_gas: String,
     transactions: Vec<String>,
     uncles: Vec<String>,
 }
@@ -312,10 +373,13 @@ pub trait ChainInteraction: Send {
 
     fn mined_tx_info(&self, hash: &[u8; 32]) -> Option<(u64, [u8; 32], u32)>;
 
+    /// Signed EIP-1559 bytes for this RPC tx hash, if known (Hardhat / MetaMask).
+    fn eth_signed_raw(&self, tx_hash: &[u8; 32]) -> Option<Vec<u8>>;
+
     fn simulate_eth_call(
         &self,
         from: Address,
-        to: Address,
+        to: Option<Address>,
         value: u128,
         data: Vec<u8>,
     ) -> Result<Vec<u8>, fractal_core::ExecError>;
@@ -323,7 +387,7 @@ pub trait ChainInteraction: Send {
     fn estimate_eth_gas(
         &self,
         from: Address,
-        to: Address,
+        to: Option<Address>,
         value: u128,
         data: Vec<u8>,
     ) -> Result<u64, fractal_core::ExecError>;
@@ -418,7 +482,12 @@ pub fn build_module(ctx: SharedChain) -> RpcModule<SharedChain> {
                 let h = g.block_hash_by_number(number).ok_or_else(|| ErrorObjectOwned::owned(-32000, "block not found", None::<()>))?;
                 let b = g.block_by_hash(&h).ok_or_else(|| ErrorObjectOwned::owned(-32000, "block not found", None::<()>))?;
                 let lb = g.logs_bloom_for_block(&b);
-                Ok::<RpcBlock, ErrorObjectOwned>(rpc_block_from_consensus(&b, Some(h), lb))
+                Ok::<RpcBlock, ErrorObjectOwned>(rpc_block_from_consensus(
+                    &b,
+                    Some(h),
+                    lb,
+                    g.base_fee_per_gas(),
+                ))
             }
         })
         .expect("register eth_getBlockByNumber");
@@ -434,7 +503,12 @@ pub fn build_module(ctx: SharedChain) -> RpcModule<SharedChain> {
                 let g = ctx.lock().await;
                 let b = g.block_by_hash(&h).ok_or_else(|| ErrorObjectOwned::owned(-32000, "block not found", None::<()>))?;
                 let lb = g.logs_bloom_for_block(&b);
-                Ok::<RpcBlock, ErrorObjectOwned>(rpc_block_from_consensus(&b, Some(h), lb))
+                Ok::<RpcBlock, ErrorObjectOwned>(rpc_block_from_consensus(
+                    &b,
+                    Some(h),
+                    lb,
+                    g.base_fee_per_gas(),
+                ))
             }
         })
         .expect("register eth_getBlockByHash");
@@ -565,10 +639,22 @@ pub fn build_module(ctx: SharedChain) -> RpcModule<SharedChain> {
                 let g = ctx.lock().await;
                 let tx = match g.tx_by_hash(&h) {
                     Some(t) => t,
-                    None => return Ok::<Option<RpcTx>, ErrorObjectOwned>(None),
+                    None => return Ok(serde_json::Value::Null),
                 };
                 let mined = g.mined_tx_info(&h);
-                Ok::<Option<RpcTx>, ErrorObjectOwned>(Some(rpc_tx_from_core(&tx, &h, mined, g.base_fee_per_gas())))
+                if let Some(raw) = g.eth_signed_raw(&h) {
+                    let v = fractal_eth_wire::eip1559_signed_tx_to_json(&raw, mined).map_err(|e| {
+                        ErrorObjectOwned::owned(-32000, format!("eth tx decode: {e}"), None::<()>)
+                    })?;
+                    return Ok(v);
+                }
+                serde_json::to_value(rpc_tx_from_core(
+                    &tx,
+                    &h,
+                    mined,
+                    g.base_fee_per_gas(),
+                ))
+                .map_err(|_| ErrorObjectOwned::owned(-32000, "serialize tx", None::<()>))
             }
         })
         .expect("register eth_getTransactionByHash");
@@ -747,28 +833,7 @@ pub fn build_module(ctx: SharedChain) -> RpcModule<SharedChain> {
         .register_async_method("eth_call", |params: Params<'static>, ctx, _| {
             let ctx = ctx.clone();
             async move {
-                #[derive(serde::Deserialize)]
-                struct CallObj {
-                    #[serde(default)]
-                    from: Option<String>,
-                    to: String,
-                    #[serde(default)]
-                    data: Option<String>,
-                    #[serde(default)]
-                    value: Option<String>,
-                }
-                let (obj, _tag): (CallObj, String) = params
-                    .parse()
-                    .map_err(|_| err_invalid_params("expected [callObject, blockTag]"))?;
-                let from = obj
-                    .from
-                    .as_deref()
-                    .map(parse_address_hex)
-                    .transpose()?
-                    .unwrap_or([0u8; 20]);
-                let to = parse_address_hex(&obj.to)?;
-                let data = obj.data.as_deref().map(parse_bytes_hex).transpose()?.unwrap_or_default();
-                let value = obj.value.as_deref().map(parse_u256_hex_u128).transpose()?.unwrap_or(0);
+                let (from, to, value, data, _tag) = parse_eth_call_params(params)?;
                 let g = ctx.lock().await;
                 let out = g
                     .simulate_eth_call(from, to, value, data)
@@ -782,28 +847,7 @@ pub fn build_module(ctx: SharedChain) -> RpcModule<SharedChain> {
         .register_async_method("eth_estimateGas", |params: Params<'static>, ctx, _| {
             let ctx = ctx.clone();
             async move {
-                #[derive(serde::Deserialize)]
-                struct CallObj {
-                    #[serde(default)]
-                    from: Option<String>,
-                    to: String,
-                    #[serde(default)]
-                    data: Option<String>,
-                    #[serde(default)]
-                    value: Option<String>,
-                }
-                let (obj, _tag): (CallObj, String) = params
-                    .parse()
-                    .map_err(|_| err_invalid_params("expected [callObject, blockTag]"))?;
-                let from = obj
-                    .from
-                    .as_deref()
-                    .map(parse_address_hex)
-                    .transpose()?
-                    .unwrap_or([0u8; 20]);
-                let to = parse_address_hex(&obj.to)?;
-                let data = obj.data.as_deref().map(parse_bytes_hex).transpose()?.unwrap_or_default();
-                let value = obj.value.as_deref().map(parse_u256_hex_u128).transpose()?.unwrap_or(0);
+                let (from, to, value, data, _tag) = parse_eth_call_params(params)?;
                 let g = ctx.lock().await;
                 let gas = g
                     .estimate_eth_gas(from, to, value, data)
@@ -881,7 +925,12 @@ pub fn build_module(ctx: SharedChain) -> RpcModule<SharedChain> {
     module
 }
 
-fn rpc_block_from_consensus(b: &fractal_consensus::Block, hash: Option<[u8; 32]>, logs_bloom: [u8; 256]) -> RpcBlock {
+fn rpc_block_from_consensus(
+    b: &fractal_consensus::Block,
+    hash: Option<[u8; 32]>,
+    logs_bloom: [u8; 256],
+    base_fee_per_gas: u128,
+) -> RpcBlock {
     let h = hash.unwrap_or([0u8; 32]);
     let tx_hashes: Vec<String> = b
         .transactions
@@ -909,6 +958,7 @@ fn rpc_block_from_consensus(b: &fractal_consensus::Block, hash: Option<[u8; 32]>
         gas_limit: quantity_hex_u64(b.header.gas_limit),
         gas_used: quantity_hex_u64(b.header.gas_used),
         timestamp: quantity_hex_u64(b.header.timestamp_ms / 1000),
+        base_fee_per_gas: u256_quantity_hex(base_fee_per_gas),
         transactions: tx_hashes,
         uncles: Vec::new(),
     }

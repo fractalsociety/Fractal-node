@@ -1453,6 +1453,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "fractal-eth-wire"
+version = "0.1.0"
+dependencies = [
+ "fractal-core",
+ "fractal-crypto",
+ "hex",
+ "k256",
+ "rlp",
+ "serde_json",
+]
+
+[[package]]
 name = "fractal-evm"
 version = "0.1.0"
 dependencies = [
@@ -1488,6 +1500,7 @@ dependencies = [
  "fractal-consensus",
  "fractal-core",
  "fractal-crypto",
+ "fractal-eth-wire",
  "fractal-evm",
  "fractal-mempool",
  "fractal-network",
@@ -1509,6 +1522,7 @@ dependencies = [
  "fractal-consensus",
  "fractal-core",
  "fractal-crypto",
+ "fractal-eth-wire",
  "hex",
  "jsonrpsee",
  "serde",
