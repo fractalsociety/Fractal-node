@@ -104,7 +104,8 @@ pub fn execute_and_build_block(
     if sum > gas_limit {
         return Err(ExecError::GasLimitExceeded.into());
     }
-    let gas_used = fractal_core::apply_block(state, &txs)?;
+    let mut evm = fractal_evm::RevmEngine::default();
+    let gas_used = fractal_core::apply_block_with_evm(state, &txs, &mut evm)?;
     debug_assert_eq!(gas_used, sum);
     let sr = state_root(state)?;
     let tx_root = ordered_tx_root(&txs)?;

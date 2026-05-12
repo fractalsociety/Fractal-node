@@ -2,12 +2,13 @@
 
 pub mod p2p;
 
+use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use borsh::BorshDeserialize;
 use fractal_consensus::{execute_and_build_block, header_hash, ordered_tx_root, Block};
-use fractal_core::{Address, State, Transaction};
+use fractal_core::{Address, EvmEngine, State, Transaction};
 use fractal_crypto::hash::keccak256;
 use fractal_mempool::{next_base_fee, BaseFeeParams, Mempool, PooledTx};
 use fractal_rpc::ChainInteraction;
@@ -57,6 +58,8 @@ pub struct NodeInner {
     pub gas_limit: u64,
     pub fee_params: BaseFeeParams,
     pub blocks: Vec<Block>,
+    pub pending_txs: BTreeMap<fractal_crypto::Hash256, Transaction>,
+    pub mined_txs: BTreeMap<fractal_crypto::Hash256, (u64, fractal_crypto::Hash256, u32)>,
 }
 
 impl NodeInner {
@@ -74,6 +77,8 @@ impl NodeInner {
             gas_limit: 60_000_000,
             fee_params: BaseFeeParams::default(),
             blocks: Vec::new(),
+            pending_txs: BTreeMap::new(),
+            mined_txs: BTreeMap::new(),
         }
     }
 
@@ -92,7 +97,8 @@ impl NodeInner {
             return Err(SyncApplyError::ParentHash);
         }
         let mut scratch = self.state.clone();
-        let gas = fractal_core::apply_block(&mut scratch, &block.transactions)?;
+        let mut evm = fractal_evm::RevmEngine::default();
+        let gas = fractal_core::apply_block_with_evm(&mut scratch, &block.transactions, &mut evm)?;
         if gas != block.header.gas_used {
             return Err(SyncApplyError::GasUsedMismatch {
                 header: block.header.gas_used,
@@ -122,12 +128,22 @@ impl ChainInteraction for NodeInner {
         self.height
     }
 
+    fn chain_id(&self) -> u64 {
+        self.chain_id
+    }
+
     fn balance_of(&self, addr: &Address) -> u128 {
         self.state.accounts.get(addr).map(|a| a.balance).unwrap_or(0)
     }
 
+    fn transaction_count(&self, addr: &Address) -> u64 {
+        self.state.accounts.get(addr).map(|a| a.nonce).unwrap_or(0)
+    }
+
     fn submit_raw_tx(&mut self, raw: &[u8]) -> Result<(), String> {
         let tx = Transaction::try_from_slice(raw).map_err(|e| format!("borsh decode: {e}"))?;
+        let h = keccak256(raw);
+        self.pending_txs.insert(h, tx.clone());
         self.mempool.insert(PooledTx {
             tx,
             max_priority_fee_per_gas: 1,
@@ -138,6 +154,80 @@ impl ChainInteraction for NodeInner {
 
     fn base_fee_per_gas(&self) -> u128 {
         self.base_fee
+    }
+
+    fn block_hash_by_number(&self, number: u64) -> Option<[u8; 32]> {
+        if number == 0 {
+            return Some(genesis_parent_hash());
+        }
+        let idx = number.checked_sub(1)? as usize;
+        let b = self.blocks.get(idx)?;
+        header_hash(&b.header).ok()
+    }
+
+    fn block_by_hash(&self, hash: &[u8; 32]) -> Option<Block> {
+        if hash == &genesis_parent_hash() {
+            // Synthetic genesis block: minimal header-like object.
+            return Some(Block {
+                header: fractal_consensus::BlockHeader {
+                    version: 1,
+                    chain_id: self.chain_id,
+                    height: 0,
+                    view: 0,
+                    parent_hash: [0u8; 32],
+                    parent_qc_hash: [0u8; 32],
+                    proposer: [0u8; 32],
+                    timestamp_ms: 0,
+                    state_root: [0u8; 32],
+                    tx_root: [0u8; 32],
+                    gas_used: 0,
+                    gas_limit: self.gas_limit,
+                    extra: [0u8; 32],
+                },
+                transactions: Vec::new(),
+            });
+        }
+        self.blocks
+            .iter()
+            .find(|b| header_hash(&b.header).ok().as_ref() == Some(hash))
+            .cloned()
+    }
+
+    fn tx_by_hash(&self, hash: &[u8; 32]) -> Option<Transaction> {
+        if let Some(tx) = self.pending_txs.get(hash) {
+            return Some(tx.clone());
+        }
+        if let Some((bn, bh, idx)) = self.mined_txs.get(hash) {
+            let _ = (bn, bh, idx);
+        }
+        for b in &self.blocks {
+            for tx in &b.transactions {
+                let raw = borsh::to_vec(tx).ok()?;
+                if &keccak256(&raw) == hash {
+                    return Some(tx.clone());
+                }
+            }
+        }
+        None
+    }
+
+    fn mined_tx_info(&self, hash: &[u8; 32]) -> Option<(u64, [u8; 32], u32)> {
+        self.mined_txs.get(hash).cloned()
+    }
+
+    fn simulate_eth_call(&self, from: Address, to: Address, value: u128, data: Vec<u8>) -> Result<Vec<u8>, String> {
+        let mut scratch = self.state.clone();
+        let mut evm = fractal_evm::RevmEngine::default();
+        evm.execute_call(&mut scratch, from, to, value, data, self.gas_limit)
+            .map(|o| o.return_data)
+            .map_err(|e| format!("{e}"))
+    }
+
+    fn estimate_eth_gas(&self, _from: Address, _to: Address, _value: u128, data: Vec<u8>) -> Result<u64, String> {
+        // Devnet estimate: same rule-of-thumb as intrinsic gas (21k + 4/byte).
+        Ok(fractal_core::EVM_CALL_BASE_GAS.saturating_add(
+            fractal_core::PER_BYTE.saturating_mul(data.len() as u64),
+        ))
     }
 }
 
@@ -177,12 +267,19 @@ pub async fn producer_loop(node: NodeHandle) {
             txs,
         ) {
             Ok(block) => {
-                if let Ok(hh) = header_hash(&block.header) {
-                    n.head_hash = hh;
-                }
+                let hh = header_hash(&block.header).unwrap_or([0u8; 32]);
+                n.head_hash = hh;
                 n.height = block.header.height;
                 n.view = n.view.wrapping_add(1);
                 n.base_fee = next_base_fee(n.base_fee, block.header.gas_used, &n.fee_params);
+                // Mark txs as mined for RPC.
+                for (i, tx) in block.transactions.iter().enumerate() {
+                    if let Ok(raw) = borsh::to_vec(tx) {
+                        let th = keccak256(&raw);
+                        n.pending_txs.remove(&th);
+                        n.mined_txs.insert(th, (block.header.height, hh, i as u32));
+                    }
+                }
                 n.blocks.push(block);
             }
             Err(e) => eprintln!("fractal-node: block execution failed: {e}"),

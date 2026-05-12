@@ -36,6 +36,12 @@ FractalChain L1 testnet (PRD v0.1) is an AI-agent-first chain: HotStuff-2 consen
 - [x] Wallet W1–W5: `crates/wallet` — 12 `cargo test -p fractal-wallet` tests; `fractal-core` optional `--features wallet` anchor
 - [x] M2: PRD §18 — `consensus` + `mempool` + `rpc` + `network` (libp2p 0.56 QUIC + `/fractalchain/sync/1.0.0` req-resp) + `node` (producer + follower `FRACTAL_BOOTSTRAP`, `apply_synced_block` replay verify); integration test `crates/node/tests/quic_sync.rs`
 - [x] M3 (initial slice): native opcodes + subtrie `State`, intrinsic gas, Merkle settle/claim, `m3_settle_claim` test, `fractal-evm` precompile scaffold; see Current Status for gaps vs full PRD §18 M3.
+- [ ] M4-a (ready for Planner sign-off): add `TxBody::EvmCall` + `apply_block_with_evm` (core `EvmEngine` trait) + `fractal-evm` `revm` dependency + `RevmEngine` stub that routes `0xfc..` precompile calls into `State::apply_native_syscall`; add test `crates/evm/tests/m4_revm_precompile_dispatch.rs`. Manual `cargo test -q` on user machine: ✅.
+- [ ] M4-b (ready for Planner sign-off): expand JSON-RPC toward MetaMask/ethers compatibility: add `eth_chainId`, `net_version`, `eth_getTransactionCount`. User confirmed via manual run.
+- [ ] M4-c (in progress): expand JSON-RPC: add `web3_clientVersion`, `eth_getBlockByNumber`, `eth_getBlockByHash` (minimal block objects).
+- [ ] M4-d (in progress): expand JSON-RPC: add `eth_getTransactionByHash`, `eth_getTransactionReceipt` with basic tx/receipt tracking (pending + mined).
+- [ ] M4-e (in progress): expand JSON-RPC: implement `eth_call` + `eth_estimateGas` (devnet semantics; simulates via cloned state; supports `0xfc..` precompile calls deterministically).
+- [ ] M4-f (in progress): expand JSON-RPC: add `eth_getLogs` (stub empty array for now) to satisfy MetaMask/ethers polling.
 
 ## Current Status / Progress Tracking
 
@@ -45,6 +51,8 @@ FractalChain L1 testnet (PRD v0.1) is an AI-agent-first chain: HotStuff-2 consen
 - **Wallet:** `fractal-wallet` implements W1–W5 (12 unit tests). `post_receipt` now takes `now_ms` and sets challenge deadlines (`DEFAULT_OPTIMISTIC_CHALLENGE_MS`). Use `cargo test -p fractal-core --features wallet` for `wallet_anchor` test.
 - **Wallet:** `settle_trusted` remains as thin wrapper over `settle_after_window` using stored deadline (Trusted tier).
 - **Chain M3 (2026-05-11, started):** `fractal-core` expanded `NativeCall` (13 PRD opcodes + `NoOp`), `State` subtries (`agents`, `receipts`, `batches`, `disputes`, `stakes`, `delegated`, …), `merkle.rs`, `native_gas.rs` / `intrinsic_gas`, `apply_block` returns total gas; `fractal-consensus` pre-checks `gas_limit` (`GasLimitExceeded`); `fractal-mempool` `drain_ready_gas_budget`; `fractal-evm` `precompile.rs` (`0xfc` prefix + borsh decode). Test `crates/core/tests/m3_settle_claim.rs` covers PRD M3 exit line (100 receipts + 100 Merkle claims). Still out of scope in this slice: `native_event_root` in block header, revm wiring, rich Solidity ABI, full stake/unbond/rewards economics.
+- **Chain M4 (2026-05-12, started):** introduced core `EvmEngine` trait + `apply_block_with_evm`; added `TxBody::EvmCall` and `State::apply_native_syscall` (no nonce bump) for EVM→native bridging; `fractal-evm` now depends on `revm` and provides `RevmEngine` (initial stub: routes only `0xfc..` addresses). Workspace `cargo test` passed; awaiting manual validation before checking off M4-a.
+- **Chain M4 (2026-05-12, started):** introduced core `EvmEngine` trait + `apply_block_with_evm`; added `TxBody::EvmCall` and `State::apply_native_syscall` (no nonce bump) for EVM→native bridging; `fractal-evm` now depends on `revm` and provides `RevmEngine` (initial stub: routes only `0xfc..` addresses). Manual `cargo test -q` on user machine: ✅. Ready for Planner sign-off on M4-a.
 - **Chain M2:** remains as delivered earlier (QUIC sync, follower, `quic_sync` test).
 
 ## Executor's Feedback or Assistance Requests

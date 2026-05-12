@@ -10,6 +10,7 @@ use crate::merkle::{merkle_root, verify_merkle_proof};
 use crate::native_types::{
     AgentRecord, DisputeRecord, OnChainTaskReceipt, PayoutEntry, SettleBatchPayload, StoredBatch,
 };
+use crate::EvmEngine;
 use crate::tx::{NativeCall, Transaction, TxBody, VmKind};
 
 #[derive(BorshSerialize, BorshDeserialize, Clone, Debug, PartialEq, Eq)]
@@ -81,6 +82,45 @@ impl State {
         }
     }
 
+    /// Apply a transaction, delegating EVM execution to `evm` when needed.
+    pub fn apply_transaction_with_evm(
+        &mut self,
+        tx: &Transaction,
+        evm: &mut dyn EvmEngine,
+    ) -> Result<(), ExecError> {
+        let signer = tx.signer;
+        let account = self.accounts.get(&signer).ok_or(ExecError::UnknownSigner)?;
+        if account.nonce != tx.nonce {
+            return Err(ExecError::BadNonce {
+                expected: account.nonce,
+                actual: tx.nonce,
+            });
+        }
+
+        match (&tx.vm, &tx.body) {
+            (VmKind::Native, TxBody::Native(call)) => self.apply_native(signer, call),
+            (VmKind::Evm, TxBody::Transfer { to, amount }) => self.apply_transfer(signer, *to, *amount),
+            (
+                VmKind::Evm,
+                TxBody::EvmCall {
+                    to,
+                    value,
+                    calldata,
+                    gas_limit,
+                },
+            ) => {
+                if *value != 0 {
+                    return Err(ExecError::InvalidShape);
+                }
+                let _outcome =
+                    evm.execute_call(self, signer, *to, *value, calldata.clone(), *gas_limit)?;
+                self.bump_nonce(signer);
+                Ok(())
+            }
+            _ => Err(ExecError::InvalidShape),
+        }
+    }
+
     fn bump_nonce(&mut self, signer: Address) {
         let a = self.accounts.get_mut(&signer).expect("signer exists");
         a.nonce = a.nonce.saturating_add(1);
@@ -116,6 +156,20 @@ impl State {
     }
 
     fn apply_native(&mut self, signer: Address, call: &NativeCall) -> Result<(), ExecError> {
+        self.apply_native_impl(signer, call, true)
+    }
+
+    /// Native syscall entrypoint for EVM precompiles. Does not bump tx nonce.
+    pub fn apply_native_syscall(&mut self, signer: Address, call: &NativeCall) -> Result<(), ExecError> {
+        self.apply_native_impl(signer, call, false)
+    }
+
+    fn apply_native_impl(
+        &mut self,
+        signer: Address,
+        call: &NativeCall,
+        bump_nonce: bool,
+    ) -> Result<(), ExecError> {
         match call {
             NativeCall::RegisterAgent {
                 operator,
@@ -144,7 +198,9 @@ impl State {
                 };
                 self.agents.insert(id, rec);
                 self.address_to_agent.insert(signer, id);
-                self.bump_nonce(signer);
+                if bump_nonce {
+                    self.bump_nonce(signer);
+                }
                 Ok(())
             }
             NativeCall::UpdateAgent {
@@ -160,14 +216,18 @@ impl State {
                 if let Some(pk) = new_pubkey {
                     ag.pubkey = *pk;
                 }
-                self.bump_nonce(signer);
+                if bump_nonce {
+                    self.bump_nonce(signer);
+                }
                 Ok(())
             }
             NativeCall::SuspendAgent { agent_id, reason: _ } => {
                 self.require_governance(signer)?;
                 let ag = self.agents.get_mut(agent_id).ok_or(ExecError::NotFound)?;
                 ag.status = 1;
-                self.bump_nonce(signer);
+                if bump_nonce {
+                    self.bump_nonce(signer);
+                }
                 Ok(())
             }
             NativeCall::SettleReceipt(r) => {
@@ -175,17 +235,19 @@ impl State {
                     return Err(ExecError::DuplicateReceipt);
                 }
                 self.receipts.insert(r.receipt_id, r.clone());
-                self.bump_nonce(signer);
+                if bump_nonce {
+                    self.bump_nonce(signer);
+                }
                 Ok(())
             }
-            NativeCall::SettleBatch(p) => self.apply_settle_batch(signer, p),
+            NativeCall::SettleBatch(p) => self.apply_settle_batch(signer, p, bump_nonce),
             NativeCall::ClaimPayout {
                 batch_id,
                 account,
                 amount,
                 leaf_index,
                 proof,
-            } => self.apply_claim_payout(signer, batch_id, *account, *amount, *leaf_index, proof),
+            } => self.apply_claim_payout(signer, batch_id, *account, *amount, *leaf_index, proof, bump_nonce),
             NativeCall::FileDispute {
                 receipt_id,
                 reason_code,
@@ -203,7 +265,9 @@ impl State {
                         status: 0,
                     },
                 );
-                self.bump_nonce(signer);
+                if bump_nonce {
+                    self.bump_nonce(signer);
+                }
                 Ok(())
             }
             NativeCall::ResolveDispute {
@@ -214,7 +278,9 @@ impl State {
                 self.require_governance(signer)?;
                 let d = self.disputes.get_mut(dispute_id).ok_or(ExecError::NotFound)?;
                 d.status = *resolution;
-                self.bump_nonce(signer);
+                if bump_nonce {
+                    self.bump_nonce(signer);
+                }
                 Ok(())
             }
             NativeCall::Stake { amount } => {
@@ -229,7 +295,9 @@ impl State {
                     acc.balance -= amount;
                 }
                 *self.stakes.entry(signer).or_insert(0) += amount;
-                self.bump_nonce(signer);
+                if bump_nonce {
+                    self.bump_nonce(signer);
+                }
                 Ok(())
             }
             NativeCall::Unstake { amount } => {
@@ -239,7 +307,9 @@ impl State {
                 }
                 *st -= amount;
                 self.accounts.entry(signer).or_insert(Account { nonce: 0, balance: 0 }).balance += amount;
-                self.bump_nonce(signer);
+                if bump_nonce {
+                    self.bump_nonce(signer);
+                }
                 Ok(())
             }
             NativeCall::Slash {
@@ -248,7 +318,9 @@ impl State {
             } => {
                 self.require_governance(signer)?;
                 self.stakes.remove(validator_id);
-                self.bump_nonce(signer);
+                if bump_nonce {
+                    self.bump_nonce(signer);
+                }
                 Ok(())
             }
             NativeCall::Delegate { validator, amount } => {
@@ -263,22 +335,33 @@ impl State {
                     acc.balance -= amount;
                 }
                 *self.delegated.entry((signer, *validator)).or_insert(0) += amount;
-                self.bump_nonce(signer);
+                if bump_nonce {
+                    self.bump_nonce(signer);
+                }
                 Ok(())
             }
             NativeCall::WithdrawRewards { validator: _ } => {
                 self.accounts.entry(signer).or_insert(Account { nonce: 0, balance: 0 }).balance += 0;
-                self.bump_nonce(signer);
+                if bump_nonce {
+                    self.bump_nonce(signer);
+                }
                 Ok(())
             }
             NativeCall::NoOp => {
-                self.bump_nonce(signer);
+                if bump_nonce {
+                    self.bump_nonce(signer);
+                }
                 Ok(())
             }
         }
     }
 
-    fn apply_settle_batch(&mut self, signer: Address, p: &SettleBatchPayload) -> Result<(), ExecError> {
+    fn apply_settle_batch(
+        &mut self,
+        signer: Address,
+        p: &SettleBatchPayload,
+        bump_nonce: bool,
+    ) -> Result<(), ExecError> {
         if signer != p.operator {
             return Err(ExecError::NotAuthorized);
         }
@@ -327,7 +410,9 @@ impl State {
         for r in &p.receipts {
             self.receipts.insert(r.receipt_id, r.clone());
         }
-        self.bump_nonce(signer);
+        if bump_nonce {
+            self.bump_nonce(signer);
+        }
         Ok(())
     }
 
@@ -339,6 +424,7 @@ impl State {
         amount: u128,
         leaf_index: u32,
         proof: &[fractal_crypto::Hash256],
+        bump_nonce: bool,
     ) -> Result<(), ExecError> {
         let key = (*batch_id, leaf_index);
         if self.claimed_payouts.contains(&key) {
@@ -359,7 +445,9 @@ impl State {
             .entry(account)
             .or_insert(Account { nonce: 0, balance: 0 })
             .balance += amount;
-        self.bump_nonce(signer);
+        if bump_nonce {
+            self.bump_nonce(signer);
+        }
         Ok(())
     }
 }

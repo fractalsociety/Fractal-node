@@ -69,6 +69,14 @@ pub enum NativeCall {
 pub enum TxBody {
     Transfer { to: Address, amount: u128 },
     Native(NativeCall),
+    /// Minimal EVM call (M4): execute EVM bytecode and/or precompiles.
+    /// `gas_limit` is an execution cap; actual gas accounting is handled separately.
+    EvmCall {
+        to: Address,
+        value: u128,
+        calldata: Vec<u8>,
+        gas_limit: u64,
+    },
 }
 
 #[derive(BorshSerialize, BorshDeserialize, Clone, Debug, PartialEq, Eq)]

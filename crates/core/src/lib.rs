@@ -4,6 +4,7 @@
 //! `keccak256(borsh(State))` with sorted `BTreeMap` fields for deterministic iteration.
 
 mod address;
+mod evm_engine;
 mod error;
 pub mod merkle;
 mod native_gas;
@@ -15,11 +16,12 @@ mod tx;
 pub mod wallet_anchor;
 
 pub use address::Address;
+pub use evm_engine::{EvmCallOutcome, EvmEngine};
 pub use error::ExecError;
 pub use merkle::{merkle_proof, merkle_root, verify_merkle_proof};
 pub use native_gas::{
     intrinsic_gas, is_native_precompile_address, native_opcode_from_precompile_address, PER_BYTE,
-    TRANSFER_GAS,
+    EVM_CALL_BASE_GAS, TRANSFER_GAS,
 };
 pub use native_types::*;
 pub use state::{Account, State};
@@ -39,6 +41,21 @@ pub fn apply_block(state: &mut State, txs: &[Transaction]) -> Result<u64, ExecEr
         let g = intrinsic_gas(tx)?;
         sum = sum.checked_add(g).ok_or(ExecError::GasOverflow)?;
         state.apply_transaction(tx)?;
+    }
+    Ok(sum)
+}
+
+/// Apply a block that may contain EVM calls, using the provided `EvmEngine`.
+pub fn apply_block_with_evm(
+    state: &mut State,
+    txs: &[Transaction],
+    evm: &mut dyn EvmEngine,
+) -> Result<u64, ExecError> {
+    let mut sum = 0u64;
+    for tx in txs {
+        let g = intrinsic_gas(tx)?;
+        sum = sum.checked_add(g).ok_or(ExecError::GasOverflow)?;
+        state.apply_transaction_with_evm(tx, evm)?;
     }
     Ok(sum)
 }

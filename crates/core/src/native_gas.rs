@@ -6,19 +6,23 @@ use crate::tx::{NativeCall, Transaction, TxBody, VmKind};
 
 pub const PER_BYTE: u64 = 4;
 pub const TRANSFER_GAS: u64 = 21_000;
+pub const EVM_CALL_BASE_GAS: u64 = 21_000;
 
 pub fn intrinsic_gas(tx: &Transaction) -> Result<u64, ExecError> {
-    let native_payload = match (&tx.vm, &tx.body) {
-        (VmKind::Native, TxBody::Native(c)) => borsh::to_vec(c).map_err(|_| ExecError::InvalidShape)?,
-        (VmKind::Evm, TxBody::Transfer { .. }) => return Ok(TRANSFER_GAS),
-        _ => return Err(ExecError::InvalidShape),
-    };
-    let base = native_base_gas(match &tx.body {
-        TxBody::Native(c) => c,
-        _ => unreachable!(),
-    });
-    let extra = PER_BYTE.saturating_mul(native_payload.len() as u64);
-    Ok(base.saturating_add(extra))
+    match (&tx.vm, &tx.body) {
+        (VmKind::Native, TxBody::Native(c)) => {
+            let native_payload = borsh::to_vec(c).map_err(|_| ExecError::InvalidShape)?;
+            let base = native_base_gas(c);
+            let extra = PER_BYTE.saturating_mul(native_payload.len() as u64);
+            Ok(base.saturating_add(extra))
+        }
+        (VmKind::Evm, TxBody::Transfer { .. }) => Ok(TRANSFER_GAS),
+        (VmKind::Evm, TxBody::EvmCall { calldata, .. }) => {
+            let extra = PER_BYTE.saturating_mul(calldata.len() as u64);
+            Ok(EVM_CALL_BASE_GAS.saturating_add(extra))
+        }
+        _ => Err(ExecError::InvalidShape),
+    }
 }
 
 fn native_base_gas(call: &NativeCall) -> u64 {

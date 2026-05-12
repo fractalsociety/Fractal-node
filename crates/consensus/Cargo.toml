@@ -7,5 +7,6 @@ license.workspace = true
 [dependencies]
 borsh.workspace = true
 fractal-core = { path = "../core" }
+fractal-evm = { path = "../evm" }
 fractal-crypto = { path = "../crypto" }
 thiserror.workspace = true
