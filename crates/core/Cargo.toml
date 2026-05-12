@@ -1,0 +1,18 @@
+[package]
+name = "fractal-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+borsh.workspace = true
+fractal-crypto = { path = "../crypto" }
+fractal-wallet = { path = "../wallet", optional = true }
+thiserror.workspace = true
+
+[features]
+default = []
+wallet = ["dep:fractal-wallet"]
+
+[dev-dependencies]
+rand.workspace = true

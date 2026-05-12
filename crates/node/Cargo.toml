@@ -1,0 +1,8 @@
+[package]
+name = "fractal-node"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+fractal-core = { path = "../core" }
