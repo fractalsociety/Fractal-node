@@ -46,6 +46,10 @@ pub struct State {
     pub delegated: BTreeMap<(Address, Address), u128>,
     /// Devnet EVM code storage (M4): address → bytecode.
     pub evm_code: BTreeMap<Address, Vec<u8>>,
+    /// Devnet EVM storage (M4): (address, slot) → value.
+    pub evm_storage: BTreeMap<(Address, [u8; 32]), [u8; 32]>,
+    /// Devnet per-tx EVM gas used (M4): tx_hash -> gas_used.
+    pub evm_tx_gas_used: BTreeMap<fractal_crypto::Hash256, u64>,
 }
 
 impl Default for State {
@@ -64,6 +68,8 @@ impl Default for State {
             stakes: BTreeMap::new(),
             delegated: BTreeMap::new(),
             evm_code: BTreeMap::new(),
+            evm_storage: BTreeMap::new(),
+            evm_tx_gas_used: BTreeMap::new(),
         }
     }
 }
@@ -127,8 +133,13 @@ impl State {
                 if *value != 0 {
                     return Err(ExecError::InvalidShape);
                 }
-                let _outcome =
+                let outcome =
                     evm.execute_call(self, signer, *to, *value, calldata.clone(), *gas_limit)?;
+                // Deterministic tx hash: keccak(borsh(tx))
+                if let Ok(raw) = borsh::to_vec(tx) {
+                    let h = keccak256(&raw);
+                    self.evm_tx_gas_used.insert(h, outcome.gas_used);
+                }
                 self.bump_nonce(signer);
                 Ok(())
             }

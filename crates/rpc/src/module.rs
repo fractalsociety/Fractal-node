@@ -51,10 +51,6 @@ fn addr_hex(a: &Address) -> String {
     format!("0x{}", hex::encode(a))
 }
 
-fn bytes32_zero_hex() -> String {
-    format!("0x{:0width$x}", 0u8, width = 64)
-}
-
 fn parse_u256_hex_u128(s: &str) -> Result<u128, ErrorObjectOwned> {
     let s = s.strip_prefix("0x").unwrap_or(s);
     if s.len() > 32 {
@@ -163,6 +159,10 @@ pub trait ChainInteraction: Send {
     fn estimate_eth_gas(&self, from: Address, to: Address, value: u128, data: Vec<u8>) -> Result<u64, String>;
 
     fn code_at(&self, addr: &Address) -> Vec<u8>;
+
+    fn storage_at(&self, addr: &Address, slot: [u8; 32]) -> [u8; 32];
+
+    fn gas_used_for_tx(&self, tx_hash: &[u8; 32]) -> Option<u64>;
 }
 
 pub type SharedChain = Arc<Mutex<dyn ChainInteraction + Send>>;
@@ -399,7 +399,9 @@ pub fn build_module(ctx: SharedChain) -> RpcModule<SharedChain> {
                 let Some((bn, bh, idx)) = g.mined_tx_info(&h) else {
                     return Ok::<Option<RpcReceipt>, ErrorObjectOwned>(None);
                 };
-                let gas_used = fractal_core::intrinsic_gas(&tx).unwrap_or(0);
+                let gas_used = g
+                    .gas_used_for_tx(&h)
+                    .unwrap_or_else(|| fractal_core::intrinsic_gas(&tx).unwrap_or(0));
                 Ok::<Option<RpcReceipt>, ErrorObjectOwned>(Some(rpc_receipt_from_core(
                     &tx,
                     &h,
@@ -444,12 +446,14 @@ pub fn build_module(ctx: SharedChain) -> RpcModule<SharedChain> {
 
     module
         .register_async_method("eth_getStorageAt", |params: Params<'static>, _ctx, _| async move {
-            // Devnet stub: EVM storage not yet exposed via unified trie.
-            // Return zero slot.
-            let (_addr_hex, _pos_hex, _tag): (String, String, String) = params
+            // Devnet: reads from `State.evm_storage` (slot -> value).
+            let (addr_hex, pos_hex, _tag): (String, String, String) = params
                 .parse()
                 .map_err(|_| err_invalid_params("expected [address, position, blockTag]"))?;
-            Ok::<String, ErrorObjectOwned>(bytes32_zero_hex())
+            let addr = parse_address_hex(&addr_hex)?;
+            let slot = parse_hash256_hex(&pos_hex)?;
+            let v = _ctx.lock().await.storage_at(&addr, slot);
+            Ok::<String, ErrorObjectOwned>(hash_hex(&v))
         })
         .expect("register eth_getStorageAt");
 

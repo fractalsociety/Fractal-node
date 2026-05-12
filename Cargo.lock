@@ -1459,6 +1459,7 @@ dependencies = [
  "borsh",
  "fractal-core",
  "revm",
+ "sha3",
 ]
 
 [[package]]

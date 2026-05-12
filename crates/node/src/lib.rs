@@ -247,6 +247,18 @@ impl ChainInteraction for NodeInner {
     fn code_at(&self, addr: &Address) -> Vec<u8> {
         self.state.evm_code.get(addr).cloned().unwrap_or_default()
     }
+
+    fn storage_at(&self, addr: &Address, slot: [u8; 32]) -> [u8; 32] {
+        self.state
+            .evm_storage
+            .get(&(*addr, slot))
+            .copied()
+            .unwrap_or([0u8; 32])
+    }
+
+    fn gas_used_for_tx(&self, tx_hash: &[u8; 32]) -> Option<u64> {
+        self.state.evm_tx_gas_used.get(tx_hash).copied()
+    }
 }
 
 fn now_ms() -> u64 {

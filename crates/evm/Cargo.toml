@@ -8,3 +8,4 @@ license.workspace = true
 borsh.workspace = true
 fractal-core = { path = "../core" }
 revm.workspace = true
+sha3.workspace = true

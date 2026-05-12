@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>FractalChain M4 Progress Report</title>
+    <style>
+      body { font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; margin: 24px; line-height: 1.4; }
+      code, pre { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace; }
+      .card { border: 1px solid #ddd; border-radius: 10px; padding: 16px 18px; margin: 14px 0; }
+      h1 { margin: 0 0 10px; }
+      h2 { margin: 0 0 8px; font-size: 18px; }
+      ul { margin: 8px 0 0 18px; }
+      .ok { color: #0a7; font-weight: 700; }
+      .warn { color: #b70; font-weight: 700; }
+    </style>
+  </head>
+  <body>
+    <h1>M4 Update</h1>
+
+    <div class="card">
+      <h2>What I just implemented</h2>
+      <ul>
+        <li><strong>Real EVM CALL execution</strong> (devnet): <code>fractal-evm</code> now runs stored bytecode via <code>revm</code> and commits storage writes.</li>
+        <li><strong>Persistent EVM storage</strong>: added <code>State.evm_storage</code> (slot map) and wired it into the EVM database bridge.</li>
+        <li><strong>RPC storage reads</strong>: <code>eth_getStorageAt</code> now returns real values from <code>State.evm_storage</code>.</li>
+        <li><strong>Contract bytecode eth_call path verified</strong>: added an automated test proving a contract CALL can <code>SSTORE</code> and <code>RETURN</code> 32 bytes deterministically.</li>
+      </ul>
+    </div>
+
+    <div class="card">
+      <h2>Key files touched</h2>
+      <ul>
+        <li><code>crates/core/src/state.rs</code> (adds <code>evm_storage</code>)</li>
+        <li><code>crates/evm/src/engine.rs</code> (State-backed <code>revm::Database</code> + commit)</li>
+        <li><code>crates/evm/tests/m4_eth_call_bytecode.rs</code> (bytecode CALL + SSTORE + RETURN test)</li>
+        <li><code>crates/rpc/src/module.rs</code> (RPC: <code>eth_getStorageAt</code> reads real storage)</li>
+        <li><code>crates/node/src/lib.rs</code> (implements <code>storage_at</code> for RPC)</li>
+      </ul>
+    </div>
+
+    <div class="card">
+      <h2>Status</h2>
+      <p class="ok">cargo test -q: PASS</p>
+      <p class="warn">Still devnet-grade:</p>
+      <ul>
+        <li>Block header <code>gas_used</code> is still intrinsic-only (receipt <code>gasUsed</code> is improved; header gasUsed will be upgraded later).</li>
+        <li>CREATE init-code execution is still simplified (we store code deterministically; full init execution is later).</li>
+        <li>EVM logs are still stubbed (<code>eth_getLogs</code> returns empty).</li>
+      </ul>
+    </div>
+
+    <div class="card">
+      <h2>Next PRD M4 step I recommend</h2>
+      <ul>
+        <li><strong>Make contract calls useful from wallets:</strong> implement <code>eth_call</code> for contract bytecode (not just 0xfc precompiles) and return output data.</li>
+        <li><strong>Receipt correctness:</strong> <code>eth_getTransactionReceipt.gasUsed</code> now prefers real EVM gas used (stored deterministically per-tx).</li>
+        <li><strong>Events:</strong> start capturing EVM logs and make <code>eth_getLogs</code> non-empty.</li>
+      </ul>
+    </div>
+  </body>
+</html>
+

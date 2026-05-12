@@ -48,6 +48,9 @@ FractalChain L1 testnet (PRD v0.1) is an AI-agent-first chain: HotStuff-2 consen
 - [ ] M4-j (in progress): expand JSON-RPC: add `eth_getTransactionByBlockNumberAndIndex`.
 - [ ] M4-k (in progress): accept real Ethereum `eth_sendRawTransaction` EIP-1559 (type `0x02`) tx bytes: RLP decode + secp256k1 sender recovery + map into internal `Transaction`; add `crates/node/tests/eip1559_raw_tx.rs`.
 - [ ] M4-l (in progress): support EIP-1559 contract creation (`to = ""`): map to `TxBody::EvmCreate`, store devnet code in `State.evm_code`, expose via `eth_getCode`, and return `contractAddress` in receipts.
+- [ ] M4-m (in progress): real EVM CALL execution (devnet): add `State.evm_storage`, implement `revm` DB/commit bridge in `fractal-evm`, and wire `eth_getStorageAt` to return real storage values.
+- [ ] M4-n (in progress): receipts gasUsed: record per-tx EVM gas used deterministically (`State.evm_tx_gas_used`) and expose via `eth_getTransactionReceipt.gasUsed`.
+- [ ] M4-o (in progress): contract CALL correctness: add a bytecode execution test proving CALL can SSTORE + RETURN (foundation for `eth_call` on contract bytecode).
 
 ## Current Status / Progress Tracking
 
