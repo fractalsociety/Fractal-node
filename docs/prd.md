@@ -953,7 +953,7 @@ Exit criteria: ≥ 100 receipts flow from off-chain MVP to on-chain settlement t
 ## M6: Explorer, Faucet, Public Testnet (Weeks 10-12)
 
 Deliverables:
-* Block explorer (forked Blockscout or custom Next.js) — minimal static explorer: `tools/explorer/` + `docs/devnet.md`
+* Block explorer (forked Blockscout or custom Next.js) — static dev explorer: `tools/explorer/` (`./scripts/serve-explorer.sh`), chain + recent blocks + account/tx lookup; `docs/devnet.md`
 * Faucet with rate limiting — `fractal-faucet` (`crates/faucet`) + Docker service in `testnets/devnet/docker-compose.yml`
 * Public bootnodes (3 minimum) — template `testnets/devnet/bootnodes.example.txt` + `FRACTAL_BOOTSTRAP` (see `testnets/devnet/README.md`)
 * Documentation site — operator notes: `docs/devnet.md` (full product site TBD)

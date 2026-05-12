@@ -37,7 +37,9 @@ FractalChain L1 testnet (PRD v0.1) is an AI-agent-first chain: HotStuff-2 consen
 - [x] M2: PRD §18 — `consensus` + `mempool` + `rpc` + `network` (libp2p 0.56 QUIC + `/fractalchain/sync/1.0.0` req-resp) + `node` (producer + follower `FRACTAL_BOOTSTRAP`, `apply_synced_block` replay verify); integration test `crates/node/tests/quic_sync.rs`
 - [x] M3 (initial slice): native opcodes + subtrie `State`, intrinsic gas, Merkle settle/claim, `m3_settle_claim` test, `fractal-evm` precompile scaffold; see Current Status for gaps vs full PRD §18 M3.
 - [ ] M4-a (ready for Planner sign-off): add `TxBody::EvmCall` + `apply_block_with_evm` (core `EvmEngine` trait) + `fractal-evm` `revm` dependency + `RevmEngine` stub that routes `0xfc..` precompile calls into `State::apply_native_syscall`; add test `crates/evm/tests/m4_revm_precompile_dispatch.rs`. Manual `cargo test -q` on user machine: ✅.
-- [ ] M6-a (Executor slice, 2026-05-12): **PRD `docs/prd.md` M6** — CORS on JSON-RPC; `fractal-faucet` + `DEVNET_FAUCET_TREASURY`; static `tools/explorer`; `testnets/devnet` Docker Compose + bootnode template; `docs/devnet.md`. **Next:** full Blockscout fork or richer explorer; prod faucet auth; real 3+ bootnode fleet; marketing site; Discord/status links in ops runbook.
+- [x] M6-a (Executor slice, 2026-05-12): **PRD M6** — CORS; `fractal-faucet` + `DEVNET_FAUCET_TREASURY`; initial `tools/explorer`; `testnets/devnet` compose + `bootnodes.example.txt`; `docs/devnet.md`.
+- [x] M6-b (Executor slice, 2026-05-12): explorer **blocks table**, **account** + **tx** JSON lookup; **`scripts/serve-explorer.sh`**. **Planner:** manual browser pass vs live node.
+- [ ] M6-c (next): per-block tx drill-down / `eth_getCode` in UI, or Blockscout-style deployment.
 - [ ] M5-a (Executor slice, 2026-05-12): **PRD `docs/prd.md` M5** (not `docs/wallet.md`) — `fractal-mvp-bridge` + `fractal_sdk::m5` + devnet Hardhat #1; smoke OK. **Next:** wire real off-chain receipts, post-bridge `eth_getBalance` check, CI `MVP_RECEIPT_COUNT=100` vs `fractal-node`.
 - [ ] M4-b (ready for Planner sign-off): expand JSON-RPC toward MetaMask/ethers compatibility: add `eth_chainId`, `net_version`, `eth_getTransactionCount`. User confirmed via manual run.
 - [ ] M4-c (in progress): expand JSON-RPC: add `web3_clientVersion`, `eth_getBlockByNumber`, `eth_getBlockByHash` (minimal block objects).
@@ -77,7 +79,7 @@ FractalChain L1 testnet (PRD v0.1) is an AI-agent-first chain: HotStuff-2 consen
 
 - **Chain M5 (2026-05-12, Executor / PRD `docs/prd.md` only):** `fractal_core::HARDHAT_DEFAULT_SIGNER_1` + devnet account row; `fractal_sdk::m5` builders; binary `fractal-mvp-bridge` (`crates/mvp-backend`) posts borsh `SETTLE_BATCH` + `CLAIM_PAYOUT` via `eth_sendRawTransaction`; PRD M5 deliverables bullet updated. Smoke: `MVP_RECEIPT_COUNT=3` vs local node ✅.
 
-- **Chain M6 (2026-05-12, Executor / PRD `docs/prd.md`):** permissive CORS on `serve_http`; `DEVNET_FAUCET_TREASURY` + `fractal-faucet`; `tools/explorer` static UI; `testnets/devnet` Dockerfiles + compose + `bootnodes.example.txt`; `docs/devnet.md`. `cargo test`: ✅.
+- **Chain M6 (2026-05-12, Executor / PRD `docs/prd.md`):** CORS + `fractal-faucet` + `testnets/devnet` compose + `bootnodes.example.txt` + `docs/devnet.md`; explorer v2 (chain summary, **10-block** table, **account** + **tx** JSON) + **`scripts/serve-explorer.sh`**.
 
 - **Chain M2:** remains as delivered earlier (QUIC sync, follower, `quic_sync` test).
 
@@ -86,7 +88,7 @@ FractalChain L1 testnet (PRD v0.1) is an AI-agent-first chain: HotStuff-2 consen
 - **BLS**: `fractal-crypto::bls` is a type-safe placeholder until M7 wiring; avoids `blst` native build in early CI.
 - **M4 slice (receipt status / revert RPC):** Implementation complete; `cargo test -q` passed locally. **Planner:** please cross-check behavior vs MetaMask/ethers expectations (error `data` as plain hex string) and confirm whether to mark the corresponding status-board item done.
 - **M4 Hardhat + deploy script:** Landed `contracts/` Hardhat package and `./scripts/deploy-fractal-contracts.sh`; fixed ethers `eth_getTransactionByHash` shape for EIP-1559. **Planner:** please run `./scripts/deploy-fractal-contracts.sh` with a live `fractal-node` and confirm M4-q/M4-r/M4-s sign-off.
-- **M6 slice (PRD `docs/prd.md`):** First devnet operator pack landed (faucet, explorer, compose, CORS). **Planner:** run `docker compose -f testnets/devnet/docker-compose.yml up --build` (or host `cargo run` + `cargo run -p fractal-faucet`) and confirm MetaMask + explorer + faucet UX; Discord/status remain ops-owned.
+- **M6 slice (PRD `docs/prd.md`):** Devnet pack (faucet, compose, CORS) + **explorer v2** (blocks/account/tx) + `serve-explorer.sh`. **Planner:** browser smoke on `tools/explorer` + faucet; Docker compose optional; Discord/status remain ops-owned.
 - **M5 bridge (PRD `docs/prd.md`, not `docs/wallet.md`):** First slice landed (`fractal-mvp-bridge`, `fractal_sdk::m5`). **Planner:** run `MVP_RECEIPT_COUNT=100` against devnet and optionally `eth_getBalance` on agent to confirm M5 exit path numerically.
 - **Next PRD milestone after M4 closure:** **M5** (Bridge to Core MVP) — off-chain backend submits `SETTLE_BATCH`, SDK claims, E2E receipts → settlement → MetaMask tFRAC. **Remaining M4 polish (Executor backlog):** MetaMask “tFRAC balance” doc / import for devnet prefund key; follower replication of `eth_signed_raw` / RPC hash maps if explorers must match leader on synced nodes.
 - **Next chain milestone:** PRD §18 **M4** — `revm`, full JSON-RPC EVM surface, MetaMask path, real precompile dispatch from EVM execution.

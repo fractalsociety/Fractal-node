@@ -5,18 +5,59 @@
   <title>FractalChain explorer (dev)</title>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <style>
-    body { font-family: system-ui, sans-serif; max-width: 40rem; margin: 2rem auto; padding: 0 1rem; }
-    code { background: #eee; padding: 0.1rem 0.25rem; border-radius: 3px; }
-    button { margin: 0.5rem 0.25rem 0 0; padding: 0.35rem 0.75rem; }
+    :root { color-scheme: light dark; }
+    body { font-family: system-ui, sans-serif; max-width: 52rem; margin: 0 auto; padding: 1rem 1.25rem 2rem; line-height: 1.45; }
+    h1 { font-size: 1.35rem; margin-bottom: 0.25rem; }
+    h2 { font-size: 1.05rem; margin: 1.5rem 0 0.5rem; border-bottom: 1px solid #8884; padding-bottom: 0.2rem; }
+    code, .mono { font-family: ui-monospace, monospace; font-size: 0.85rem; background: #8882; padding: 0.12rem 0.35rem; border-radius: 4px; }
+    button { margin: 0.35rem 0.35rem 0 0; padding: 0.4rem 0.85rem; cursor: pointer; }
+    input[type="text"] { width: 100%; max-width: 32rem; padding: 0.35rem 0.5rem; font-family: ui-monospace, monospace; }
+    table { width: 100%; border-collapse: collapse; font-size: 0.88rem; margin-top: 0.35rem; }
+    th, td { text-align: left; padding: 0.35rem 0.5rem; border-bottom: 1px solid #8883; }
+    th { font-weight: 600; }
+    .muted { color: #666; font-size: 0.88rem; }
+    .err { color: #b00; white-space: pre-wrap; }
+    pre { overflow: auto; max-height: 22rem; background: #8881; padding: 0.75rem; border-radius: 6px; font-size: 0.8rem; }
+    .row { display: flex; flex-wrap: wrap; gap: 0.5rem 1.25rem; align-items: baseline; }
+    .pill { display: inline-block; padding: 0.15rem 0.5rem; border-radius: 999px; background: #8882; font-size: 0.8rem; }
   </style>
 </head>
 <body>
-  <h1>FractalChain — minimal explorer</h1>
-  <p>RPC: <code id="rpcshow"></code> — override with <code>?rpc=http://host:8545</code></p>
-  <button type="button" id="refresh">Refresh</button>
-  <div id="status"></div>
+  <h1>FractalChain — dev explorer</h1>
+  <p class="muted">PRD M6 slice · JSON-RPC read-only · <code>?rpc=http://host:8545</code></p>
+  <p>RPC <span class="pill mono" id="rpcshow"></span>
+    <button type="button" id="refresh">Refresh all</button>
+  </p>
+
+  <h2>Chain</h2>
+  <div id="summary"></div>
+
+  <h2>Recent blocks</h2>
+  <p class="muted">Up to 10 blocks ending at head (gas, timestamp, tx count).</p>
+  <div id="blocks"></div>
+
+  <h2>Account</h2>
+  <p class="muted"><code>eth_getBalance</code> + <code>eth_getTransactionCount</code></p>
+  <div class="row">
+    <input type="text" id="acct" placeholder="0x… 20-byte address" autocomplete="off" />
+    <button type="button" id="lookupAcct">Lookup</button>
+  </div>
+  <div id="accountOut"></div>
+
+  <h2>Transaction</h2>
+  <p class="muted"><code>eth_getTransactionByHash</code> + <code>eth_getTransactionReceipt</code></p>
+  <div class="row">
+    <input type="text" id="txhash" placeholder="0x… 32-byte tx hash" autocomplete="off" />
+    <button type="button" id="lookupTx">Lookup</button>
+  </div>
+  <div id="txOut"></div>
+
+  <h2>Devnet links</h2>
+  <p class="muted">Faucet (if running): <code>http://127.0.0.1:8088</code> — see <code>docs/devnet.md</code>.</p>
+
   <script>
-    document.getElementById("rpcshow").textContent = new URLSearchParams(window.location.search).get("rpc") || "http://127.0.0.1:8545";
+    document.getElementById("rpcshow").textContent =
+      new URLSearchParams(window.location.search).get("rpc") || "http://127.0.0.1:8545";
   </script>
   <script src="app.js"></script>
 </body>
