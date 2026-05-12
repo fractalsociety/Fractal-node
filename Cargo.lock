@@ -1493,6 +1493,7 @@ dependencies = [
  "fractal-network",
  "fractal-rpc",
  "futures",
+ "hex",
  "k256",
  "libp2p",
  "rlp",

@@ -51,6 +51,7 @@ FractalChain L1 testnet (PRD v0.1) is an AI-agent-first chain: HotStuff-2 consen
 - [ ] M4-m (in progress): real EVM CALL execution (devnet): add `State.evm_storage`, implement `revm` DB/commit bridge in `fractal-evm`, and wire `eth_getStorageAt` to return real storage values.
 - [ ] M4-n (in progress): receipts gasUsed: record per-tx EVM gas used deterministically (`State.evm_tx_gas_used`) and expose via `eth_getTransactionReceipt.gasUsed`.
 - [ ] M4-o (in progress): contract CALL correctness: add a bytecode execution test proving CALL can SSTORE + RETURN (foundation for `eth_call` on contract bytecode).
+- [ ] M4-p (in progress): EVM logs/events: capture logs from `revm` execution, store deterministically per-tx, and implement `eth_getLogs` (minimal filter support).
 
 ## Current Status / Progress Tracking
 

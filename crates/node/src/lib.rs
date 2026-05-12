@@ -259,6 +259,57 @@ impl ChainInteraction for NodeInner {
     fn gas_used_for_tx(&self, tx_hash: &[u8; 32]) -> Option<u64> {
         self.state.evm_tx_gas_used.get(tx_hash).copied()
     }
+
+    fn logs_for_range(
+        &self,
+        from_block: u64,
+        to_block: u64,
+        address: Option<Address>,
+    ) -> Vec<fractal_rpc::RpcLog> {
+        let mut out = Vec::new();
+        let start = from_block.max(1);
+        let end = to_block.max(1);
+        let mut log_index: u64 = 0;
+
+        for height in start..=end {
+            let idx = match height.checked_sub(1) {
+                Some(i) => i as usize,
+                None => continue,
+            };
+            let Some(block) = self.blocks.get(idx) else { continue };
+            let _bh = match header_hash(&block.header) {
+                Ok(h) => h,
+                Err(_) => continue,
+            };
+            for (txi, tx) in block.transactions.iter().enumerate() {
+                let raw = match borsh::to_vec(tx) {
+                    Ok(r) => r,
+                    Err(_) => continue,
+                };
+                let th = keccak256(&raw);
+                let Some(logs) = self.state.evm_tx_logs.get(&th) else { continue };
+                for l in logs {
+                    if let Some(a) = address {
+                        if l.address != a {
+                            continue;
+                        }
+                    }
+                    out.push(fractal_rpc::RpcLog {
+                        address: format!("0x{}", hex::encode(l.address)),
+                        topics: l.topics.iter().map(|t| format!("0x{}", hex::encode(t))).collect(),
+                        data: format!("0x{}", hex::encode(&l.data)),
+                        block_number: format!("0x{:x}", height),
+                        transaction_hash: format!("0x{}", hex::encode(th)),
+                        transaction_index: format!("0x{:x}", txi),
+                        log_index: format!("0x{:x}", log_index),
+                        removed: false,
+                    });
+                    log_index += 1;
+                }
+            }
+        }
+        out
+    }
 }
 
 fn now_ms() -> u64 {

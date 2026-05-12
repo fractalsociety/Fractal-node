@@ -25,6 +25,7 @@ pub use native_gas::{
 };
 pub use native_types::*;
 pub use state::{Account, State};
+pub use state::EvmLog;
 pub use tx::{NativeCall, Transaction, TxBody, VmKind};
 
 use fractal_crypto::hash::commit_borsh;

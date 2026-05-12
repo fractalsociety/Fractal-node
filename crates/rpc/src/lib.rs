@@ -3,4 +3,4 @@
 
 mod module;
 
-pub use module::{build_module, serve_http, ChainInteraction, SharedChain};
+pub use module::{build_module, serve_http, ChainInteraction, RpcLog, SharedChain};

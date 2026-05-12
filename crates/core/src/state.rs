@@ -50,6 +50,8 @@ pub struct State {
     pub evm_storage: BTreeMap<(Address, [u8; 32]), [u8; 32]>,
     /// Devnet per-tx EVM gas used (M4): tx_hash -> gas_used.
     pub evm_tx_gas_used: BTreeMap<fractal_crypto::Hash256, u64>,
+    /// Devnet per-tx EVM logs (M4): tx_hash -> logs.
+    pub evm_tx_logs: BTreeMap<fractal_crypto::Hash256, Vec<EvmLog>>,
 }
 
 impl Default for State {
@@ -70,8 +72,16 @@ impl Default for State {
             evm_code: BTreeMap::new(),
             evm_storage: BTreeMap::new(),
             evm_tx_gas_used: BTreeMap::new(),
+            evm_tx_logs: BTreeMap::new(),
         }
     }
+}
+
+#[derive(BorshSerialize, BorshDeserialize, Clone, Debug, PartialEq, Eq)]
+pub struct EvmLog {
+    pub address: Address,
+    pub topics: Vec<fractal_crypto::Hash256>,
+    pub data: Vec<u8>,
 }
 
 fn create_address(from: Address, nonce: u64) -> Address {
@@ -139,6 +149,7 @@ impl State {
                 if let Ok(raw) = borsh::to_vec(tx) {
                     let h = keccak256(&raw);
                     self.evm_tx_gas_used.insert(h, outcome.gas_used);
+                    self.evm_tx_logs.insert(h, outcome.logs);
                 }
                 self.bump_nonce(signer);
                 Ok(())

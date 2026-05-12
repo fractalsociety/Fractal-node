@@ -1,6 +1,7 @@
 use borsh::BorshDeserialize;
 use fractal_core::{
-    is_native_precompile_address, Address, EvmCallOutcome, EvmEngine, ExecError, NativeCall, State,
+    is_native_precompile_address, Address, EvmCallOutcome, EvmEngine, EvmLog, ExecError, NativeCall,
+    State,
 };
 use revm::bytecode::Bytecode;
 use revm::context::Context;
@@ -42,6 +43,7 @@ impl EvmEngine for RevmEngine {
             return Ok(EvmCallOutcome {
                 gas_used: 0,
                 return_data: Vec::new(),
+                logs: Vec::new(),
             });
         }
 
@@ -60,6 +62,26 @@ impl EvmEngine for RevmEngine {
         // Commit state changes (storage/code/balance/nonce) back into StateDb.
         db.commit(out.state);
 
+        let logs = out
+            .result
+            .logs()
+            .iter()
+            .map(|l| EvmLog {
+                address: {
+                    let mut a = [0u8; 20];
+                    a.copy_from_slice(l.address.as_slice());
+                    a
+                },
+                topics: l
+                    .data
+                    .topics()
+                    .iter()
+                    .map(|t| t.as_slice().try_into().unwrap_or([0u8; 32]))
+                    .collect(),
+                data: l.data.data.to_vec(),
+            })
+            .collect::<Vec<_>>();
+
         Ok(EvmCallOutcome {
             gas_used: out.result.tx_gas_used(),
             return_data: out
@@ -67,6 +89,7 @@ impl EvmEngine for RevmEngine {
                 .output()
                 .map(|b| b.to_vec())
                 .unwrap_or_default(),
+            logs,
         })
     }
 }

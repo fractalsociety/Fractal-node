@@ -25,6 +25,7 @@
         <li><strong>Persistent EVM storage</strong>: added <code>State.evm_storage</code> (slot map) and wired it into the EVM database bridge.</li>
         <li><strong>RPC storage reads</strong>: <code>eth_getStorageAt</code> now returns real values from <code>State.evm_storage</code>.</li>
         <li><strong>Contract bytecode eth_call path verified</strong>: added an automated test proving a contract CALL can <code>SSTORE</code> and <code>RETURN</code> 32 bytes deterministically.</li>
+        <li><strong>EVM logs capture</strong>: logs from <code>revm</code> execution are now stored per-tx and returned via <code>eth_getLogs</code> (minimal filter support).</li>
       </ul>
     </div>
 

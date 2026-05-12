@@ -1,5 +1,6 @@
 use crate::{Address, ExecError, NativeCall, State};
 use borsh::BorshDeserialize;
+use crate::state::EvmLog;
 
 /// Deterministic EVM execution interface (M4).
 ///
@@ -32,5 +33,6 @@ pub trait EvmEngine {
 pub struct EvmCallOutcome {
     pub gas_used: u64,
     pub return_data: Vec<u8>,
+    pub logs: Vec<EvmLog>,
 }
 

@@ -131,6 +131,19 @@ struct RpcFeeHistory {
     reward: Option<Vec<Vec<String>>>,
 }
 
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RpcLog {
+    pub address: String,
+    pub topics: Vec<String>,
+    pub data: String,
+    pub block_number: String,
+    pub transaction_hash: String,
+    pub transaction_index: String,
+    pub log_index: String,
+    pub removed: bool,
+}
+
 /// Minimal chain surface for JSON-RPC (implemented by `fractal-node`).
 pub trait ChainInteraction: Send {
     fn block_number(&self) -> u64;
@@ -163,6 +176,13 @@ pub trait ChainInteraction: Send {
     fn storage_at(&self, addr: &Address, slot: [u8; 32]) -> [u8; 32];
 
     fn gas_used_for_tx(&self, tx_hash: &[u8; 32]) -> Option<u64>;
+
+    fn logs_for_range(
+        &self,
+        from_block: u64,
+        to_block: u64,
+        address: Option<Address>,
+    ) -> Vec<RpcLog>;
 }
 
 pub type SharedChain = Arc<Mutex<dyn ChainInteraction + Send>>;
@@ -619,10 +639,44 @@ pub fn build_module(ctx: SharedChain) -> RpcModule<SharedChain> {
         .expect("register eth_estimateGas");
 
     module
-        .register_async_method("eth_getLogs", |_params: Params<'static>, _ctx, _| async move {
-            // Devnet stub: we don't emit EVM logs yet (no MPT / receipts trie / log indexer).
-            // Returning an empty list keeps MetaMask/ethers happy for now.
-            Ok::<Vec<serde_json::Value>, ErrorObjectOwned>(Vec::new())
+        .register_async_method("eth_getLogs", |params: Params<'static>, ctx, _| {
+            let ctx = ctx.clone();
+            async move {
+                #[derive(serde::Deserialize)]
+                struct Filter {
+                    #[serde(default)]
+                    from_block: Option<String>,
+                    #[serde(default)]
+                    to_block: Option<String>,
+                    #[serde(default)]
+                    address: Option<serde_json::Value>,
+                }
+                let filter: Filter = params.one().map_err(|_| err_invalid_params("expected filter object"))?;
+                let g = ctx.lock().await;
+
+                let latest = g.block_number();
+                let from_block = match filter.from_block.as_deref().unwrap_or("latest") {
+                    "latest" => latest,
+                    s if s.starts_with("0x") => u64::from_str_radix(&s[2..], 16)
+                        .map_err(|_| err_invalid_params("invalid fromBlock"))?,
+                    _ => return Err(err_invalid_params("unsupported fromBlock")),
+                };
+                let to_block = match filter.to_block.as_deref().unwrap_or("latest") {
+                    "latest" => latest,
+                    s if s.starts_with("0x") => u64::from_str_radix(&s[2..], 16)
+                        .map_err(|_| err_invalid_params("invalid toBlock"))?,
+                    _ => return Err(err_invalid_params("unsupported toBlock")),
+                };
+
+                let addr = match filter.address {
+                    None => None,
+                    Some(serde_json::Value::String(s)) => Some(parse_address_hex(&s)?),
+                    _ => return Err(err_invalid_params("address must be string")),
+                };
+
+                let logs = g.logs_for_range(from_block, to_block, addr);
+                Ok::<Vec<RpcLog>, ErrorObjectOwned>(logs)
+            }
         })
         .expect("register eth_getLogs");
 
