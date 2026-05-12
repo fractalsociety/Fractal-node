@@ -42,6 +42,9 @@ FractalChain L1 testnet (PRD v0.1) is an AI-agent-first chain: HotStuff-2 consen
 - [ ] M4-d (in progress): expand JSON-RPC: add `eth_getTransactionByHash`, `eth_getTransactionReceipt` with basic tx/receipt tracking (pending + mined).
 - [ ] M4-e (in progress): expand JSON-RPC: implement `eth_call` + `eth_estimateGas` (devnet semantics; simulates via cloned state; supports `0xfc..` precompile calls deterministically).
 - [ ] M4-f (in progress): expand JSON-RPC: add `eth_getLogs` (stub empty array for now) to satisfy MetaMask/ethers polling.
+- [ ] M4-g (in progress): expand JSON-RPC: add `eth_syncing` (false), `eth_getCode` (empty), `eth_getStorageAt` (zero slot) stubs for MetaMask/ethers probing.
+- [ ] M4-h (in progress): expand JSON-RPC: add fee APIs `eth_maxPriorityFeePerGas` and `eth_feeHistory` (devnet consistent stubs).
+- [ ] M4-i (in progress): expand JSON-RPC: add block→tx lookup APIs `eth_getBlockTransactionCountByNumber`, `eth_getBlockTransactionCountByHash`, `eth_getTransactionByBlockHashAndIndex`.
 
 ## Current Status / Progress Tracking
 
