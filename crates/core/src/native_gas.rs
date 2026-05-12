@@ -21,6 +21,10 @@ pub fn intrinsic_gas(tx: &Transaction) -> Result<u64, ExecError> {
             let extra = PER_BYTE.saturating_mul(calldata.len() as u64);
             Ok(EVM_CALL_BASE_GAS.saturating_add(extra))
         }
+        (VmKind::Evm, TxBody::EvmCreate { init_code, .. }) => {
+            let extra = PER_BYTE.saturating_mul(init_code.len() as u64);
+            Ok(EVM_CALL_BASE_GAS.saturating_add(extra))
+        }
         _ => Err(ExecError::InvalidShape),
     }
 }

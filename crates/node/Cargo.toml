@@ -6,6 +6,8 @@ license.workspace = true
 
 [dependencies]
 borsh.workspace = true
+k256.workspace = true
+rlp.workspace = true
 fractal-consensus = { path = "../consensus" }
 fractal-core = { path = "../core" }
 fractal-evm = { path = "../evm" }

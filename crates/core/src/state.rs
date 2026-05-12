@@ -3,6 +3,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use fractal_crypto::hash::keccak256;
 use fractal_crypto::verify_message;
+use rlp::RlpStream;
 
 use crate::address::Address;
 use crate::error::ExecError;
@@ -43,6 +44,8 @@ pub struct State {
     pub disputes: BTreeMap<u64, DisputeRecord>,
     pub stakes: BTreeMap<Address, u128>,
     pub delegated: BTreeMap<(Address, Address), u128>,
+    /// Devnet EVM code storage (M4): address → bytecode.
+    pub evm_code: BTreeMap<Address, Vec<u8>>,
 }
 
 impl Default for State {
@@ -60,8 +63,20 @@ impl Default for State {
             disputes: BTreeMap::new(),
             stakes: BTreeMap::new(),
             delegated: BTreeMap::new(),
+            evm_code: BTreeMap::new(),
         }
     }
+}
+
+fn create_address(from: Address, nonce: u64) -> Address {
+    // Ethereum CREATE address: keccak256(rlp([from, nonce]))[12..]
+    let mut s = RlpStream::new_list(2);
+    s.append(&from.as_slice());
+    s.append(&nonce);
+    let h = keccak256(&s.out());
+    let mut a = [0u8; 20];
+    a.copy_from_slice(&h[12..]);
+    a
 }
 
 impl State {
@@ -114,6 +129,16 @@ impl State {
                 }
                 let _outcome =
                     evm.execute_call(self, signer, *to, *value, calldata.clone(), *gas_limit)?;
+                self.bump_nonce(signer);
+                Ok(())
+            }
+            (VmKind::Evm, TxBody::EvmCreate { value, init_code, gas_limit: _ }) => {
+                if *value != 0 {
+                    return Err(ExecError::InvalidShape);
+                }
+                // Devnet CREATE: store "runtime code" directly.
+                let addr = create_address(signer, tx.nonce);
+                self.evm_code.insert(addr, init_code.clone());
                 self.bump_nonce(signer);
                 Ok(())
             }

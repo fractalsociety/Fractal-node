@@ -77,6 +77,13 @@ pub enum TxBody {
         calldata: Vec<u8>,
         gas_limit: u64,
     },
+    /// Minimal EVM CREATE (M4): store deployed code deterministically.
+    /// `init_code` is treated as "runtime code" for devnet until full EVM init execution lands.
+    EvmCreate {
+        value: u128,
+        init_code: Vec<u8>,
+        gas_limit: u64,
+    },
 }
 
 #[derive(BorshSerialize, BorshDeserialize, Clone, Debug, PartialEq, Eq)]

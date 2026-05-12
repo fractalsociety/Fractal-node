@@ -45,6 +45,9 @@ FractalChain L1 testnet (PRD v0.1) is an AI-agent-first chain: HotStuff-2 consen
 - [ ] M4-g (in progress): expand JSON-RPC: add `eth_syncing` (false), `eth_getCode` (empty), `eth_getStorageAt` (zero slot) stubs for MetaMask/ethers probing.
 - [ ] M4-h (in progress): expand JSON-RPC: add fee APIs `eth_maxPriorityFeePerGas` and `eth_feeHistory` (devnet consistent stubs).
 - [ ] M4-i (in progress): expand JSON-RPC: add block→tx lookup APIs `eth_getBlockTransactionCountByNumber`, `eth_getBlockTransactionCountByHash`, `eth_getTransactionByBlockHashAndIndex`.
+- [ ] M4-j (in progress): expand JSON-RPC: add `eth_getTransactionByBlockNumberAndIndex`.
+- [ ] M4-k (in progress): accept real Ethereum `eth_sendRawTransaction` EIP-1559 (type `0x02`) tx bytes: RLP decode + secp256k1 sender recovery + map into internal `Transaction`; add `crates/node/tests/eip1559_raw_tx.rs`.
+- [ ] M4-l (in progress): support EIP-1559 contract creation (`to = ""`): map to `TxBody::EvmCreate`, store devnet code in `State.evm_code`, expose via `eth_getCode`, and return `contractAddress` in receipts.
 
 ## Current Status / Progress Tracking
 

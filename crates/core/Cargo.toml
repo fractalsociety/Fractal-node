@@ -9,6 +9,7 @@ borsh.workspace = true
 fractal-crypto = { path = "../crypto" }
 fractal-wallet = { path = "../wallet", optional = true }
 thiserror.workspace = true
+rlp.workspace = true
 
 [features]
 default = []

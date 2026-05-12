@@ -1,6 +1,7 @@
 //! Singleton dev node: 500 ms block cadence + JSON-RPC + libp2p/QUIC sync (`docs/prd.md` §18 M2).
 
 pub mod p2p;
+mod eth_signed;
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -141,13 +142,26 @@ impl ChainInteraction for NodeInner {
     }
 
     fn submit_raw_tx(&mut self, raw: &[u8]) -> Result<(), String> {
-        let tx = Transaction::try_from_slice(raw).map_err(|e| format!("borsh decode: {e}"))?;
-        let h = keccak256(raw);
+        // Dev stub: accept either (a) borsh-encoded internal txs, or (b) real Ethereum EIP-1559
+        // signed tx bytes (type 0x02) for Hardhat/MetaMask compatibility.
+        if let Ok(tx) = Transaction::try_from_slice(raw) {
+            let h = keccak256(raw);
+            self.pending_txs.insert(h, tx.clone());
+            self.mempool.insert(PooledTx {
+                tx,
+                max_priority_fee_per_gas: 1,
+                max_fee_per_gas: u128::MAX,
+            });
+            return Ok(());
+        }
+
+        let (tx, h, max_priority_fee_per_gas, max_fee_per_gas) =
+            eth_signed::to_core_tx(raw, self.chain_id)?;
         self.pending_txs.insert(h, tx.clone());
         self.mempool.insert(PooledTx {
             tx,
-            max_priority_fee_per_gas: 1,
-            max_fee_per_gas: u128::MAX,
+            max_priority_fee_per_gas,
+            max_fee_per_gas,
         });
         Ok(())
     }
@@ -228,6 +242,10 @@ impl ChainInteraction for NodeInner {
         Ok(fractal_core::EVM_CALL_BASE_GAS.saturating_add(
             fractal_core::PER_BYTE.saturating_mul(data.len() as u64),
         ))
+    }
+
+    fn code_at(&self, addr: &Address) -> Vec<u8> {
+        self.state.evm_code.get(addr).cloned().unwrap_or_default()
     }
 }
 

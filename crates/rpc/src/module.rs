@@ -161,6 +161,8 @@ pub trait ChainInteraction: Send {
     fn simulate_eth_call(&self, from: Address, to: Address, value: u128, data: Vec<u8>) -> Result<Vec<u8>, String>;
 
     fn estimate_eth_gas(&self, from: Address, to: Address, value: u128, data: Vec<u8>) -> Result<u64, String>;
+
+    fn code_at(&self, addr: &Address) -> Vec<u8>;
 }
 
 pub type SharedChain = Arc<Mutex<dyn ChainInteraction + Send>>;
@@ -317,6 +319,52 @@ pub fn build_module(ctx: SharedChain) -> RpcModule<SharedChain> {
         .expect("register eth_getTransactionByBlockHashAndIndex");
 
     module
+        .register_async_method("eth_getTransactionByBlockNumberAndIndex", |params: Params<'static>, ctx, _| {
+            let ctx = ctx.clone();
+            async move {
+                let (tag, idx_hex): (String, String) = params
+                    .parse()
+                    .map_err(|_| err_invalid_params("expected [blockTag, index]"))?;
+                let idx = if let Some(hex) = idx_hex.strip_prefix("0x") {
+                    u64::from_str_radix(hex, 16).map_err(|_| err_invalid_params("invalid index"))?
+                } else {
+                    return Err(err_invalid_params("index must be hex quantity"));
+                };
+                let g = ctx.lock().await;
+                let number = if tag == "latest" {
+                    g.block_number()
+                } else if let Some(hex) = tag.strip_prefix("0x") {
+                    u64::from_str_radix(hex, 16).map_err(|_| err_invalid_params("invalid block number"))?
+                } else {
+                    return Err(err_invalid_params("unsupported blockTag"));
+                };
+                let bh = match g.block_hash_by_number(number) {
+                    Some(h) => h,
+                    None => return Ok::<Option<RpcTx>, ErrorObjectOwned>(None),
+                };
+                let b = match g.block_by_hash(&bh) {
+                    Some(b) => b,
+                    None => return Ok::<Option<RpcTx>, ErrorObjectOwned>(None),
+                };
+                let tx = match b.transactions.get(idx as usize) {
+                    Some(t) => t.clone(),
+                    None => return Ok::<Option<RpcTx>, ErrorObjectOwned>(None),
+                };
+                let raw = borsh::to_vec(&tx)
+                    .map_err(|_| ErrorObjectOwned::owned(-32000, "tx encode failed", None::<()>))?;
+                let th = keccak256(&raw);
+                let mined = Some((b.header.height, bh, idx as u32));
+                Ok::<Option<RpcTx>, ErrorObjectOwned>(Some(rpc_tx_from_core(
+                    &tx,
+                    &th,
+                    mined,
+                    g.base_fee_per_gas(),
+                )))
+            }
+        })
+        .expect("register eth_getTransactionByBlockNumberAndIndex");
+
+    module
         .register_async_method("eth_getTransactionByHash", |params: Params<'static>, ctx, _| {
             let ctx = ctx.clone();
             async move {
@@ -380,13 +428,17 @@ pub fn build_module(ctx: SharedChain) -> RpcModule<SharedChain> {
         .expect("register eth_getBalance");
 
     module
-        .register_async_method("eth_getCode", |params: Params<'static>, _ctx, _| async move {
-            // Devnet stub: EVM bytecode storage not yet exposed via unified trie.
-            // Return empty code for all addresses.
-            let (_addr_hex, _tag): (String, String) = params
+        .register_async_method("eth_getCode", |params: Params<'static>, ctx, _| {
+            let ctx = ctx.clone();
+            async move {
+            let (addr_hex, _tag): (String, String) = params
                 .parse()
                 .map_err(|_| err_invalid_params("expected [address, blockTag]"))?;
-            Ok::<String, ErrorObjectOwned>("0x".into())
+            let addr = parse_address_hex(&addr_hex)?;
+            let g = ctx.lock().await;
+            let code = g.code_at(&addr);
+            Ok::<String, ErrorObjectOwned>(format!("0x{}", hex::encode(code)))
+            }
         })
         .expect("register eth_getCode");
 
@@ -621,6 +673,12 @@ fn rpc_tx_from_core(
             format!("0x{}", hex::encode(calldata)),
             quantity_hex_u64(*gas_limit),
         ),
+        fractal_core::TxBody::EvmCreate { value, init_code, gas_limit } => (
+            None,
+            u256_quantity_hex(*value),
+            format!("0x{}", hex::encode(init_code)),
+            quantity_hex_u64(*gas_limit),
+        ),
     };
     let (block_number, block_hash, tx_index) = mined
         .map(|(bn, bh, i)| (Some(quantity_hex_u64(bn)), Some(hash_hex(&bh)), Some(quantity_hex_u64(i as u64))))
@@ -652,6 +710,20 @@ fn rpc_receipt_from_core(
         fractal_core::TxBody::Transfer { to, .. } => Some(addr_hex(to)),
         fractal_core::TxBody::EvmCall { to, .. } => Some(addr_hex(to)),
         fractal_core::TxBody::Native(_) => None,
+        fractal_core::TxBody::EvmCreate { .. } => None,
+    };
+    let contract_address = match &tx.body {
+        fractal_core::TxBody::EvmCreate { .. } => {
+            // Duplicate of State's CREATE address derivation (devnet).
+            let mut s = rlp::RlpStream::new_list(2);
+            s.append(&tx.signer.as_slice());
+            s.append(&tx.nonce);
+            let h = keccak256(&s.out());
+            let mut a = [0u8; 20];
+            a.copy_from_slice(&h[12..]);
+            Some(addr_hex(&a))
+        }
+        _ => None,
     };
     RpcReceipt {
         transaction_hash: hash_hex(hash),
@@ -662,7 +734,7 @@ fn rpc_receipt_from_core(
         to,
         cumulative_gas_used: quantity_hex_u64(gas_used),
         gas_used: quantity_hex_u64(gas_used),
-        contract_address: None,
+        contract_address,
         logs: Vec::new(),
         logs_bloom: format!("0x{:0width$x}", 0u8, width = 512),
         status: "0x1".into(),

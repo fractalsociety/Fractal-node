@@ -1436,6 +1436,7 @@ dependencies = [
  "fractal-crypto",
  "fractal-wallet",
  "rand 0.8.6",
+ "rlp",
  "thiserror 1.0.69",
 ]
 
@@ -1491,7 +1492,9 @@ dependencies = [
  "fractal-network",
  "fractal-rpc",
  "futures",
+ "k256",
  "libp2p",
+ "rlp",
  "thiserror 1.0.69",
  "tokio",
 ]
@@ -1506,6 +1509,7 @@ dependencies = [
  "fractal-crypto",
  "hex",
  "jsonrpsee",
+ "rlp",
  "serde",
  "serde_json",
  "tokio",
@@ -2363,6 +2367,7 @@ dependencies = [
  "elliptic-curve",
  "once_cell",
  "sha2",
+ "signature",
 ]
 
 [[package]]
