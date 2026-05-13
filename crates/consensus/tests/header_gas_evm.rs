@@ -61,6 +61,7 @@ fn block_header_gas_used_reflects_evm_execution() {
         60_000_000,
         &mut st,
         vec![tx],
+        fractal_consensus::eth_signed_raws_for_txs(1),
     )
     .expect("block");
 

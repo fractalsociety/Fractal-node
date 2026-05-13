@@ -944,7 +944,7 @@ Exit criteria: deploy a contract via Hardhat; call native precompiles from it; M
 ## M5: Bridge to Core MVP (Weeks 9-11)
 
 Deliverables:
-* Off-chain Core MVP backend submits real `SETTLE_BATCH` calls (stub binary: `cargo run -p fractal-mvp-backend --bin fractal-mvp-bridge`; optional `MVP_RECEIPTS_JSON` for a JSON receipt export — see `crates/mvp-backend/testdata/mvp_receipts_sample.json`; post-run logs include `eth_getBalance` for the claim agent)
+* Off-chain Core MVP backend submits real `SETTLE_BATCH` calls (stub binary: `cargo run -p fractal-mvp-backend --bin fractal-mvp-bridge`; optional `MVP_RECEIPTS_JSON` for a JSON receipt export — see `crates/mvp-backend/testdata/mvp_receipts_sample.json`; post-run logs include `eth_getBalance` for the claim agent). PRD-scale smoke: **`./scripts/run-mvp-bridge-smoke.sh`** (default `MVP_RECEIPT_COUNT=100`); optional GitHub Actions workflow source **`docs/ci/mvp-bridge-smoke.workflow.yml`** (`docs/devnet.md`).
 * Agents claim payouts via SDK (`fractal_sdk::m5` in `crates/sdk-rust`)
 * End-to-end: post job off-chain → settle batch on-chain → agent claims tFRAC → tFRAC appears in MetaMask
 

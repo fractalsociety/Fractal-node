@@ -20,7 +20,7 @@ So the explorer’s “transaction hash” column is always “whatever the RPC 
 ## Leader vs follower
 
 - **Producer (leader)** holds `eth_signed_raw` and can return full EIP-1559 JSON from `eth_getTransactionByHash` for those txs.
-- **Follower** nodes replay **consensus blocks**; if they do not replicate the leader’s `eth_signed_raw` / RPC-hash maps, `eth_getTransactionByHash` may disagree with the leader for the same logical transaction.
+- **Follower** nodes replay **consensus blocks** and, as of 2026-05, rebuild **`mined_txs`**, **`eth_signed_raw`**, and RPC↔internal hash maps from each block’s `eth_signed_raw` sidecar so `eth_getTransactionByHash` / log `transactionHash` can match the producer for the same logical transaction (still verify in your deployment).
 
 **Operational rule:** for explorer + wallet debugging, point the UI at the **same JSON-RPC instance** you used to submit the transaction (usually the producer), unless you have verified follower RPC parity.
 

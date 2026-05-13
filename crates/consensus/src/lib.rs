@@ -16,6 +16,8 @@ pub enum BuildBlockError {
     Io(#[from] std::io::Error),
     #[error(transparent)]
     Exec(#[from] ExecError),
+    #[error("eth_signed_raw length {got} != transactions length {txs}")]
+    EthRawLenMismatch { txs: usize, got: usize },
 }
 
 /// Legacy floor gas per tx (EVM transfer); native txs use [`fractal_core::intrinsic_gas`].
@@ -43,6 +45,9 @@ pub struct BlockHeader {
 pub struct Block {
     pub header: BlockHeader,
     pub transactions: Vec<Transaction>,
+    /// Parallel to `transactions`: optional original EIP-1559 bytes (`keccak256` = RPC tx hash).
+    /// Followers replay this to populate `NodeInner::eth_signed_raw` / hash maps like the producer.
+    pub eth_signed_raw: Vec<Option<Vec<u8>>>,
 }
 
 fn tx_hash(tx: &Transaction) -> Result<Hash256, std::io::Error> {
@@ -83,6 +88,11 @@ pub fn header_hash(header: &BlockHeader) -> Result<Hash256, std::io::Error> {
     Ok(keccak256(&borsh::to_vec(header)?))
 }
 
+/// One `None` per transaction when no Ethereum signed envelope is present.
+pub fn eth_signed_raws_for_txs(txs_len: usize) -> Vec<Option<Vec<u8>>> {
+    vec![None; txs_len]
+}
+
 /// Execute `txs` on top of `state`, compute roots, and assemble a `Block` (singleton QC omitted).
 pub fn execute_and_build_block(
     chain_id: u64,
@@ -95,7 +105,14 @@ pub fn execute_and_build_block(
     gas_limit: u64,
     state: &mut State,
     txs: Vec<Transaction>,
+    eth_signed_raw: Vec<Option<Vec<u8>>>,
 ) -> Result<Block, BuildBlockError> {
+    if eth_signed_raw.len() != txs.len() {
+        return Err(BuildBlockError::EthRawLenMismatch {
+            txs: txs.len(),
+            got: eth_signed_raw.len(),
+        });
+    }
     let mut budget_sum = 0u64;
     for tx in &txs {
         let g = fractal_core::tx_gas_limit(tx)?;
@@ -127,6 +144,7 @@ pub fn execute_and_build_block(
     Ok(Block {
         header,
         transactions: txs,
+        eth_signed_raw,
     })
 }
 
@@ -166,7 +184,10 @@ mod tests {
             body: TxBody::Native(NativeCall::NoOp),
         };
         let parent = [7u8; 32];
-        let block = execute_and_build_block(41, 1, 0, parent, [0u8; 32], [0u8; 32], 1_000, 60_000_000, &mut st, vec![tx]).unwrap();
+        let block = execute_and_build_block(
+            41, 1, 0, parent, [0u8; 32], [0u8; 32], 1_000, 60_000_000, &mut st, vec![tx], eth_signed_raws_for_txs(1),
+        )
+        .unwrap();
         assert_eq!(block.header.height, 1);
         assert_ne!(block.header.state_root, [0u8; 32]);
     }

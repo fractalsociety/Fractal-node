@@ -1,0 +1,38 @@
+# PRD §18 M5 — ≥100 synthetic receipts settle + claim against JSON-RPC (no manual steps).
+# Copy this file to `.github/workflows/mvp-bridge-smoke.yml` in the repo (or create the
+# workflow in the GitHub UI). Pushing under `.github/workflows/` requires a PAT with the
+# **workflow** scope (or use the GitHub web editor / Actions tab).
+name: mvp-bridge-smoke
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+
+concurrency:
+  group: mvp-bridge-smoke-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  mvp-bridge-100:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      FRACTAL_RPC_URL: http://127.0.0.1:8545
+      MVP_RECEIPT_COUNT: "100"
+      RPC_WAIT_SECS: "240"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Start devnet node (Docker)
+        run: docker compose -f testnets/devnet/docker-compose.yml up -d --build node
+
+      - name: MVP bridge smoke (wait + 100 claims)
+        run: ./scripts/run-mvp-bridge-smoke.sh
+
+      - name: Compose logs (on failure)
+        if: failure()
+        run: docker compose -f testnets/devnet/docker-compose.yml logs --no-color || true

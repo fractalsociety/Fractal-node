@@ -34,6 +34,8 @@ pub enum SyncApplyError {
     TxRoot,
     #[error("gas used mismatch: header {header}, replay {replay}")]
     GasUsedMismatch { header: u64, replay: u64 },
+    #[error("synced block eth_signed_raw length does not match transactions")]
+    BlockEthRawLayout,
     #[error(transparent)]
     Exec(#[from] fractal_core::ExecError),
     #[error(transparent)]
@@ -133,6 +135,9 @@ impl NodeInner {
         if block.header.parent_hash != self.head_hash {
             return Err(SyncApplyError::ParentHash);
         }
+        if block.eth_signed_raw.len() != block.transactions.len() {
+            return Err(SyncApplyError::BlockEthRawLayout);
+        }
         let mut scratch = self.state.clone();
         let mut evm = fractal_evm::RevmEngine::default();
         let gas = fractal_core::apply_block_with_evm(&mut scratch, &block.transactions, &mut evm)?;
@@ -156,7 +161,34 @@ impl NodeInner {
         self.view = block.header.view.wrapping_add(1);
         self.base_fee = next_base_fee(self.base_fee, block.header.gas_used, &self.fee_params);
         self.blocks.push(block.clone());
+        self.sync_rpc_index_from_block(block);
         Ok(())
+    }
+
+    /// Populate `mined_txs`, `eth_signed_raw`, and RPC hash maps from a committed block (producer
+    /// after local mine; follower after `apply_synced_block` replay).
+    fn sync_rpc_index_from_block(&mut self, block: &Block) {
+        let hh = header_hash(&block.header).unwrap_or([0u8; 32]);
+        for (i, tx) in block.transactions.iter().enumerate() {
+            let Ok(borsh_raw) = borsh::to_vec(tx) else {
+                continue;
+            };
+            let ih = keccak256(&borsh_raw);
+            let rpc_h = if let Some(Some(eth_raw)) = block.eth_signed_raw.get(i) {
+                let eh = keccak256(eth_raw);
+                if eh != ih {
+                    self.eth_rpc_to_internal_tx_hash.insert(eh, ih);
+                    self.eth_internal_to_rpc_tx_hash.insert(ih, eh);
+                }
+                self.eth_signed_raw.insert(eh, eth_raw.clone());
+                eh
+            } else {
+                ih
+            };
+            self.pending_txs.remove(&rpc_h);
+            self.mined_txs
+                .insert(rpc_h, (block.header.height, hh, i as u32));
+        }
     }
 
     /// Sum of log counts for transactions before `tx_index` in `block_number`.
@@ -269,6 +301,7 @@ impl ChainInteraction for NodeInner {
                     extra: [0u8; 32],
                 },
                 transactions: Vec::new(),
+                eth_signed_raw: Vec::new(),
             });
         }
         self.blocks
@@ -500,6 +533,7 @@ pub async fn producer_loop(node: NodeHandle) {
             gas_limit,
             &mut n.state,
             txs,
+            eth_raws,
         ) {
             Ok(block) => {
                 let hh = header_hash(&block.header).unwrap_or([0u8; 32]);
@@ -507,27 +541,7 @@ pub async fn producer_loop(node: NodeHandle) {
                 n.height = block.header.height;
                 n.view = n.view.wrapping_add(1);
                 n.base_fee = next_base_fee(n.base_fee, block.header.gas_used, &n.fee_params);
-                // Mark txs as mined for RPC.
-                for (i, tx) in block.transactions.iter().enumerate() {
-                    let Ok(borsh_raw) = borsh::to_vec(tx) else {
-                        continue;
-                    };
-                    let ih = keccak256(&borsh_raw);
-                    let rpc_h = if let Some(Some(eth_raw)) = eth_raws.get(i) {
-                        let eh = keccak256(eth_raw);
-                        if eh != ih {
-                            n.eth_rpc_to_internal_tx_hash.insert(eh, ih);
-                            n.eth_internal_to_rpc_tx_hash.insert(ih, eh);
-                        }
-                        n.eth_signed_raw.insert(eh, eth_raw.clone());
-                        eh
-                    } else {
-                        ih
-                    };
-                    n.pending_txs.remove(&rpc_h);
-                    n.mined_txs
-                        .insert(rpc_h, (block.header.height, hh, i as u32));
-                }
+                n.sync_rpc_index_from_block(&block);
                 n.blocks.push(block);
             }
             Err(e) => eprintln!("fractal-node: block execution failed: {e}"),

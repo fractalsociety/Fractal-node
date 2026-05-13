@@ -29,3 +29,21 @@ This page ties together **PRD §18 M6** pieces in-repo (anchored on **`docs/prd.
 - Example multiaddrs for followers: `testnets/devnet/bootnodes.example.txt`.
 
 Community (Discord) and a public status page are **operational** concerns outside this repository.
+
+## M5 bridge smoke (PRD exit scale)
+
+PRD **M5** exit line includes ≥100 receipts settled then claimed with no manual intervention (`docs/prd.md` §M5).
+
+- **Local / CI:** from repo root, with JSON-RPC listening on **`FRACTAL_RPC_URL`** (default `http://127.0.0.1:8545`):
+
+  ```bash
+  ./scripts/run-mvp-bridge-smoke.sh
+  ```
+
+  Uses **`MVP_RECEIPT_COUNT`** (default **100**) synthetic receipts via `fractal-mvp-bridge`. The script waits for RPC with **`./scripts/wait-for-jsonrpc.sh`** (`RPC_WAIT_SECS`, default 180).
+
+- **Docker devnet:** `docker compose -f testnets/devnet/docker-compose.yml up -d node` then the same smoke script against `http://127.0.0.1:8545`.
+
+- **GitHub Actions:** workflow definition lives at **`docs/ci/mvp-bridge-smoke.workflow.yml`** (not under `.github/workflows/` in git) so HTTPS pushes work with default PAT scopes. **Install:** copy that file to `.github/workflows/mvp-bridge-smoke.yml`, or push with a PAT that includes the **`workflow`** scope, or create the workflow in the GitHub Actions UI. The script **`./scripts/run-mvp-bridge-smoke.sh`** is unchanged.
+
+- **Off-chain-shaped batch:** set **`MVP_RECEIPTS_JSON`** to a file (see `crates/mvp-backend/testdata/mvp_receipts_sample.json`) instead of synthetic counts; see `crates/mvp-backend` module docs on `fractal-mvp-bridge`.
