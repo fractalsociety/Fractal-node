@@ -26,7 +26,11 @@ FractalChain L1 testnet (PRD v0.1) is an AI-agent-first chain: HotStuff-2 consen
 3. **W3** — Token-bucket + revocation set + Merkle root/proof + cascade rule — done + tests.
 4. **W4** — Tool intent / quote / match / receipt / trusted settle + stake lock — done + tests.
 5. **W5** — Policy template registry, optimistic challenge window + dispute resolution, emergency stop registry, TaskReceipt + `tool_receipt_root`, optional `fractal-core` `wallet` feature + `wallet_anchor` — **done** (see `crates/wallet`, `crates/core`).
-6. **W6** (next) — Reference wallet CLI/web stubs, provider SDK surfaces, indexer hooks, native opcode wiring beyond anchor hash.
+6. **W6** — Reference wallet CLI + web stub, provider SDK surfaces, indexer hooks, native opcode wiring beyond anchor hash.
+   - **W6-a** — `fractal-wallet-cli` + §15.2 builtins in `fractal-wallet` — done.
+   - **W6-b** — `tools/wallet-web/` + `policy dump-builtins` + `serve-wallet-web.sh` — done (Executor 2026-05-12).
+   - **W6-c** — `fractal_sdk::provider` + `packages/fractal-provider-ts/` + `provider_id_from_public_key` — done (Executor 2026-05-12).
+   - **W6-d** (next / backlog) — Native opcode wiring beyond `wallet_anchor`, full indexer daemon, provider HTTP server sample.
 
 ## Project Status Board
 
@@ -40,7 +44,10 @@ FractalChain L1 testnet (PRD v0.1) is an AI-agent-first chain: HotStuff-2 consen
 - [x] M6-a (Executor slice, 2026-05-12): **PRD M6** — CORS; `fractal-faucet` + `DEVNET_FAUCET_TREASURY`; initial `tools/explorer`; `testnets/devnet` compose + `bootnodes.example.txt`; `docs/devnet.md`.
 - [x] M6-b (Executor slice, 2026-05-12): explorer **blocks table**, **account** + **tx** JSON lookup; **`scripts/serve-explorer.sh`**. **Planner:** manual browser pass vs live node.
 - [x] M6-c (Executor slice, 2026-05-12): explorer — **click block row** → tx hash list + jump to tx lookup; account shows **`eth_getCode`** (byte length / contract flag). **Planner:** browser smoke.
-- [ ] W6-a (Executor slice, 2026-05-12, in progress): **W6** first slice — add `docs/wallet.md` §15.2 built-in policy templates (`research-agent-v1`, `coding-agent-v1`, `verifier-agent-v1`) to `fractal-wallet::policy::builtins`; convert `fractal-cli` to binary `fractal-wallet-cli` with `policy list / show` and `cap mint / show` subcommands (offline, no chain RPC). Integration test under `crates/cli/tests/wallet_cli.rs`. **Planner:** confirm scope before W6-b (web stub) and W6-c (provider SDK).
+- [x] W6-a: `fractal-wallet-cli` + §15.2 builtins + `crates/cli/tests/wallet_cli.rs`
+- [x] W6-b (Executor slice, 2026-05-12): **`tools/wallet-web/`** static reference UI + **`policy dump-builtins`** + **`scripts/serve-wallet-web.sh`** + `builtins.json` sync test. **Planner:** browser open stub vs `README`.
+- [x] W6-c (Executor slice, 2026-05-12): **`fractal_sdk::provider`** (`crates/sdk-rust`) re-exports `fractal_wallet` market types + **`IndexerCursor`** / **`IntentPollFilter`**; **`packages/fractal-provider-ts/`** wire types (`npm run check`); **`provider_id_from_public_key`** on `fractal-wallet`; tests `crates/sdk-rust/tests/provider_sdk.rs`. **Planner:** `cargo test -p fractal-sdk`.
+- [ ] W6-d (backlog): wallet native opcodes beyond anchor; long-running indexer binary; sample provider HTTP server.
 - [ ] M6-d (next): Blockscout-style explorer / richer block UI (internal vs Ethereum tx hash docs), or ≥3 real bootnodes + status page.
 - [ ] M5-a (Executor slice, 2026-05-12): **PRD `docs/prd.md` M5** (not `docs/wallet.md`) — `fractal-mvp-bridge` + `fractal_sdk::m5` + devnet Hardhat #1; smoke OK. **Next:** wire real off-chain receipts, post-bridge `eth_getBalance` check, CI `MVP_RECEIPT_COUNT=100` vs `fractal-node`.
 - [ ] M4-b (ready for Planner sign-off): expand JSON-RPC toward MetaMask/ethers compatibility: add `eth_chainId`, `net_version`, `eth_getTransactionCount`. User confirmed via manual run.
@@ -84,7 +91,10 @@ FractalChain L1 testnet (PRD v0.1) is an AI-agent-first chain: HotStuff-2 consen
 - **Chain M6 (2026-05-12, Executor / PRD `docs/prd.md`):** CORS + `fractal-faucet` + `testnets/devnet` compose + `bootnodes.example.txt` + `docs/devnet.md`; explorer v2 (chain summary, **10-block** table, **account** + **tx** JSON) + **`scripts/serve-explorer.sh`**.
 - **Chain M6-c (2026-05-12, Executor):** Explorer block row → **block detail** (`eth_getBlockByNumber` metadata + tx hash buttons); tx buttons fill hash + `lookupTx`; account lookup adds **`eth_getCode`** (`codeByteLength`, `isContract`).
 
-- **Wallet W6-a (2026-05-12, Executor):** Implemented `docs/wallet.md` §15.2 built-in policy templates in `fractal_wallet::policy::builtins` (`research_agent_v1`, `coding_agent_v1`, `verifier_agent_v1`, `register_builtins`, `suggested_tool_class_mask`, `all_ids`, `FRAC` = 1e18). Re-exported under `fractal_wallet::policy_builtins`. Added `builtins_register_and_resolve` unit test in `crates/wallet/src/policy.rs`. Converted `crates/cli` to a binary crate (`fractal-wallet-cli`) with `[lib] + [[bin]]` + a tiny hand-rolled flag parser (no `clap`) so the workspace dep set is unchanged. Subcommands: `policy list`, `policy show <id>`, `cap mint --template <id> --chain-id <n> --not-after-ms <t> [--workspace <id>] [--cap-id <hex32>] [--not-before-ms <t>] [--nonce <n>]`, `cap show <token_hex>`. Output is JSON. Integration test `crates/cli/tests/wallet_cli.rs` calls `fractal_cli::run_argv_value` directly (no spawned process) and covers: policy list (3 builtins), policy show (research total cap = 3·1e18), `cap mint` → `cap show` round-trip with `signatureOk = true`, `--not-after-ms <= 0` rejected, unknown command returns usage. **Awaiting `cargo test -p fractal-cli -p fractal-wallet` on user machine.**
+- **Wallet W6-c (2026-05-12, Executor):** `fractal_sdk::provider` + TS package `packages/fractal-provider-ts/`; `market::provider_id_from_public_key`; `.gitignore` for `packages/**/node_modules` + `dist/`; `docs/wallet.md` §21.2 + §25.1 paths.
+
+- **Wallet W6-a:** `fractal-wallet-cli` + §15.2 builtins in `fractal-wallet` (see `crates/cli`, `crates/wallet/src/policy.rs`).
+- **Wallet W6-b (2026-05-12, Executor):** `tools/wallet-web/` loads committed `builtins.json`; `fractal-wallet-cli policy dump-builtins` regenerates it; `wallet_web_builtins_json_matches_cli_dump` test locks sync; `./scripts/serve-wallet-web.sh` (port `WALLET_WEB_PORT`, default 3344). `docs/wallet.md` §25.1 bullet updated.
 
 - **Chain M2:** remains as delivered earlier (QUIC sync, follower, `quic_sync` test).
 
@@ -97,8 +107,8 @@ FractalChain L1 testnet (PRD v0.1) is an AI-agent-first chain: HotStuff-2 consen
 - **M5 bridge (PRD `docs/prd.md`, not `docs/wallet.md`):** First slice landed (`fractal-mvp-bridge`, `fractal_sdk::m5`). **Planner:** run `MVP_RECEIPT_COUNT=100` against devnet and optionally `eth_getBalance` on agent to confirm M5 exit path numerically.
 - **Next PRD milestone after M4 closure:** **M5** (Bridge to Core MVP) — off-chain backend submits `SETTLE_BATCH`, SDK claims, E2E receipts → settlement → MetaMask tFRAC. **Remaining M4 polish (Executor backlog):** MetaMask “tFRAC balance” doc / import for devnet prefund key; follower replication of `eth_signed_raw` / RPC hash maps if explorers must match leader on synced nodes.
 - **Next chain milestone:** PRD §18 **M4** — `revm`, full JSON-RPC EVM surface, MetaMask path, real precompile dispatch from EVM execution.
-- **Wallet W6**: off-chain clients / SDK packaging not started beyond **`fractal_sdk::m5`** (M5 bridge builders); `fractal-sdk` still primarily re-exports `fractal-core`.
-- **Wallet W6-a (Executor, 2026-05-12):** First W6 slice landed — built-in §15.2 policy templates in `fractal-wallet` + offline reference `fractal-wallet-cli` binary (policy list/show, cap mint/show). No new workspace deps. **Planner:** please run `cargo test -p fractal-cli -p fractal-wallet` and (optionally) `cargo run -p fractal-cli -- policy list`, `cargo run -p fractal-cli -- cap mint --template 1 --chain-id 41 --not-after-ms 1000000` then pipe `tokenHex` into `cap show`. If green, confirm sign-off so I can plan **W6-b** (web stub) and **W6-c** (provider SDK surfaces).
+- **Wallet W6**: **W6-a–c** landed (CLI, web stub, provider SDK types + `fractal_sdk::provider`). **W6-d** backlog: native opcodes beyond anchor, indexer service, sample provider HTTP.
+- **Wallet W6-a (Executor, 2026-05-12):** First W6 slice — built-in §15.2 policy templates + `fractal-wallet-cli`. **Planner:** run `cargo test -p fractal-cli -p fractal-wallet` if not already signed off.
 
 ## Lessons
 
@@ -115,4 +125,4 @@ FractalChain L1 testnet (PRD v0.1) is an AI-agent-first chain: HotStuff-2 consen
 - **jsonrpsee 0.24 + `tower-http` CORS:** `ServerBuilder::set_http_middleware` expects **`tower` 0.4** `ServiceBuilder` (jsonrpsee’s dependency). Using workspace `tower` 0.5 causes a type mismatch.
 - **`borsh::to_vec` (1.5):** free function with `T: BorshSerialize` bound on the value; the trait does **not** need to be in scope at the call site. Only `BorshDeserialize` must be imported (it provides `try_from_slice`).
 - **`PolicyTemplate` has no `allowed_classes` field:** §15.2's "allowed: X, Y" list is realized at capability-mint time as `Scope.tool_class_mask`, not as a caveat. Use `policy_builtins::suggested_tool_class_mask(template_id)` to materialize the mask without a schema change.
-- **`fractal-cli` package layout:** `[lib] path = "src/lib.rs"` + `[[bin]] name = "fractal-wallet-cli" path = "src/main.rs"` so integration tests can call `fractal_cli::run_argv_value` directly without spawning a process (avoids cargo's binary-discovery quirks under `--test`).
+- **`fractal_sdk::provider`:** depends on `fractal-wallet`; re-exports market + `provider_id_from_public_key` for provider operators (`crates/sdk-rust/tests/provider_sdk.rs`).

@@ -1102,7 +1102,7 @@ A provider running a generic HTTP service can join the network by:
 2. Subscribing to intents matching its tool class.
 3. Responding with quotes; executing on match; posting receipts.
 
-A reference provider SDK ships with the protocol — TypeScript and Rust. Existing services (OpenAI, Anthropic, GitHub) can be adapted by a thin "proxy provider" that pays them off-chain and exposes their capabilities on-chain. The proxy carries the staking risk.
+A reference provider SDK ships with the protocol — **Rust:** `fractal_sdk::provider` (`crates/sdk-rust/src/provider.rs`; re-exports `fractal_wallet` market types + indexer helpers); **TypeScript:** `packages/fractal-provider-ts/` (wire types, `npm run check`). Existing services (OpenAI, Anthropic, GitHub) can be adapted by a thin "proxy provider" that pays them off-chain and exposes their capabilities on-chain. The proxy carries the staking risk.
 
 ### 21.3 EVM compatibility
 
@@ -1188,8 +1188,8 @@ These are honest limitations to call out:
 - TaskReceipt with tool_receipt_root binding.
 - Policy templates: research, coding, verifier.
 - Emergency stop.
-- Wallet activity UI (reference web client).
-- Reference provider SDK (TypeScript + Rust).
+- Wallet activity UI (reference web client) — static stub: `tools/wallet-web/` (`./scripts/serve-wallet-web.sh`); full in-browser verify deferred (use `fractal-wallet-cli cap show`).
+- Reference provider SDK (TypeScript + Rust) — **`packages/fractal-provider-ts/`** (types + `npm run check`); Rust: **`fractal_sdk::provider`** in `crates/sdk-rust` (re-exports `fractal_wallet` market types, `IndexerCursor`, `IntentPollFilter`, `provider_id_from_public_key`).
 
 ### 25.2 Phase 2 — Hardening (Months 6-12)
 

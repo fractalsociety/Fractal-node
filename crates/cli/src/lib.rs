@@ -1,10 +1,9 @@
 //! `fractal-wallet-cli` — reference operator CLI (W6 slice).
 //!
 //! Anchored on `docs/wallet.md` §15.2 (built-in policy templates) and §4.2
-//! (capability mint / verify). All subcommands are **offline** in this slice;
-//! no chain RPC calls are made. Future slices (W6-b/W6-c) will add a web stub
-//! and provider SDK surfaces; the binary's argv shape is intentionally tiny
-//! and dependency-free so integration tests can call `run_argv` directly.
+//! (capability mint / verify). All subcommands are **offline** in this slice; no chain RPC.
+//! **W6-b:** `tools/wallet-web/` static stub + `policy dump-builtins`. **W6-c (next):** provider SDK surfaces.
+//! The argv shape stays tiny and dependency-free so integration tests can call `run_argv` directly.
 
 use std::collections::BTreeMap;
 
@@ -36,6 +35,7 @@ pub fn run_argv_value(argv: &[String]) -> Result<Value, String> {
     match (argv[1].as_str(), argv.get(2).map(String::as_str)) {
         ("policy", Some("list")) => Ok(cmd_policy_list()),
         ("policy", Some("show")) => cmd_policy_show(&argv[3..]),
+        ("policy", Some("dump-builtins")) => Ok(cmd_policy_dump_builtins()),
         ("cap", Some("mint")) => cmd_cap_mint(&argv[3..]),
         ("cap", Some("show")) => cmd_cap_show(&argv[3..]),
         ("help" | "--help" | "-h", _) => Ok(json!({ "usage": usage() })),
@@ -44,7 +44,7 @@ pub fn run_argv_value(argv: &[String]) -> Result<Value, String> {
 }
 
 fn usage() -> String {
-    "usage: fractal-wallet-cli <command> [args]\n  policy list\n  policy show <template_id>\n  cap mint --template <id> --chain-id <n> --not-after-ms <t> [--workspace <id>] [--cap-id <hex32>] [--nonce <n>]\n  cap show <token_hex>"
+    "usage: fractal-wallet-cli <command> [args]\n  policy list\n  policy show <template_id>\n  policy dump-builtins\n  cap mint --template <id> --chain-id <n> --not-after-ms <t> [--workspace <id>] [--cap-id <hex32>] [--nonce <n>]\n  cap show <token_hex>"
         .into()
 }
 
@@ -73,6 +73,29 @@ fn cmd_policy_show(args: &[String]) -> Result<Value, String> {
     builtins::register_builtins(&mut reg).expect("builtins register");
     let resolved = reg.resolve(id).map_err(|e| format!("resolve: {e}"))?;
     Ok(render_policy(id, &resolved))
+}
+
+/// JSON for `tools/wallet-web/builtins.json` (reference web client). Regenerate with
+/// `cargo run -p fractal-cli -- policy dump-builtins > tools/wallet-web/builtins.json`.
+fn cmd_policy_dump_builtins() -> Value {
+    let mut reg = PolicyRegistry::default();
+    builtins::register_builtins(&mut reg).expect("builtins register");
+    let mut templates = Vec::new();
+    for (id, _name) in builtins::all_ids() {
+        let resolved = reg.resolve(id).expect("builtin resolves");
+        let mut v = render_policy(id, &resolved);
+        if let Value::Object(ref mut m) = v {
+            if let Some((n, d)) = builtins::meta(id) {
+                m.insert("name".into(), json!(n));
+                m.insert("description".into(), json!(d));
+            }
+        }
+        templates.push(v);
+    }
+    json!({
+        "schemaVersion": 1,
+        "templates": templates,
+    })
 }
 
 fn render_policy(id: TemplateId, r: &ResolvedPolicy) -> Value {

@@ -411,6 +411,10 @@ impl ToolMarket {
     }
 }
 
+pub fn provider_id_from_public_key(pk: &PublicKey) -> ProviderId {
+    *blake3::hash(pk).as_bytes()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -441,7 +445,7 @@ mod tests {
         let mut rng = OsRng;
         let prov = SigningKey::generate(&mut rng);
         let provider_pk = prov.verifying_key().to_bytes();
-        let provider_id = *blake3::hash(&provider_pk).as_bytes();
+        let provider_id = provider_id_from_public_key(&provider_pk);
 
         let (_agent, intent) = sample_intent(VerificationTier::Trusted);
         let mut market = ToolMarket::default();
@@ -488,7 +492,7 @@ mod tests {
         let mut rng = OsRng;
         let prov = SigningKey::generate(&mut rng);
         let provider_pk = prov.verifying_key().to_bytes();
-        let provider_id = *blake3::hash(&provider_pk).as_bytes();
+        let provider_id = provider_id_from_public_key(&provider_pk);
 
         let (_agent, intent) = sample_intent(VerificationTier::Optimistic);
         let mut market = ToolMarket::default();
@@ -537,7 +541,7 @@ mod tests {
         let prov = SigningKey::generate(&mut rng);
         let challenger = SigningKey::generate(&mut rng);
         let provider_pk = prov.verifying_key().to_bytes();
-        let provider_id = *blake3::hash(&provider_pk).as_bytes();
+        let provider_id = provider_id_from_public_key(&provider_pk);
 
         let (_agent, intent) = sample_intent(VerificationTier::Optimistic);
         let mut market = ToolMarket::default();
