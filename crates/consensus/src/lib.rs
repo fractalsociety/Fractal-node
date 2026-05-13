@@ -21,7 +21,7 @@ pub use qc::{
     expected_parent_qc_for_parent_header, genesis_parent_qc, hash_qc, next_parent_qc_hash_after_commit,
     singleton_qc_certifying, QuorumCertificate,
 };
-pub use validators::{ValidatorId, ValidatorSet};
+pub use validators::{ValidatorEntry, ValidatorId, ValidatorSet};
 
 #[derive(Debug, Error)]
 pub enum BuildBlockError {

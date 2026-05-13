@@ -16,6 +16,7 @@ use fractal_consensus::{
 };
 use fractal_core::{Address, EvmEngine, State, Transaction};
 use fractal_crypto::hash::keccak256;
+use fractal_crypto::BlsSecretKey;
 use fractal_mempool::{next_base_fee, BaseFeeParams, Mempool, PooledTx};
 use fractal_rpc::{make_rpc_log, logs_bloom_256, ChainInteraction};
 use libp2p::multiaddr::Protocol;
@@ -89,6 +90,59 @@ fn devnet_validator_index_from_env(validators: &ValidatorSet) -> usize {
     }
 }
 
+/// Reads `FRACTAL_VALIDATOR_SECRET_HEX` (`docs/prd.md` §7.3 / M7-d).
+///
+/// Returns the operator-supplied BLS signing key if provided. If the env var is
+/// missing or empty, falls back to the deterministic dev key for
+/// `(validators, validator_index)` so single-binary devnets keep working
+/// without configuration.
+///
+/// A malformed env var (bad hex / wrong length / not on-curve) is logged and the
+/// dev fallback is used so a typo cannot silently take a validator offline.
+/// Returns `None` only when no dev key is available (e.g. operator-provisioned
+/// sets that don't expose `dev_bls_secret`); the caller then disables vote
+/// signing on this node.
+fn devnet_validator_secret_from_env(
+    validators: &ValidatorSet,
+    validator_index: usize,
+) -> Option<BlsSecretKey> {
+    if let Ok(raw) = std::env::var("FRACTAL_VALIDATOR_SECRET_HEX") {
+        let trimmed = raw.trim().trim_start_matches("0x");
+        if !trimmed.is_empty() {
+            match hex::decode(trimmed) {
+                Ok(bytes) if bytes.len() == 32 => {
+                    let mut arr = [0u8; 32];
+                    arr.copy_from_slice(&bytes);
+                    match BlsSecretKey::from_bytes(&arr) {
+                        Ok(sk) => {
+                            let pk = sk.public_key();
+                            if let Some(expected) = validators.bls_pubkey(validator_index) {
+                                if &pk != expected {
+                                    eprintln!(
+                                        "fractal-node: FRACTAL_VALIDATOR_SECRET_HEX pubkey does NOT match validators[{validator_index}].bls_pubkey — votes from this node will be rejected by peers"
+                                    );
+                                }
+                            }
+                            return Some(sk);
+                        }
+                        Err(e) => eprintln!(
+                            "fractal-node: FRACTAL_VALIDATOR_SECRET_HEX rejected by blst ({e}); using dev fallback"
+                        ),
+                    }
+                }
+                Ok(bytes) => eprintln!(
+                    "fractal-node: FRACTAL_VALIDATOR_SECRET_HEX must be 32 bytes (got {}); using dev fallback",
+                    bytes.len()
+                ),
+                Err(e) => eprintln!(
+                    "fractal-node: FRACTAL_VALIDATOR_SECRET_HEX hex decode error ({e}); using dev fallback"
+                ),
+            }
+        }
+    }
+    validators.dev_bls_secret(validator_index)
+}
+
 pub struct NodeInner {
     pub chain_id: u64,
     pub height: u64,
@@ -101,6 +155,11 @@ pub struct NodeInner {
     /// only proposes when `validators.is_proposer_for_view(view, validator_index)`.
     /// Defaults to `0`; set via `FRACTAL_VALIDATOR_INDEX` in `run_dev`/`run_follower`.
     pub validator_index: usize,
+    /// This node's BLS signing key (`docs/prd.md` §7.3 / M7-d). `None` means
+    /// the node cannot sign votes (e.g. read-only follower with no operator-supplied
+    /// secret and no dev key available). Set from `FRACTAL_VALIDATOR_SECRET_HEX`
+    /// with a deterministic dev fallback in `run_dev`/`run_follower`.
+    pub validator_secret: Option<BlsSecretKey>,
     pub state: State,
     pub mempool: Mempool,
     pub base_fee: u128,
@@ -130,9 +189,20 @@ impl NodeInner {
     }
 
     /// Devnet with an explicit validator set and this node's `validator_index`
-    /// (`docs/prd.md` §7 M7-c). The producer loop only proposes when
-    /// `validators.is_proposer_for_view(view, validator_index)`.
+    /// (`docs/prd.md` §7 M7-c). Defaults `validator_secret` to the dev fallback
+    /// for `(validators, validator_index)`; for tests that need a specific secret
+    /// (or want to assert "no signing key"), use [`devnet_with_validator_secret`].
     pub fn devnet_with_validator_index(validators: ValidatorSet, validator_index: usize) -> Self {
+        let secret = validators.dev_bls_secret(validator_index);
+        Self::devnet_with_validator_secret(validators, validator_index, secret)
+    }
+
+    /// Devnet with explicit validator set, index, and BLS secret.
+    pub fn devnet_with_validator_secret(
+        validators: ValidatorSet,
+        validator_index: usize,
+        validator_secret: Option<BlsSecretKey>,
+    ) -> Self {
         let mut state = State::default();
         state.accounts.insert(
             HARDHAT_DEFAULT_SIGNER_0,
@@ -163,6 +233,7 @@ impl NodeInner {
             parent_qc_hash: hash_qc(&genesis_parent_qc()).expect("genesis_parent_qc borsh"),
             validators,
             validator_index,
+            validator_secret,
             state,
             mempool: Mempool::default(),
             base_fee: 1,
@@ -658,13 +729,16 @@ pub async fn producer_loop(node: NodeHandle) {
 pub async fn run_dev() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let validators = devnet_validator_set_from_env();
     let validator_index = devnet_validator_index_from_env(&validators);
+    let validator_secret = devnet_validator_secret_from_env(&validators, validator_index);
     eprintln!(
-        "fractal-node: validator_set_size={} validator_index={validator_index}",
-        validators.len()
+        "fractal-node: validator_set_size={} validator_index={validator_index} bls_signing={}",
+        validators.len(),
+        if validator_secret.is_some() { "enabled" } else { "disabled" }
     );
-    let node: NodeHandle = Arc::new(Mutex::new(NodeInner::devnet_with_validator_index(
+    let node: NodeHandle = Arc::new(Mutex::new(NodeInner::devnet_with_validator_secret(
         validators,
         validator_index,
+        validator_secret,
     )));
     let addr: std::net::SocketAddr = std::env::var("FRACTAL_RPC_ADDR")
         .unwrap_or_else(|_| "127.0.0.1:8545".into())
@@ -708,13 +782,16 @@ pub async fn run_follower() -> Result<(), Box<dyn std::error::Error + Send + Syn
     );
     let validators = devnet_validator_set_from_env();
     let validator_index = devnet_validator_index_from_env(&validators);
+    let validator_secret = devnet_validator_secret_from_env(&validators, validator_index);
     eprintln!(
-        "fractal-node follower: validator_set_size={} validator_index={validator_index}",
-        validators.len()
+        "fractal-node follower: validator_set_size={} validator_index={validator_index} bls_signing={}",
+        validators.len(),
+        if validator_secret.is_some() { "enabled" } else { "disabled" }
     );
-    let node: NodeHandle = Arc::new(Mutex::new(NodeInner::devnet_with_validator_index(
+    let node: NodeHandle = Arc::new(Mutex::new(NodeInner::devnet_with_validator_secret(
         validators,
         validator_index,
+        validator_secret,
     )));
     let addr: std::net::SocketAddr = std::env::var("FRACTAL_RPC_ADDR")
         .unwrap_or_else(|_| "127.0.0.1:8546".into())
