@@ -1,0 +1,69 @@
+{
+  "schemaVersion": 1,
+  "templates": [
+    {
+      "caveats": [
+        "MaxTotalSpend(3000000000000000000)",
+        "MaxPerCallSpend { class: Browser, max: 1000000000000000000 }",
+        "MaxPerCallSpend { class: LlmInference, max: 2000000000000000000 }"
+      ],
+      "description": "Browsing + LLM synthesis (Phase 1)",
+      "name": "tpl:research-agent-v1",
+      "perToolCap": {
+        "Browser": "1000000000000000000",
+        "LlmInference": "2000000000000000000"
+      },
+      "rateLimits": {
+        "Browser": {
+          "count": 50,
+          "windowSeconds": 3600
+        },
+        "LlmInference": {
+          "count": 100,
+          "windowSeconds": 3600
+        }
+      },
+      "suggestedToolMask": "0x000000000000000b",
+      "templateId": 1,
+      "totalCap": "3000000000000000000"
+    },
+    {
+      "caveats": [
+        "MaxTotalSpend(10000000000000000000)",
+        "MaxPerCallSpend { class: TestRunner, max: 2000000000000000000 }",
+        "MaxPerCallSpend { class: LlmInference, max: 5000000000000000000 }"
+      ],
+      "description": "LLM + test runner + file storage (Phase 1)",
+      "name": "tpl:coding-agent-v1",
+      "perToolCap": {
+        "LlmInference": "5000000000000000000",
+        "TestRunner": "2000000000000000000"
+      },
+      "rateLimits": {
+        "LlmInference": {
+          "count": 200,
+          "windowSeconds": 3600
+        },
+        "TestRunner": {
+          "count": 20,
+          "windowSeconds": 3600
+        }
+      },
+      "suggestedToolMask": "0x000000000000000e",
+      "templateId": 2,
+      "totalCap": "10000000000000000000"
+    },
+    {
+      "caveats": [
+        "MaxTotalSpend(2000000000000000000)"
+      ],
+      "description": "Independent verification: file read + test + LLM (Phase 1)",
+      "name": "tpl:verifier-agent-v1",
+      "perToolCap": {},
+      "rateLimits": {},
+      "suggestedToolMask": "0x000000000000000e",
+      "templateId": 3,
+      "totalCap": "2000000000000000000"
+    }
+  ]
+}

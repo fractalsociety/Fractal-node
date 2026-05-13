@@ -1,8 +1,8 @@
 //! FractalWork **Agent Wallet & Tool Market** primitives (spec `docs/wallet.md` v2.0).
 //!
-//! Implements Phase 1 checklist pieces (W1–W5): capabilities, budgets, rate limits,
+//! Implements Phase 1 checklist pieces (W1–W6): capabilities, budgets, rate limits,
 //! revocation Merkle, tool market (trusted + optimistic + disputes), policy templates,
-//! emergency stop, and task receipt binding.
+//! emergency stop, task receipt binding, and **provider id** helper for SDK re-exports.
 
 pub mod budget;
 pub mod capability;
@@ -23,9 +23,9 @@ pub use caveat::Caveat;
 pub use challenge::{AdjudicationDecision, Challenge, ChallengeId, ChallengeKind};
 pub use emergency::{EmergencyLevel, EmergencyRegistry};
 pub use market::{
-    ChallengeError, DeliveredInfo, IntentState, MatchError, PostIntentError, PostReceiptError,
-    ProviderStake, Quote, QuoteBody, ResolveError, SettleError, SigVerifyError, ToolIntent,
-    ToolIntentBody, ToolMarket, DEFAULT_OPTIMISTIC_CHALLENGE_MS,
+    provider_id_from_public_key, ChallengeError, DeliveredInfo, IntentState, MatchError,
+    PostIntentError, PostReceiptError, ProviderStake, Quote, QuoteBody, ResolveError, SettleError,
+    SigVerifyError, ToolIntent, ToolIntentBody, ToolMarket, DEFAULT_OPTIMISTIC_CHALLENGE_MS,
 };
 pub use policy::{
     builtins as policy_builtins, BudgetSpec, PolicyError, PolicyRegistry, PolicyTemplate,

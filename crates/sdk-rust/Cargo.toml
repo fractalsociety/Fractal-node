@@ -8,3 +8,9 @@ license.workspace = true
 borsh.workspace = true
 fractal-core = { path = "../core" }
 fractal-crypto = { path = "../crypto" }
+fractal-wallet = { path = "../wallet" }
+
+[dev-dependencies]
+blake3.workspace = true
+ed25519-dalek.workspace = true
+rand.workspace = true

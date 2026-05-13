@@ -29,3 +29,11 @@ Override port: **`EXPLORER_PORT=4000 ./scripts/serve-explorer.sh`**
 - **Transaction** — `eth_getTransactionByHash` + `eth_getTransactionReceipt` for a pasted `0x` hash (JSON as returned by the node).
 
 See **`docs/devnet.md`** for faucet and Docker devnet.
+
+## Transaction hashes (RPC)
+
+Blocks list **tx hashes as returned by your RPC node**. Those can be **Ethereum-style** `keccak256(raw EIP-1559)` or **internal** `keccak256(borsh(tx))` depending on submission path; followers may disagree with the producer until maps are replicated. Read **`docs/explorer.md`**.
+
+## RPC liveness (status stub)
+
+Minimal JSON-RPC probe UI: **`tools/status/`** — `./scripts/serve-status.sh` (port **`STATUS_PORT`**, default **3355**).

@@ -2,13 +2,26 @@
 //!
 //! Full vote aggregation / libp2p gossip lands in later milestones; this crate freezes the
 //! on-disk / wire shape and deterministic header hashing for the execution pipeline.
+//!
+//! [`qc`] defines quorum certificate hashing and the Phase-1 singleton `parent_qc_hash` chain
+//! (`docs/prd.md` §18 M7-a).
+//!
+//! [`validators`] holds static validator sets and view-based leader ids (`docs/prd.md` §18 M7-b).
 
 use borsh::{BorshDeserialize, BorshSerialize};
 use fractal_core::{state_root, ExecError, State, Transaction};
 use fractal_crypto::hash::{keccak256, Hash256};
 use thiserror::Error;
 
+pub mod qc;
+pub mod validators;
+
 pub use fractal_core::Transaction as Tx;
+pub use qc::{
+    expected_parent_qc_for_parent_header, genesis_parent_qc, hash_qc, next_parent_qc_hash_after_commit,
+    singleton_qc_certifying, QuorumCertificate,
+};
+pub use validators::{ValidatorId, ValidatorSet};
 
 #[derive(Debug, Error)]
 pub enum BuildBlockError {
@@ -16,6 +29,8 @@ pub enum BuildBlockError {
     Io(#[from] std::io::Error),
     #[error(transparent)]
     Exec(#[from] ExecError),
+    #[error("eth_signed_raw length {got} != transactions length {txs}")]
+    EthRawLenMismatch { txs: usize, got: usize },
 }
 
 /// Legacy floor gas per tx (EVM transfer); native txs use [`fractal_core::intrinsic_gas`].
@@ -28,7 +43,8 @@ pub struct BlockHeader {
     pub height: u64,
     pub view: u64,
     pub parent_hash: Hash256,
-    /// Parent QC hash (HotStuff-2); zeroed in singleton Phase 1.
+    /// Parent QC hash (HotStuff-2): `keccak256(borsh(QC))` certifying the parent block header.
+    /// First real block uses [`crate::genesis_parent_qc`]; see [`crate::qc`].
     pub parent_qc_hash: Hash256,
     pub proposer: [u8; 32],
     pub timestamp_ms: u64,
@@ -43,6 +59,9 @@ pub struct BlockHeader {
 pub struct Block {
     pub header: BlockHeader,
     pub transactions: Vec<Transaction>,
+    /// Parallel to `transactions`: optional original EIP-1559 bytes (`keccak256` = RPC tx hash).
+    /// Followers replay this to populate `NodeInner::eth_signed_raw` / hash maps like the producer.
+    pub eth_signed_raw: Vec<Option<Vec<u8>>>,
 }
 
 fn tx_hash(tx: &Transaction) -> Result<Hash256, std::io::Error> {
@@ -83,7 +102,13 @@ pub fn header_hash(header: &BlockHeader) -> Result<Hash256, std::io::Error> {
     Ok(keccak256(&borsh::to_vec(header)?))
 }
 
-/// Execute `txs` on top of `state`, compute roots, and assemble a `Block` (singleton QC omitted).
+/// One `None` per transaction when no Ethereum signed envelope is present.
+pub fn eth_signed_raws_for_txs(txs_len: usize) -> Vec<Option<Vec<u8>>> {
+    vec![None; txs_len]
+}
+
+/// Execute `txs` on top of `state`, compute roots, and assemble a `Block`.
+/// Caller supplies `parent_qc_hash` (see [`crate::qc`]).
 pub fn execute_and_build_block(
     chain_id: u64,
     height: u64,
@@ -95,7 +120,14 @@ pub fn execute_and_build_block(
     gas_limit: u64,
     state: &mut State,
     txs: Vec<Transaction>,
+    eth_signed_raw: Vec<Option<Vec<u8>>>,
 ) -> Result<Block, BuildBlockError> {
+    if eth_signed_raw.len() != txs.len() {
+        return Err(BuildBlockError::EthRawLenMismatch {
+            txs: txs.len(),
+            got: eth_signed_raw.len(),
+        });
+    }
     let mut budget_sum = 0u64;
     for tx in &txs {
         let g = fractal_core::tx_gas_limit(tx)?;
@@ -127,6 +159,7 @@ pub fn execute_and_build_block(
     Ok(Block {
         header,
         transactions: txs,
+        eth_signed_raw,
     })
 }
 
@@ -166,7 +199,10 @@ mod tests {
             body: TxBody::Native(NativeCall::NoOp),
         };
         let parent = [7u8; 32];
-        let block = execute_and_build_block(41, 1, 0, parent, [0u8; 32], [0u8; 32], 1_000, 60_000_000, &mut st, vec![tx]).unwrap();
+        let block = execute_and_build_block(
+            41, 1, 0, parent, [0u8; 32], [0u8; 32], 1_000, 60_000_000, &mut st, vec![tx], eth_signed_raws_for_txs(1),
+        )
+        .unwrap();
         assert_eq!(block.header.height, 1);
         assert_ne!(block.header.state_root, [0u8; 32]);
     }

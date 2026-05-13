@@ -50,6 +50,7 @@ fn create_deploys_returned_runtime_via_revm() {
         60_000_000,
         &mut st,
         vec![tx],
+        fractal_consensus::eth_signed_raws_for_txs(1),
     )
     .expect("block");
 

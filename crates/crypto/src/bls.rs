@@ -2,15 +2,20 @@
 //!
 //! M1 keeps deterministic builds without linking `blst`.
 
+use borsh::{BorshDeserialize, BorshSerialize};
 use thiserror::Error;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Hash, BorshSerialize, BorshDeserialize,
+)]
 pub struct BlsPublicKey(pub [u8; 48]);
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Hash, BorshSerialize, BorshDeserialize,
+)]
 pub struct BlsSignature(pub [u8; 96]);
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, BorshSerialize, BorshDeserialize)]
 pub struct AggregateSignature {
     pub bytes: [u8; 96],
 }

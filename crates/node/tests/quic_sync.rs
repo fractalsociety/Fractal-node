@@ -27,7 +27,7 @@ async fn follower_syncs_blocks_over_quic() {
 
     let follower: NodeHandle = Arc::new(Mutex::new(NodeInner::devnet()));
     let f = follower.clone();
-    let _follow_p2p = tokio::spawn(p2p::follower_network_task(f, bootstrap));
+    let _follow_p2p = tokio::spawn(p2p::follower_network_task(f, vec![bootstrap]));
 
     for _ in 0..60 {
         tokio::time::sleep(Duration::from_millis(100)).await;

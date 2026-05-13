@@ -1,0 +1,52 @@
+{
+  "batchId": "0x0101010101010101010101010101010101010101010101010101010101010101",
+  "operator": "0xf39fd6e51aad88f6f4ce6ab8827279cfffb92266",
+  "claimAgent": "0x70997970c51812dc3a010aeae11aea9b4610d32d",
+  "submittedAt": 1700000000,
+  "receipts": [
+    {
+      "receiptId": "0x00000000000000000000000000000000000000000000000000000000000000a1",
+      "jobId": "0x00000000000000000000000000000000000000000000000000000000000000b1",
+      "requester": "0xf39fd6e51aad88f6f4ce6ab8827279cfffb92266",
+      "worker": 1,
+      "verifier": 2,
+      "artifactRoot": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "outputHash": "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "score": 90,
+      "payoutAmount": "5",
+      "finalStatus": 1,
+      "finalizedAt": 1,
+      "schemaVersion": 1
+    },
+    {
+      "receiptId": "0x00000000000000000000000000000000000000000000000000000000000000a2",
+      "jobId": "0x00000000000000000000000000000000000000000000000000000000000000b2",
+      "requester": "0xf39fd6e51aad88f6f4ce6ab8827279cfffb92266",
+      "worker": 1,
+      "verifier": 2,
+      "artifactRoot": "0xcccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "outputHash": "0xdddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+      "score": 91,
+      "payoutAmount": "7",
+      "verifierFee": "0",
+      "protocolFee": "0",
+      "finalStatus": 1,
+      "finalizedAt": 2,
+      "schemaVersion": 1
+    },
+    {
+      "receiptId": "0x00000000000000000000000000000000000000000000000000000000000000a3",
+      "jobId": "0x00000000000000000000000000000000000000000000000000000000000000b3",
+      "requester": "0xf39fd6e51aad88f6f4ce6ab8827279cfffb92266",
+      "worker": 1,
+      "verifier": 2,
+      "artifactRoot": "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      "outputHash": "0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "score": 92,
+      "payoutAmount": "11",
+      "finalStatus": 1,
+      "finalizedAt": 3,
+      "schemaVersion": 1
+    }
+  ]
+}

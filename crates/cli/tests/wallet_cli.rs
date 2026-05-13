@@ -1,7 +1,9 @@
-//! W6-a integration coverage for `fractal-wallet-cli`.
+//! W6-a / W6-b integration coverage for `fractal-wallet-cli` and `tools/wallet-web`.
 //!
 //! These tests exercise the public `run_argv_value` surface (no spawned process)
 //! so they are stable regardless of cargo's binary discovery on the host.
+
+use std::path::PathBuf;
 
 use serde_json::Value;
 
@@ -210,4 +212,17 @@ fn cap_attenuate_rejects_wrong_secret() {
     ]))
     .unwrap_err();
     assert!(err.contains("does not match parent.issuer"), "err = {err}");
+}
+
+/// `tools/wallet-web/builtins.json` must match `policy dump-builtins` (regenerate after policy edits).
+#[test]
+fn wallet_web_builtins_json_matches_cli_dump() {
+    let dump = fractal_cli::run_argv_value(&argv(&["policy", "dump-builtins"])).expect("dump-builtins");
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tools/wallet-web/builtins.json");
+    let file = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
+    let from_file: Value = serde_json::from_str(&file).expect("parse builtins.json");
+    assert_eq!(
+        dump, from_file,
+        "tools/wallet-web/builtins.json is stale; run:\n  cargo run -p fractal-cli -- policy dump-builtins > tools/wallet-web/builtins.json"
+    );
 }

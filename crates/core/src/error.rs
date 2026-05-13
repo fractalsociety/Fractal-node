@@ -37,4 +37,10 @@ pub enum ExecError {
     /// `REVERT` return data (often ABI-encoded `Error(string)`); empty when revert has no payload.
     #[error("execution reverted")]
     EvmRevert { return_data: Vec<u8> },
+    #[error("wallet TaskReceipt witness requires fractal-core built with --features wallet")]
+    WalletFeatureDisabled,
+    #[error("wallet receipt witness does not match commitment")]
+    WalletCommitmentMismatch,
+    #[error("duplicate wallet task-receipt anchor")]
+    DuplicateWalletAnchor,
 }

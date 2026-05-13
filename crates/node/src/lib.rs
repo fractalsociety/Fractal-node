@@ -3,12 +3,17 @@
 pub mod p2p;
 mod eth_signed;
 
+pub use fractal_consensus::ValidatorSet;
+
 use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use borsh::BorshDeserialize;
-use fractal_consensus::{execute_and_build_block, header_hash, ordered_tx_root, Block};
+use fractal_consensus::{
+    execute_and_build_block, expected_parent_qc_for_parent_header, genesis_parent_qc, hash_qc,
+    header_hash, next_parent_qc_hash_after_commit, ordered_tx_root, Block,
+};
 use fractal_core::{Address, EvmEngine, State, Transaction};
 use fractal_crypto::hash::keccak256;
 use fractal_mempool::{next_base_fee, BaseFeeParams, Mempool, PooledTx};
@@ -28,12 +33,18 @@ pub enum SyncApplyError {
     Height { expected: u64, got: u64 },
     #[error("parent hash does not match local head")]
     ParentHash,
+    #[error("parent_qc_hash does not match expected HotStuff-2 singleton QC chain")]
+    ParentQcHash,
+    #[error("block proposer does not match validator set leader for this view")]
+    InvalidProposer,
     #[error("state root mismatch after replay")]
     StateRoot,
     #[error("tx root mismatch after replay")]
     TxRoot,
     #[error("gas used mismatch: header {header}, replay {replay}")]
     GasUsedMismatch { header: u64, replay: u64 },
+    #[error("synced block eth_signed_raw length does not match transactions")]
+    BlockEthRawLayout,
     #[error(transparent)]
     Exec(#[from] fractal_core::ExecError),
     #[error(transparent)]
@@ -51,13 +62,24 @@ pub fn genesis_parent_hash() -> fractal_crypto::Hash256 {
     keccak256(GENESIS_TAG)
 }
 
+fn devnet_validator_set_from_env() -> ValidatorSet {
+    match std::env::var("FRACTAL_VALIDATOR_SET")
+        .map(|s| s.to_ascii_lowercase())
+        .as_deref()
+    {
+        Ok("7") | Ok("bft7") => ValidatorSet::phase2_bft7_fixture(),
+        _ => ValidatorSet::phase1_singleton(),
+    }
+}
+
 pub struct NodeInner {
     pub chain_id: u64,
     pub height: u64,
     pub view: u64,
     pub head_hash: fractal_crypto::Hash256,
     pub parent_qc_hash: fractal_crypto::Hash256,
-    pub proposer: fractal_crypto::Hash256,
+    /// Static validator set (`docs/prd.md` §7.2). Block leader = `validators.expected_proposer(view)`.
+    pub validators: ValidatorSet,
     pub state: State,
     pub mempool: Mempool,
     pub base_fee: u128,
@@ -75,7 +97,13 @@ pub struct NodeInner {
 }
 
 impl NodeInner {
+    /// Default local/test node: Phase-1 singleton validator set (deterministic; ignores process env).
     pub fn devnet() -> Self {
+        Self::devnet_with_validators(ValidatorSet::phase1_singleton())
+    }
+
+    /// Devnet with an explicit validator set (e.g. `ValidatorSet::phase2_bft7_fixture()`).
+    pub fn devnet_with_validators(validators: ValidatorSet) -> Self {
         let mut state = State::default();
         state.accounts.insert(
             HARDHAT_DEFAULT_SIGNER_0,
@@ -103,8 +131,8 @@ impl NodeInner {
             height: 0,
             view: 0,
             head_hash: genesis_parent_hash(),
-            parent_qc_hash: [0u8; 32],
-            proposer: [0u8; 32],
+            parent_qc_hash: hash_qc(&genesis_parent_qc()).expect("genesis_parent_qc borsh"),
+            validators,
             state,
             mempool: Mempool::default(),
             base_fee: 1,
@@ -133,6 +161,22 @@ impl NodeInner {
         if block.header.parent_hash != self.head_hash {
             return Err(SyncApplyError::ParentHash);
         }
+        let expected_parent_qc = if self.height == 0 {
+            hash_qc(&genesis_parent_qc())?
+        } else {
+            let parent_block = &self.blocks[(self.height - 1) as usize];
+            expected_parent_qc_for_parent_header(&parent_block.header)?
+        };
+        if block.header.parent_qc_hash != expected_parent_qc {
+            return Err(SyncApplyError::ParentQcHash);
+        }
+        let expected_proposer = self.validators.expected_proposer(block.header.view);
+        if block.header.proposer != expected_proposer {
+            return Err(SyncApplyError::InvalidProposer);
+        }
+        if block.eth_signed_raw.len() != block.transactions.len() {
+            return Err(SyncApplyError::BlockEthRawLayout);
+        }
         let mut scratch = self.state.clone();
         let mut evm = fractal_evm::RevmEngine::default();
         let gas = fractal_core::apply_block_with_evm(&mut scratch, &block.transactions, &mut evm)?;
@@ -152,11 +196,40 @@ impl NodeInner {
         }
         self.state = scratch;
         self.height = block.header.height;
-        self.head_hash = header_hash(&block.header)?;
+        let hh = header_hash(&block.header)?;
+        self.head_hash = hh;
+        self.parent_qc_hash = next_parent_qc_hash_after_commit(&block.header, hh)?;
         self.view = block.header.view.wrapping_add(1);
         self.base_fee = next_base_fee(self.base_fee, block.header.gas_used, &self.fee_params);
         self.blocks.push(block.clone());
+        self.sync_rpc_index_from_block(block);
         Ok(())
+    }
+
+    /// Populate `mined_txs`, `eth_signed_raw`, and RPC hash maps from a committed block (producer
+    /// after local mine; follower after `apply_synced_block` replay).
+    fn sync_rpc_index_from_block(&mut self, block: &Block) {
+        let hh = header_hash(&block.header).unwrap_or([0u8; 32]);
+        for (i, tx) in block.transactions.iter().enumerate() {
+            let Ok(borsh_raw) = borsh::to_vec(tx) else {
+                continue;
+            };
+            let ih = keccak256(&borsh_raw);
+            let rpc_h = if let Some(Some(eth_raw)) = block.eth_signed_raw.get(i) {
+                let eh = keccak256(eth_raw);
+                if eh != ih {
+                    self.eth_rpc_to_internal_tx_hash.insert(eh, ih);
+                    self.eth_internal_to_rpc_tx_hash.insert(ih, eh);
+                }
+                self.eth_signed_raw.insert(eh, eth_raw.clone());
+                eh
+            } else {
+                ih
+            };
+            self.pending_txs.remove(&rpc_h);
+            self.mined_txs
+                .insert(rpc_h, (block.header.height, hh, i as u32));
+        }
     }
 
     /// Sum of log counts for transactions before `tx_index` in `block_number`.
@@ -269,6 +342,7 @@ impl ChainInteraction for NodeInner {
                     extra: [0u8; 32],
                 },
                 transactions: Vec::new(),
+                eth_signed_raw: Vec::new(),
             });
         }
         self.blocks
@@ -487,7 +561,7 @@ pub async fn producer_loop(node: NodeHandle) {
         let view = n.view;
         let ts = now_ms();
         let chain_id = n.chain_id;
-        let proposer = n.proposer;
+        let proposer = n.validators.expected_proposer(view);
         let gas_limit = n.gas_limit;
         match execute_and_build_block(
             chain_id,
@@ -500,34 +574,19 @@ pub async fn producer_loop(node: NodeHandle) {
             gas_limit,
             &mut n.state,
             txs,
+            eth_raws,
         ) {
             Ok(block) => {
                 let hh = header_hash(&block.header).unwrap_or([0u8; 32]);
                 n.head_hash = hh;
                 n.height = block.header.height;
+                match next_parent_qc_hash_after_commit(&block.header, hh) {
+                    Ok(next_qc) => n.parent_qc_hash = next_qc,
+                    Err(e) => eprintln!("fractal-node: parent_qc_hash advance failed: {e}"),
+                }
                 n.view = n.view.wrapping_add(1);
                 n.base_fee = next_base_fee(n.base_fee, block.header.gas_used, &n.fee_params);
-                // Mark txs as mined for RPC.
-                for (i, tx) in block.transactions.iter().enumerate() {
-                    let Ok(borsh_raw) = borsh::to_vec(tx) else {
-                        continue;
-                    };
-                    let ih = keccak256(&borsh_raw);
-                    let rpc_h = if let Some(Some(eth_raw)) = eth_raws.get(i) {
-                        let eh = keccak256(eth_raw);
-                        if eh != ih {
-                            n.eth_rpc_to_internal_tx_hash.insert(eh, ih);
-                            n.eth_internal_to_rpc_tx_hash.insert(ih, eh);
-                        }
-                        n.eth_signed_raw.insert(eh, eth_raw.clone());
-                        eh
-                    } else {
-                        ih
-                    };
-                    n.pending_txs.remove(&rpc_h);
-                    n.mined_txs
-                        .insert(rpc_h, (block.header.height, hh, i as u32));
-                }
+                n.sync_rpc_index_from_block(&block);
                 n.blocks.push(block);
             }
             Err(e) => eprintln!("fractal-node: block execution failed: {e}"),
@@ -536,7 +595,9 @@ pub async fn producer_loop(node: NodeHandle) {
 }
 
 pub async fn run_dev() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let node: NodeHandle = Arc::new(Mutex::new(NodeInner::devnet()));
+    let node: NodeHandle = Arc::new(Mutex::new(NodeInner::devnet_with_validators(
+        devnet_validator_set_from_env(),
+    )));
     let addr: std::net::SocketAddr = std::env::var("FRACTAL_RPC_ADDR")
         .unwrap_or_else(|_| "127.0.0.1:8545".into())
         .parse()?;
@@ -569,16 +630,23 @@ pub async fn run_dev() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     Ok(())
 }
 
-/// Follower: JSON-RPC + sync from `FRACTAL_BOOTSTRAP` (multiaddr with `/p2p/<PeerId>`).
+/// Follower: JSON-RPC + sync from `FRACTAL_BOOTSTRAP` (comma-separated multiaddrs, same `/p2p/<PeerId>`).
 pub async fn run_follower() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let bootstrap: Multiaddr = std::env::var("FRACTAL_BOOTSTRAP")?.parse()?;
-    let node: NodeHandle = Arc::new(Mutex::new(NodeInner::devnet()));
+    let raw = std::env::var("FRACTAL_BOOTSTRAP")?;
+    let bootstraps = crate::p2p::parse_fractal_bootstraps(&raw)?;
+    eprintln!(
+        "fractal-node follower: {} bootstrap multiaddr(s)",
+        bootstraps.len()
+    );
+    let node: NodeHandle = Arc::new(Mutex::new(NodeInner::devnet_with_validators(
+        devnet_validator_set_from_env(),
+    )));
     let addr: std::net::SocketAddr = std::env::var("FRACTAL_RPC_ADDR")
         .unwrap_or_else(|_| "127.0.0.1:8546".into())
         .parse()?;
     let (handle, bound) = fractal_rpc::serve_http(addr, node.clone()).await?;
     eprintln!("fractal-node follower json-rpc at http://{bound}");
-    tokio::spawn(p2p::follower_network_task(node, bootstrap));
+    tokio::spawn(p2p::follower_network_task(node, bootstraps));
     tokio::signal::ctrl_c().await?;
     handle.stop()?;
     Ok(())

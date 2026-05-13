@@ -340,6 +340,25 @@ pub mod builtins {
             (VERIFIER_AGENT_V1_ID, "tpl:verifier-agent-v1"),
         ]
     }
+
+    /// Stable `(name, description)` for UI / `policy dump-builtins` (matches template constructors).
+    pub fn meta(id: TemplateId) -> Option<(&'static str, &'static str)> {
+        match id {
+            RESEARCH_AGENT_V1_ID => Some((
+                "tpl:research-agent-v1",
+                "Browsing + LLM synthesis (Phase 1)",
+            )),
+            CODING_AGENT_V1_ID => Some((
+                "tpl:coding-agent-v1",
+                "LLM + test runner + file storage (Phase 1)",
+            )),
+            VERIFIER_AGENT_V1_ID => Some((
+                "tpl:verifier-agent-v1",
+                "Independent verification: file read + test + LLM (Phase 1)",
+            )),
+            _ => None,
+        }
+    }
 }
 
 #[cfg(test)]

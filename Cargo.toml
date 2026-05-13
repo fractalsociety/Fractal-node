@@ -16,6 +16,7 @@ members = [
     "crates/sdk-rust",
     "crates/mvp-backend",
     "crates/faucet",
+    "crates/indexer-stub",
 ]
 
 [workspace.package]

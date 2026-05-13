@@ -1471,6 +1471,14 @@ dependencies = [
 [[package]]
 name = "fractal-cli"
 version = "0.1.0"
+dependencies = [
+ "borsh",
+ "ed25519-dalek",
+ "fractal-wallet",
+ "hex",
+ "rand 0.8.6",
+ "serde_json",
+]
 
 [[package]]
 name = "fractal-consensus"
@@ -1544,6 +1552,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "fractal-indexer-stub"
+version = "0.1.0"
+dependencies = [
+ "serde_json",
+ "ureq",
+]
+
+[[package]]
 name = "fractal-mempool"
 version = "0.1.0"
 dependencies = [
@@ -1559,6 +1575,7 @@ dependencies = [
  "fractal-core",
  "fractal-sdk",
  "hex",
+ "serde",
  "serde_json",
  "ureq",
 ]
@@ -1618,9 +1635,13 @@ dependencies = [
 name = "fractal-sdk"
 version = "0.1.0"
 dependencies = [
+ "blake3",
  "borsh",
+ "ed25519-dalek",
  "fractal-core",
  "fractal-crypto",
+ "fractal-wallet",
+ "rand 0.8.6",
 ]
 
 [[package]]

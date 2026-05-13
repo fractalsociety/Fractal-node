@@ -7,5 +7,7 @@
 .env
 .env.*
 contracts/node_modules/
+packages/**/node_modules/
+packages/**/dist/
 contracts/cache/
 contracts/artifacts/

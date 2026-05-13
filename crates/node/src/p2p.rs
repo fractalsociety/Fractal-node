@@ -124,12 +124,48 @@ fn peer_id_from_multiaddr(addr: &Multiaddr) -> Option<PeerId> {
     })
 }
 
-/// Dial `bootstrap` (must include `/p2p/<PeerId>`) and pull blocks until caught up with producer tip.
+/// Parse `FRACTAL_BOOTSTRAP`: comma-separated multiaddrs (whitespace trimmed), each with `/p2p/<PeerId>`.
+/// Every entry must use the **same** [`PeerId`] so the follower has a single logical producer.
+pub fn parse_fractal_bootstraps(s: &str) -> Result<Vec<Multiaddr>, String> {
+    let parts: Vec<&str> = s
+        .split(',')
+        .map(str::trim)
+        .filter(|p| !p.is_empty())
+        .collect();
+    if parts.is_empty() {
+        return Err("FRACTAL_BOOTSTRAP is empty".into());
+    }
+    let mut out = Vec::with_capacity(parts.len());
+    let mut peer: Option<PeerId> = None;
+    for p in parts {
+        let m: Multiaddr = p
+            .parse()
+            .map_err(|e: libp2p::multiaddr::Error| e.to_string())?;
+        let pid = peer_id_from_multiaddr(&m)
+            .ok_or_else(|| format!("FRACTAL_BOOTSTRAP entry has no /p2p/: {m}"))?;
+        match peer {
+            None => peer = Some(pid),
+            Some(ep) if ep != pid => {
+                return Err(format!(
+                    "FRACTAL_BOOTSTRAP: mismatched PeerId {pid} vs expected {ep} ({m})"
+                ));
+            }
+            _ => {}
+        }
+        out.push(m);
+    }
+    Ok(out)
+}
+
+/// Dial each bootstrap multiaddr (same [`PeerId`]) and pull blocks until caught up with producer tip.
 pub async fn follower_network_task(
     node: NodeHandle,
-    bootstrap: Multiaddr,
+    bootstraps: Vec<Multiaddr>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let producer_peer = peer_id_from_multiaddr(&bootstrap)
+    if bootstraps.is_empty() {
+        return Err("bootstraps is empty".into());
+    }
+    let producer_peer = peer_id_from_multiaddr(&bootstraps[0])
         .ok_or("FRACTAL_BOOTSTRAP multiaddr must include /p2p/<PeerId>")?;
 
     let mut swarm: Swarm<NodeBehaviour> = SwarmBuilder::with_new_identity()
@@ -146,7 +182,9 @@ pub async fn follower_network_task(
         })?
         .build();
 
-    swarm.dial(bootstrap.clone())?;
+    for b in &bootstraps {
+        swarm.dial(b.clone())?;
+    }
 
     let mut poll = tokio::time::interval(Duration::from_millis(600));
     let mut connected = false;
@@ -226,5 +264,40 @@ pub async fn follower_network_task(
                 swarm.behaviour_mut().sync.send_request(&producer_peer, SyncRequest::GetTip);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod bootstrap_parse_tests {
+    use super::*;
+
+    #[test]
+    fn parse_fractal_bootstraps_accepts_comma_separated_same_peer() {
+        let id = PeerId::random();
+        let a: Multiaddr = format!("/ip4/127.0.0.1/tcp/10001/p2p/{id}")
+            .parse()
+            .unwrap();
+        let b: Multiaddr = format!("/ip4/127.0.0.1/tcp/10002/p2p/{id}")
+            .parse()
+            .unwrap();
+        let s = format!("{a}, {b}");
+        let v = parse_fractal_bootstraps(&s).unwrap();
+        assert_eq!(v.len(), 2);
+        assert_eq!(v[0], a);
+        assert_eq!(v[1], b);
+    }
+
+    #[test]
+    fn parse_fractal_bootstraps_rejects_mismatched_peer() {
+        let id1 = PeerId::random();
+        let id2 = PeerId::random();
+        let a: Multiaddr = format!("/ip4/127.0.0.1/tcp/10001/p2p/{id1}")
+            .parse()
+            .unwrap();
+        let b: Multiaddr = format!("/ip4/127.0.0.1/tcp/10002/p2p/{id2}")
+            .parse()
+            .unwrap();
+        let s = format!("{a},{b}");
+        assert!(parse_fractal_bootstraps(&s).is_err());
     }
 }

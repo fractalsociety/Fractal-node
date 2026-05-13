@@ -53,6 +53,8 @@ pub struct State {
     pub evm_tx_logs: BTreeMap<fractal_crypto::Hash256, Vec<EvmLog>>,
     /// Receipt `status`: `true` = `0x1` (success). Only written for successful `EvmCall` / `EvmCreate`; absent defaults to success for legacy state.
     pub evm_tx_success: BTreeMap<fractal_crypto::Hash256, bool>,
+    /// W6-d: first signer to anchor a wallet `TaskReceipt` commitment (`docs/wallet.md` §9.2).
+    pub wallet_task_receipt_anchors: BTreeMap<fractal_crypto::Hash256, Address>,
 }
 
 impl Default for State {
@@ -75,6 +77,7 @@ impl Default for State {
             evm_tx_gas_used: BTreeMap::new(),
             evm_tx_logs: BTreeMap::new(),
             evm_tx_success: BTreeMap::new(),
+            wallet_task_receipt_anchors: BTreeMap::new(),
         }
     }
 }
@@ -389,6 +392,35 @@ impl State {
             }
             NativeCall::WithdrawRewards { validator: _ } => {
                 self.accounts.entry(signer).or_insert(Account { nonce: 0, balance: 0 }).balance += 0;
+                if bump_nonce {
+                    self.bump_nonce(signer);
+                }
+                Ok(())
+            }
+            NativeCall::WalletTaskReceiptAnchorV1 {
+                commitment,
+                receipt_witness,
+            } => {
+                if !receipt_witness.is_empty() {
+                    #[cfg(feature = "wallet")]
+                    {
+                        let tr = fractal_wallet::TaskReceipt::try_from_slice(receipt_witness)
+                            .map_err(|_| ExecError::InvalidShape)?;
+                        let c = crate::wallet_anchor::task_receipt_commitment(&tr)
+                            .map_err(|_| ExecError::InvalidShape)?;
+                        if c != *commitment {
+                            return Err(ExecError::WalletCommitmentMismatch);
+                        }
+                    }
+                    #[cfg(not(feature = "wallet"))]
+                    {
+                        return Err(ExecError::WalletFeatureDisabled);
+                    }
+                }
+                if self.wallet_task_receipt_anchors.contains_key(commitment) {
+                    return Err(ExecError::DuplicateWalletAnchor);
+                }
+                self.wallet_task_receipt_anchors.insert(*commitment, signer);
                 if bump_nonce {
                     self.bump_nonce(signer);
                 }

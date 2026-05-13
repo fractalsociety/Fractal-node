@@ -19,6 +19,8 @@ pub const OP_UNSTAKE: u8 = 0x0a;
 pub const OP_SLASH: u8 = 0x0b;
 pub const OP_DELEGATE: u8 = 0x0c;
 pub const OP_WITHDRAW_REWARDS: u8 = 0x0d;
+/// W6-d: anchor `task_receipt_commitment` on-chain (`docs/wallet.md` §9.2, `wallet_anchor`).
+pub const OP_WALLET_TASK_RECEIPT_ANCHOR_V1: u8 = 0x0e;
 
 #[derive(BorshSerialize, BorshDeserialize, Clone, Debug, PartialEq, Eq)]
 pub struct OnChainTaskReceipt {
