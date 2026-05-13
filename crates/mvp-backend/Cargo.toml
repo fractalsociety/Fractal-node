@@ -5,6 +5,10 @@ edition.workspace = true
 license.workspace = true
 description = "PRD M5 stub: submit SETTLE_BATCH + CLAIM_PAYOUT via JSON-RPC (borsh native txs)"
 
+[lib]
+name = "fractal_mvp_backend"
+path = "src/lib.rs"
+
 [[bin]]
 name = "fractal-mvp-bridge"
 path = "src/main.rs"
@@ -14,5 +18,6 @@ borsh.workspace = true
 fractal-core = { path = "../core" }
 fractal-sdk = { path = "../sdk-rust" }
 hex.workspace = true
+serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 ureq = { version = "2.10", default-features = false, features = ["json"] }

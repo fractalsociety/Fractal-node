@@ -54,6 +54,7 @@ fn native_base_gas(call: &NativeCall) -> u64 {
         NativeCall::Slash { .. } => 10_000,
         NativeCall::Delegate { .. } => 8_000,
         NativeCall::WithdrawRewards { .. } => 8_000,
+        NativeCall::WalletTaskReceiptAnchorV1 { .. } => 6_000,
         NativeCall::NoOp => 100,
     }
 }
@@ -63,7 +64,7 @@ pub fn is_native_precompile_address(addr: &Address) -> bool {
     addr[0] == 0xfc && addr[1] >= OP_RANGE.0 && addr[1] <= OP_RANGE.1
 }
 
-const OP_RANGE: (u8, u8) = (0x01, 0x0d);
+const OP_RANGE: (u8, u8) = (0x01, 0x0e);
 
 pub fn native_opcode_from_precompile_address(addr: &Address) -> Option<u8> {
     if addr[0] != 0xfc {

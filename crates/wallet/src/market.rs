@@ -422,6 +422,46 @@ mod tests {
     use ed25519_dalek::SigningKey;
     use rand::rngs::OsRng;
 
+    /// Golden `borsh(QuoteBody)` for `tools/provider-http-sample` (must match Python `borsh_quote_body`).
+    #[test]
+    fn quote_body_borsh_golden_for_provider_sample() {
+        let body = QuoteBody {
+            quote_id: [0x11u8; 32],
+            intent_id: [0xaau8; 32],
+            provider_id: [0x22u8; 32],
+            price: 1u128,
+            expiry_ms: 9_999_999_999_999u64,
+        };
+        let v = borsh::to_vec(&body).unwrap();
+        let hex = "1111111111111111111111111111111111111111111111111111111111111111\
+                   aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\
+                   2222222222222222222222222222222222222222222222222222222222222222\
+                   01000000000000000000000000000000ff9f724e18090000";
+        let hex: String = hex.chars().filter(|c| !c.is_whitespace()).collect();
+        let expected: Vec<u8> = (0..hex.len())
+            .step_by(2)
+            .map(|i| u8::from_str_radix(&hex[i..i + 2], 16).unwrap())
+            .collect();
+        assert_eq!(v, expected);
+    }
+
+    #[test]
+    fn quote_sign_deterministic_seed_round_trips_verify() {
+        let seed = [9u8; 32];
+        let sk = SigningKey::from_bytes(&seed);
+        let pk = sk.verifying_key().to_bytes();
+        let provider_id = provider_id_from_public_key(&pk);
+        let body = QuoteBody {
+            quote_id: [0x11u8; 32],
+            intent_id: [0xaau8; 32],
+            provider_id,
+            price: 1,
+            expiry_ms: 9_999_999_999_999,
+        };
+        let q = Quote::sign(body, &sk).unwrap();
+        q.verify(&pk).unwrap();
+    }
+
     fn sample_intent(tier: VerificationTier) -> (SigningKey, ToolIntent) {
         let mut rng = OsRng;
         let agent = SigningKey::generate(&mut rng);

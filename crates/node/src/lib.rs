@@ -569,16 +569,21 @@ pub async fn run_dev() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     Ok(())
 }
 
-/// Follower: JSON-RPC + sync from `FRACTAL_BOOTSTRAP` (multiaddr with `/p2p/<PeerId>`).
+/// Follower: JSON-RPC + sync from `FRACTAL_BOOTSTRAP` (comma-separated multiaddrs, same `/p2p/<PeerId>`).
 pub async fn run_follower() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let bootstrap: Multiaddr = std::env::var("FRACTAL_BOOTSTRAP")?.parse()?;
+    let raw = std::env::var("FRACTAL_BOOTSTRAP")?;
+    let bootstraps = crate::p2p::parse_fractal_bootstraps(&raw)?;
+    eprintln!(
+        "fractal-node follower: {} bootstrap multiaddr(s)",
+        bootstraps.len()
+    );
     let node: NodeHandle = Arc::new(Mutex::new(NodeInner::devnet()));
     let addr: std::net::SocketAddr = std::env::var("FRACTAL_RPC_ADDR")
         .unwrap_or_else(|_| "127.0.0.1:8546".into())
         .parse()?;
     let (handle, bound) = fractal_rpc::serve_http(addr, node.clone()).await?;
     eprintln!("fractal-node follower json-rpc at http://{bound}");
-    tokio::spawn(p2p::follower_network_task(node, bootstrap));
+    tokio::spawn(p2p::follower_network_task(node, bootstraps));
     tokio::signal::ctrl_c().await?;
     handle.stop()?;
     Ok(())

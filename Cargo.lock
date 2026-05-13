@@ -1552,6 +1552,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "fractal-indexer-stub"
+version = "0.1.0"
+dependencies = [
+ "serde_json",
+ "ureq",
+]
+
+[[package]]
 name = "fractal-mempool"
 version = "0.1.0"
 dependencies = [
@@ -1567,6 +1575,7 @@ dependencies = [
  "fractal-core",
  "fractal-sdk",
  "hex",
+ "serde",
  "serde_json",
  "ureq",
 ]

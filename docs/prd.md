@@ -944,7 +944,7 @@ Exit criteria: deploy a contract via Hardhat; call native precompiles from it; M
 ## M5: Bridge to Core MVP (Weeks 9-11)
 
 Deliverables:
-* Off-chain Core MVP backend submits real `SETTLE_BATCH` calls (stub binary: `cargo run -p fractal-mvp-backend --bin fractal-mvp-bridge`, see `crates/mvp-backend`)
+* Off-chain Core MVP backend submits real `SETTLE_BATCH` calls (stub binary: `cargo run -p fractal-mvp-backend --bin fractal-mvp-bridge`; optional `MVP_RECEIPTS_JSON` for a JSON receipt export — see `crates/mvp-backend/testdata/mvp_receipts_sample.json`; post-run logs include `eth_getBalance` for the claim agent)
 * Agents claim payouts via SDK (`fractal_sdk::m5` in `crates/sdk-rust`)
 * End-to-end: post job off-chain → settle batch on-chain → agent claims tFRAC → tFRAC appears in MetaMask
 
@@ -953,11 +953,11 @@ Exit criteria: ≥ 100 receipts flow from off-chain MVP to on-chain settlement t
 ## M6: Explorer, Faucet, Public Testnet (Weeks 10-12)
 
 Deliverables:
-* Block explorer (forked Blockscout or custom Next.js) — static dev explorer: `tools/explorer/` (`./scripts/serve-explorer.sh`), chain + recent blocks (row → tx hashes) + account (balance, nonce, `eth_getCode`) + tx lookup; `docs/devnet.md`
+* Block explorer (forked Blockscout or custom Next.js) — static dev explorer: `tools/explorer/` (`./scripts/serve-explorer.sh`), chain + recent blocks (row → tx hashes) + account (balance, nonce, `eth_getCode`) + tx lookup; **`docs/explorer.md`** (Ethereum vs internal tx hash, leader vs follower RPC); `docs/devnet.md`
 * Faucet with rate limiting — `fractal-faucet` (`crates/faucet`) + Docker service in `testnets/devnet/docker-compose.yml`
 * Public bootnodes (3 minimum) — template `testnets/devnet/bootnodes.example.txt` + `FRACTAL_BOOTSTRAP` (see `testnets/devnet/README.md`)
 * Documentation site — operator notes: `docs/devnet.md` (full product site TBD)
-* Discord + status page — out of repo (operational); noted in `docs/devnet.md`
+* Discord + status page — out of repo (operational); **`tools/status/`** + `./scripts/serve-status.sh` for a minimal JSON-RPC liveness stub; full public status TBD
 
 Exit criteria: external developer can connect MetaMask, get tFRAC, deploy a contract, call native precompiles, and see everything in the explorer — without team help.
 

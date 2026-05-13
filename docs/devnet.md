@@ -16,7 +16,12 @@ This page ties together **PRD §18 M6** pieces in-repo (anchored on **`docs/prd.
 ## Explorer
 
 - Static UI under `tools/explorer` — chain summary, recent blocks (click a row for tx hashes), account (balance, nonce, code) + tx lookup (`tools/explorer/README.md`).
+- **Semantics:** `docs/explorer.md` (tx hash identity, leader vs follower).
 - From repo root: **`./scripts/serve-explorer.sh`** (optional **`EXPLORER_PORT`**).
+
+## RPC liveness (status stub)
+
+- **`tools/status/`** — `./scripts/serve-status.sh` (optional **`STATUS_PORT`**, default **3355**). Polls `eth_chainId`, `eth_blockNumber`, `web3_clientVersion` from a pasted RPC URL (CORS must allow the status page origin).
 
 ## Docker devnet
 

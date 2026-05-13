@@ -10,7 +10,7 @@ pub fn is_fractal_native_precompile(addr: &Address) -> bool {
     fractal_core::is_native_precompile_address(addr)
 }
 
-/// If `addr` encodes a native opcode (second byte `0x01..=0x0D`), returns opcode id.
+/// If `addr` encodes a native opcode (second byte `0x01..=0x0E`), returns opcode id.
 pub fn native_opcode(addr: &Address) -> Option<u8> {
     fractal_core::native_opcode_from_precompile_address(addr)
 }

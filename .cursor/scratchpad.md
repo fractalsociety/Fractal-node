@@ -30,7 +30,8 @@ FractalChain L1 testnet (PRD v0.1) is an AI-agent-first chain: HotStuff-2 consen
    - **W6-a** — `fractal-wallet-cli` + §15.2 builtins in `fractal-wallet` — done.
    - **W6-b** — `tools/wallet-web/` + `policy dump-builtins` + `serve-wallet-web.sh` — done (Executor 2026-05-12).
    - **W6-c** — `fractal_sdk::provider` + `packages/fractal-provider-ts/` + `provider_id_from_public_key` — done (Executor 2026-05-12).
-   - **W6-d** (next / backlog) — Native opcode wiring beyond `wallet_anchor`, full indexer daemon, provider HTTP server sample.
+   - **W6-d** — `NativeCall::WalletTaskReceiptAnchorV1` + `fractal-indexer-stub` + `tools/provider-http-sample` — done (Executor 2026-05-12).
+   - **W6-e** (Executor slice, 2026-05-12): comma-separated **`FRACTAL_BOOTSTRAP`** (same `/p2p`); indexer **`eth_getBlockByNumber`** + **`INDEXER_JSON_LOG`**; provider sample **optional Ed25519** quotes (`requirements-signing.txt`); `dump_quote_body_borsh` example + borsh golden test — *remaining for “production” path:* subgraph-class indexer, reputation derivation, follower signed-tx RPC parity (see M4 backlog).
 
 ## Project Status Board
 
@@ -38,7 +39,7 @@ FractalChain L1 testnet (PRD v0.1) is an AI-agent-first chain: HotStuff-2 consen
 - [x] M1-a: Workspace + crate skeleton + `node` binary stub
 - [x] M1-b–d: `crypto` + `core` state machine + 10k-tx determinism test (this batch)
 - [x] Wallet W1–W5: `crates/wallet` — 12 `cargo test -p fractal-wallet` tests; `fractal-core` optional `--features wallet` anchor
-- [x] M2: PRD §18 — `consensus` + `mempool` + `rpc` + `network` (libp2p 0.56 QUIC + `/fractalchain/sync/1.0.0` req-resp) + `node` (producer + follower `FRACTAL_BOOTSTRAP`, `apply_synced_block` replay verify); integration test `crates/node/tests/quic_sync.rs`
+- [x] M2: PRD §18 — `consensus` + `mempool` + `rpc` + `network` (libp2p 0.56 QUIC + `/fractalchain/sync/1.0.0` req-resp) + `node` (producer + follower `FRACTAL_BOOTSTRAP` comma-separated same-PeerId, `apply_synced_block` replay verify); integration test `crates/node/tests/quic_sync.rs`
 - [x] M3 (initial slice): native opcodes + subtrie `State`, intrinsic gas, Merkle settle/claim, `m3_settle_claim` test, `fractal-evm` precompile scaffold; see Current Status for gaps vs full PRD §18 M3.
 - [ ] M4-a (ready for Planner sign-off): add `TxBody::EvmCall` + `apply_block_with_evm` (core `EvmEngine` trait) + `fractal-evm` `revm` dependency + `RevmEngine` stub that routes `0xfc..` precompile calls into `State::apply_native_syscall`; add test `crates/evm/tests/m4_revm_precompile_dispatch.rs`. Manual `cargo test -q` on user machine: ✅.
 - [x] M6-a (Executor slice, 2026-05-12): **PRD M6** — CORS; `fractal-faucet` + `DEVNET_FAUCET_TREASURY`; initial `tools/explorer`; `testnets/devnet` compose + `bootnodes.example.txt`; `docs/devnet.md`.
@@ -47,9 +48,11 @@ FractalChain L1 testnet (PRD v0.1) is an AI-agent-first chain: HotStuff-2 consen
 - [x] W6-a: `fractal-wallet-cli` + §15.2 builtins + `crates/cli/tests/wallet_cli.rs`
 - [x] W6-b (Executor slice, 2026-05-12): **`tools/wallet-web/`** static reference UI + **`policy dump-builtins`** + **`scripts/serve-wallet-web.sh`** + `builtins.json` sync test. **Planner:** browser open stub vs `README`.
 - [x] W6-c (Executor slice, 2026-05-12): **`fractal_sdk::provider`** (`crates/sdk-rust`) re-exports `fractal_wallet` market types + **`IndexerCursor`** / **`IntentPollFilter`**; **`packages/fractal-provider-ts/`** wire types (`npm run check`); **`provider_id_from_public_key`** on `fractal-wallet`; tests `crates/sdk-rust/tests/provider_sdk.rs`. **Planner:** `cargo test -p fractal-sdk`.
-- [ ] W6-d (backlog): wallet native opcodes beyond anchor; long-running indexer binary; sample provider HTTP server.
-- [ ] M6-d (next): Blockscout-style explorer / richer block UI (internal vs Ethereum tx hash docs), or ≥3 real bootnodes + status page.
-- [ ] M5-a (Executor slice, 2026-05-12): **PRD `docs/prd.md` M5** (not `docs/wallet.md`) — `fractal-mvp-bridge` + `fractal_sdk::m5` + devnet Hardhat #1; smoke OK. **Next:** wire real off-chain receipts, post-bridge `eth_getBalance` check, CI `MVP_RECEIPT_COUNT=100` vs `fractal-node`.
+- [x] W6-d (Executor slice, 2026-05-12): **`NativeCall::WalletTaskReceiptAnchorV1`** (`0x0e`) + **`State.wallet_task_receipt_anchors`**; tests `crates/core/tests/w6_d_wallet_task_receipt_anchor.rs`; **`fractal-indexer-stub`** binary; **`tools/provider-http-sample/`** + **`scripts/run-provider-http-sample.sh`**. **Planner:** `cargo test -p fractal-core` and `cargo test -p fractal-core --features wallet`.
+- [x] W6-e (Executor slice, 2026-05-12): **`FRACTAL_BOOTSTRAP`** comma-separated same-PeerId multiaddrs (`parse_fractal_bootstraps`); **`fractal-indexer-stub`** `eth_getBlockByNumber` + **`INDEXER_JSON_LOG`**. **`tools/provider-http-sample`**: optional **`PROVIDER_ED25519_SEED_HEX`** signed quotes (PyNaCl + blake3); **`dump_quote_body_borsh`** example; wallet borsh golden + deterministic quote tests. **Planner:** `cargo test -p fractal-node -p fractal-wallet`; optional `pip install -r tools/provider-http-sample/requirements-signing.txt` + manual `curl` vs server.
+- [ ] Wallet infra backlog (post–W6-e): subgraph-class indexer, reputation indexer, follower replication of `eth_signed_raw` / RPC hash maps (M4 polish).
+- [x] M6-d (Executor slice, 2026-05-12): **`docs/explorer.md`** (tx hash semantics, leader vs follower); **`tools/status/`** + **`scripts/serve-status.sh`** (RPC liveness stub); PRD **`docs/prd.md`** M6 bullets; cross-links in **`docs/devnet.md`**, **`tools/explorer`**, **`testnets/devnet/README.md`**, **`bootnodes.example.txt`** (single-bootstrap note). Blockscout-class explorer remains future work.
+- [ ] M5-a (Executor slice, 2026-05-12): **PRD `docs/prd.md` M5** — `fractal-mvp-bridge` + `fractal_sdk::m5` + devnet Hardhat #1; smoke OK. **Done this slice:** `MVP_RECEIPTS_JSON` off-chain receipt file + `build_settle_then_claim_txs_from_payload` + `eth_getBalance` before/after logging. **Next:** CI `MVP_RECEIPT_COUNT=100` vs live `fractal-node`; optional bridge dry-run in compose.
 - [ ] M4-b (ready for Planner sign-off): expand JSON-RPC toward MetaMask/ethers compatibility: add `eth_chainId`, `net_version`, `eth_getTransactionCount`. User confirmed via manual run.
 - [ ] M4-c (in progress): expand JSON-RPC: add `web3_clientVersion`, `eth_getBlockByNumber`, `eth_getBlockByHash` (minimal block objects).
 - [ ] M4-d (in progress): expand JSON-RPC: add `eth_getTransactionByHash`, `eth_getTransactionReceipt` with basic tx/receipt tracking (pending + mined).
@@ -86,7 +89,9 @@ FractalChain L1 testnet (PRD v0.1) is an AI-agent-first chain: HotStuff-2 consen
 - **Chain M4 (2026-05-12, Executor):** `eth_getTransactionByHash` returns full EIP-1559 JSON from stored raw bytes when present; `eth_internal_to_rpc_tx_hash` so `eth_getLogs` uses the Ethereum tx hash in `transactionHash`; receipt logs already keyed via `internal_tx_hash_for_state`. Hardhat section added to `docs/solidity-dev.md`.
 - **Chain M4 (2026-05-12, Executor):** Deploy script validates precompile-from-contract; `fractal-evm` resets caller nonce after revm `transact` for top-level `CALL` so `State::bump_nonce` remains the single increment. Full `cargo test`: ✅.
 
-- **Chain M5 (2026-05-12, Executor / PRD `docs/prd.md` only):** `fractal_core::HARDHAT_DEFAULT_SIGNER_1` + devnet account row; `fractal_sdk::m5` builders; binary `fractal-mvp-bridge` (`crates/mvp-backend`) posts borsh `SETTLE_BATCH` + `CLAIM_PAYOUT` via `eth_sendRawTransaction`; PRD M5 deliverables bullet updated. Smoke: `MVP_RECEIPT_COUNT=3` vs local node ✅.
+- **Chain M5 (2026-05-12, Executor / PRD `docs/prd.md` only):** `fractal_core::HARDHAT_DEFAULT_SIGNER_1` + devnet account row; `fractal_sdk::m5` builders; binary `fractal-mvp-bridge` (`crates/mvp-backend`) posts borsh `SETTLE_BATCH` + `CLAIM_PAYOUT` via `eth_sendRawTransaction`; PRD M5 deliverables bullet updated. Smoke: `MVP_RECEIPT_COUNT=3` vs local node ✅. **M5-a extension:** `MVP_RECEIPTS_JSON` + `testdata/mvp_receipts_sample.json`, `build_settle_then_claim_txs_from_payload`, `eth_getBalance` before/after in bridge logs.
+
+- **Chain M6-d (2026-05-12, Executor / PRD `docs/prd.md`):** `docs/explorer.md`; `tools/status` + `serve-status.sh`; explorer UI blurb + README; devnet bootnode README clarification (single `FRACTAL_BOOTSTRAP` today).
 
 - **Chain M6 (2026-05-12, Executor / PRD `docs/prd.md`):** CORS + `fractal-faucet` + `testnets/devnet` compose + `bootnodes.example.txt` + `docs/devnet.md`; explorer v2 (chain summary, **10-block** table, **account** + **tx** JSON) + **`scripts/serve-explorer.sh`**.
 - **Chain M6-c (2026-05-12, Executor):** Explorer block row → **block detail** (`eth_getBlockByNumber` metadata + tx hash buttons); tx buttons fill hash + `lookupTx`; account lookup adds **`eth_getCode`** (`codeByteLength`, `isContract`).
@@ -96,6 +101,8 @@ FractalChain L1 testnet (PRD v0.1) is an AI-agent-first chain: HotStuff-2 consen
 - **Wallet W6-a:** `fractal-wallet-cli` + §15.2 builtins in `fractal-wallet` (see `crates/cli`, `crates/wallet/src/policy.rs`).
 - **Wallet W6-b (2026-05-12, Executor):** `tools/wallet-web/` loads committed `builtins.json`; `fractal-wallet-cli policy dump-builtins` regenerates it; `wallet_web_builtins_json_matches_cli_dump` test locks sync; `./scripts/serve-wallet-web.sh` (port `WALLET_WEB_PORT`, default 3344). `docs/wallet.md` §25.1 bullet updated.
 
+- **Wallet W6-e (2026-05-12, Executor):** Multi-bootstrap `FRACTAL_BOOTSTRAP`; indexer block metadata + `INDEXER_JSON_LOG`; provider HTTP sample optional signed quotes + `dump_quote_body_borsh`; `cargo test -p fractal-node -p fractal-wallet -p fractal-indexer-stub`: ✅.
+
 - **Chain M2:** remains as delivered earlier (QUIC sync, follower, `quic_sync` test).
 
 ## Executor's Feedback or Assistance Requests
@@ -103,11 +110,11 @@ FractalChain L1 testnet (PRD v0.1) is an AI-agent-first chain: HotStuff-2 consen
 - **BLS**: `fractal-crypto::bls` is a type-safe placeholder until M7 wiring; avoids `blst` native build in early CI.
 - **M4 slice (receipt status / revert RPC):** Implementation complete; `cargo test -q` passed locally. **Planner:** please cross-check behavior vs MetaMask/ethers expectations (error `data` as plain hex string) and confirm whether to mark the corresponding status-board item done.
 - **M4 Hardhat + deploy script:** Landed `contracts/` Hardhat package and `./scripts/deploy-fractal-contracts.sh`; fixed ethers `eth_getTransactionByHash` shape for EIP-1559. **Planner:** please run `./scripts/deploy-fractal-contracts.sh` with a live `fractal-node` and confirm M4-q/M4-r/M4-s sign-off.
-- **M6 slice (PRD `docs/prd.md`):** Devnet pack (faucet, compose, CORS) + **explorer v2** (blocks/account/tx) + `serve-explorer.sh`. **M6-c:** block drill-down + `eth_getCode` on account. **Planner:** browser smoke on `tools/explorer` + faucet; Docker compose optional; Discord/status remain ops-owned.
+- **M6 slice (PRD `docs/prd.md`):** Devnet pack + explorer v2 + **`docs/explorer.md`** + **`tools/status/`** + `serve-status.sh`. **Planner:** browser smoke explorer + status stub vs live node; Blockscout remains out of scope for this slice.
 - **M5 bridge (PRD `docs/prd.md`, not `docs/wallet.md`):** First slice landed (`fractal-mvp-bridge`, `fractal_sdk::m5`). **Planner:** run `MVP_RECEIPT_COUNT=100` against devnet and optionally `eth_getBalance` on agent to confirm M5 exit path numerically.
 - **Next PRD milestone after M4 closure:** **M5** (Bridge to Core MVP) — off-chain backend submits `SETTLE_BATCH`, SDK claims, E2E receipts → settlement → MetaMask tFRAC. **Remaining M4 polish (Executor backlog):** MetaMask “tFRAC balance” doc / import for devnet prefund key; follower replication of `eth_signed_raw` / RPC hash maps if explorers must match leader on synced nodes.
 - **Next chain milestone:** PRD §18 **M4** — `revm`, full JSON-RPC EVM surface, MetaMask path, real precompile dispatch from EVM execution.
-- **Wallet W6**: **W6-a–c** landed (CLI, web stub, provider SDK types + `fractal_sdk::provider`). **W6-d** backlog: native opcodes beyond anchor, indexer service, sample provider HTTP.
+- **Wallet W6 (2026-05-12):** **W6-a–e** landed for reference operator tooling (CLI, web stub, provider SDK, on-chain receipt anchor, indexer stub, HTTP sample, multi-bootstrap env). **Remaining:** subgraph/reputation indexers and M4 follower RPC parity (see status board).
 - **Wallet W6-a (Executor, 2026-05-12):** First W6 slice — built-in §15.2 policy templates + `fractal-wallet-cli`. **Planner:** run `cargo test -p fractal-cli -p fractal-wallet` if not already signed off.
 
 ## Lessons
@@ -125,4 +132,5 @@ FractalChain L1 testnet (PRD v0.1) is an AI-agent-first chain: HotStuff-2 consen
 - **jsonrpsee 0.24 + `tower-http` CORS:** `ServerBuilder::set_http_middleware` expects **`tower` 0.4** `ServiceBuilder` (jsonrpsee’s dependency). Using workspace `tower` 0.5 causes a type mismatch.
 - **`borsh::to_vec` (1.5):** free function with `T: BorshSerialize` bound on the value; the trait does **not** need to be in scope at the call site. Only `BorshDeserialize` must be imported (it provides `try_from_slice`).
 - **`PolicyTemplate` has no `allowed_classes` field:** §15.2's "allowed: X, Y" list is realized at capability-mint time as `Scope.tool_class_mask`, not as a caveat. Use `policy_builtins::suggested_tool_class_mask(template_id)` to materialize the mask without a schema change.
+- **`docs/explorer.md`:** documents Ethereum `keccak(raw)` vs internal `keccak(borsh)` tx hashes and leader vs follower JSON-RPC — link from `tools/explorer` and `docs/devnet.md`.
 - **`fractal_sdk::provider`:** depends on `fractal-wallet`; re-exports market + `provider_id_from_public_key` for provider operators (`crates/sdk-rust/tests/provider_sdk.rs`).

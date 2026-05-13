@@ -5,8 +5,11 @@
 //! Usage:
 //! ```text
 //! FRACTAL_RPC_URL=http://127.0.0.1:8545 cargo run -p fractal-mvp-backend --bin fractal-mvp-bridge
-//! MVP_RECEIPT_COUNT=100   # optional; default 100 for PRD exit scale
+//! MVP_RECEIPT_COUNT=100   # optional; default 100 for PRD exit scale (synthetic receipts)
+//! MVP_RECEIPTS_JSON=/path/to/export.json   # optional; real off-chain receipts (see testdata/mvp_receipts_sample.json)
 //! ```
+
+use fractal_mvp_backend::receipt_json;
 
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -48,6 +51,17 @@ fn get_nonce(rpc_url: &str, who: &Address) -> Result<u64, String> {
     u64::from_str_radix(hex, 16).map_err(|e| format!("parse nonce: {e}"))
 }
 
+fn eth_get_balance(rpc_url: &str, who: &Address) -> Result<String, String> {
+    let v = rpc(
+        rpc_url,
+        "eth_getBalance",
+        serde_json::json!([addr_hex(who), "latest"]),
+    )?;
+    v.as_str()
+        .map(std::string::ToString::to_string)
+        .ok_or_else(|| "eth_getBalance: result not string".to_string())
+}
+
 fn send_borsh_tx(rpc_url: &str, tx: &Transaction) -> Result<String, String> {
     let raw = borsh::to_vec(tx).map_err(|e| format!("borsh: {e}"))?;
     let hex = format!("0x{}", hex::encode(raw));
@@ -76,47 +90,89 @@ fn main() {
 
 fn run() -> Result<(), String> {
     let rpc_url = std::env::var("FRACTAL_RPC_URL").unwrap_or_else(|_| "http://127.0.0.1:8545".into());
-    let count: u32 = std::env::var("MVP_RECEIPT_COUNT")
-        .ok()
-        .and_then(|s| s.parse().ok())
-        .unwrap_or(100);
-    if count == 0 {
-        return Err("MVP_RECEIPT_COUNT must be > 0".into());
-    }
 
-    let operator = HARDHAT_DEFAULT_SIGNER_0;
-    let agent = HARDHAT_DEFAULT_SIGNER_1;
+    let (settle, claims, operator, claim_agent, total_payout, receipt_count, batch_hex, mode) =
+        if let Ok(path) = std::env::var("MVP_RECEIPTS_JSON") {
+            let (payload, claim_agent) = receipt_json::load_settle_payload_from_json(&path)?;
+            let operator = payload.operator;
+            let total: u128 = payload.payout_entries.iter().map(|e| e.amount).sum();
+            let n = payload.receipts.len() as u32;
+            let batch_hex = format!("0x{}", hex::encode(payload.batch_id));
+            let op_nonce = get_nonce(&rpc_url, &operator)?;
+            let ag_nonce = get_nonce(&rpc_url, &claim_agent)?;
+            let (settle, claims) = fractal_sdk::m5::build_settle_then_claim_txs_from_payload(
+                payload,
+                op_nonce,
+                claim_agent,
+                ag_nonce,
+            )
+            .map_err(|e| format!("{e:?}"))?;
+            (
+                settle,
+                claims,
+                operator,
+                claim_agent,
+                total,
+                n,
+                batch_hex,
+                "json_receipts",
+            )
+        } else {
+            let count: u32 = std::env::var("MVP_RECEIPT_COUNT")
+                .ok()
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(100);
+            if count == 0 {
+                return Err("MVP_RECEIPT_COUNT must be > 0".into());
+            }
+            let operator = HARDHAT_DEFAULT_SIGNER_0;
+            let agent = HARDHAT_DEFAULT_SIGNER_1;
+            let ts = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map_err(|e| e.to_string())?
+                .as_secs();
+            let mut batch_id = [0u8; 32];
+            batch_id[0..8].copy_from_slice(&ts.to_be_bytes());
+            let op_nonce = get_nonce(&rpc_url, &operator)?;
+            let ag_nonce = get_nonce(&rpc_url, &agent)?;
+            let (settle, claims) = fractal_sdk::m5::build_settle_then_claim_txs(
+                operator,
+                op_nonce,
+                agent,
+                ag_nonce,
+                batch_id,
+                count,
+                1,
+                ts,
+            );
+            let total = count as u128;
+            let batch_hex = format!("0x{}", hex::encode(batch_id));
+            (
+                settle,
+                claims,
+                operator,
+                agent,
+                total,
+                count,
+                batch_hex,
+                "synthetic",
+            )
+        };
 
-    let ts = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_err(|e| e.to_string())?
-        .as_secs();
-    let mut batch_id = [0u8; 32];
-    batch_id[0..8].copy_from_slice(&ts.to_be_bytes());
-
-    let op_nonce = get_nonce(&rpc_url, &operator)?;
-    let ag_nonce = get_nonce(&rpc_url, &agent)?;
-
-    let (settle, claims) = fractal_sdk::m5::build_settle_then_claim_txs(
-        operator,
-        op_nonce,
-        agent,
-        ag_nonce,
-        batch_id,
-        count,
-        1,
-        ts,
-    );
+    let balance_before = eth_get_balance(&rpc_url, &claim_agent).ok();
 
     eprintln!(
         "{}",
         serde_json::json!({
             "step": "mvp_bridge_start",
             "rpcUrl": rpc_url,
+            "mode": mode,
             "operator": addr_hex(&operator),
-            "agent": addr_hex(&agent),
-            "receiptCount": count,
-            "batchId": format!("0x{}", hex::encode(batch_id)),
+            "claimAgent": addr_hex(&claim_agent),
+            "receiptCount": receipt_count,
+            "batchId": batch_hex,
+            "totalPayoutWei": total_payout.to_string(),
+            "claimAgentBalanceBefore": balance_before,
         })
     );
 
@@ -141,12 +197,17 @@ fn run() -> Result<(), String> {
         }
     }
 
+    let balance_after = eth_get_balance(&rpc_url, &claim_agent)?;
+
     eprintln!(
         "{}",
         serde_json::json!({
             "step": "mvp_bridge_done",
             "settleTxHash": h0,
             "claimCount": claims.len(),
+            "totalPayoutWei": total_payout.to_string(),
+            "claimAgentBalanceAfter": balance_after,
+            "eth_getBalanceNote": "native tFRAC claims credit the same 20-byte account key as Ethereum balance RPC",
         })
     );
     Ok(())

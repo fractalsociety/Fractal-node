@@ -2,6 +2,8 @@
 //!
 //! Re-exports wallet market types and adds small helpers for off-chain services.
 //! No HTTP client or chain RPC here — wire your own REST/gRPC using the types.
+//!
+//! **Indexer stub:** `cargo run -p fractal-indexer-stub` (`INDEXER_RPC_URL`, `INDEXER_POLL_MS`, optional `INDEXER_JSON_LOG=1`) polls `eth_blockNumber` and `eth_getBlockByNumber` for operators (`docs/wallet.md` W6-d / W6-e).
 
 pub use fractal_wallet::{
     market::{
