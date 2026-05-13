@@ -12,7 +12,8 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use borsh::BorshDeserialize;
 use fractal_consensus::{
     execute_and_build_block, expected_parent_qc_for_parent_header, genesis_parent_qc, hash_qc,
-    header_hash, next_parent_qc_hash_after_commit, ordered_tx_root, Block,
+    header_hash, next_parent_qc_hash_after_commit, ordered_tx_root, Block, FormedQc,
+    RecordVoteOutcome, Vote, VotePool,
 };
 use fractal_core::{Address, EvmEngine, State, Transaction};
 use fractal_crypto::hash::keccak256;
@@ -160,6 +161,10 @@ pub struct NodeInner {
     /// secret and no dev key available). Set from `FRACTAL_VALIDATOR_SECRET_HEX`
     /// with a deterministic dev fallback in `run_dev`/`run_follower`.
     pub validator_secret: Option<BlsSecretKey>,
+    /// HotStuff-2 vote pool (`docs/prd.md` §7.3 / M7-d-4): records each peer's
+    /// `Vote` after BLS verification and aggregates into a [`FormedQc`] once
+    /// `validators.quorum_threshold()` is met.
+    pub vote_pool: VotePool,
     pub state: State,
     pub mempool: Mempool,
     pub base_fee: u128,
@@ -234,6 +239,7 @@ impl NodeInner {
             validators,
             validator_index,
             validator_secret,
+            vote_pool: VotePool::new(),
             state,
             mempool: Mempool::default(),
             base_fee: 1,
@@ -253,6 +259,40 @@ impl NodeInner {
     #[must_use]
     pub fn is_my_turn(&self, view: u64) -> bool {
         self.validators.is_proposer_for_view(view, self.validator_index)
+    }
+
+    /// Build a [`Vote`] for the just-committed block at `(view, height, header_hash)`
+    /// using this node's `validator_secret`. Returns `None` if the node has no
+    /// signing key (e.g. read-only follower).
+    pub fn build_self_vote(
+        &self,
+        view: u64,
+        height: u64,
+        header_hash: fractal_crypto::Hash256,
+    ) -> Option<Vote> {
+        let sk = self.validator_secret.as_ref()?;
+        let body = fractal_consensus::VoteSignBody { view, height, header_hash };
+        Some(Vote::sign(body, self.validator_index as u32, sk))
+    }
+
+    /// Record `vote` into the local pool after BLS verification (`docs/prd.md`
+    /// §7.3 / M7-d-4). Thin wrapper over [`VotePool::record`] using this node's
+    /// active `validators`.
+    pub fn record_vote(&mut self, vote: Vote) -> RecordVoteOutcome {
+        self.vote_pool.record(vote, &self.validators)
+    }
+
+    /// Attempt to form a QC for `(view, block_height, header_hash)` from the
+    /// local vote pool. Returns `None` until `quorum_threshold` is reached.
+    /// Wrapper over [`VotePool::try_form_qc`].
+    pub fn try_form_qc(
+        &self,
+        view: u64,
+        block_height: u64,
+        header_hash: fractal_crypto::Hash256,
+    ) -> Option<FormedQc> {
+        self.vote_pool
+            .try_form_qc(view, block_height, header_hash, &self.validators)
     }
 
     /// Replay txs and check roots against a received block (follower verification).

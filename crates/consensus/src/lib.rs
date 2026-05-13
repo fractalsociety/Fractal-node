@@ -25,7 +25,9 @@ pub use qc::{
     singleton_qc_certifying, QuorumCertificate,
 };
 pub use validators::{ValidatorEntry, ValidatorId, ValidatorSet};
-pub use vote::{Vote, VoteError, VoteSignBody};
+pub use vote::{
+    verify_formed_qc, FormedQc, RecordVoteOutcome, Vote, VoteError, VotePool, VoteSignBody,
+};
 
 #[derive(Debug, Error)]
 pub enum BuildBlockError {
