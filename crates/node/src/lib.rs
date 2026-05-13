@@ -72,6 +72,23 @@ fn devnet_validator_set_from_env() -> ValidatorSet {
     }
 }
 
+/// Reads `FRACTAL_VALIDATOR_INDEX` (`docs/prd.md` §7 M7-c). Defaults to `0`;
+/// clamped into `[0, validators.len())` so a stale env var on a singleton
+/// devnet never silently disables block production.
+fn devnet_validator_index_from_env(validators: &ValidatorSet) -> usize {
+    let raw = std::env::var("FRACTAL_VALIDATOR_INDEX").unwrap_or_default();
+    let parsed: usize = raw.trim().parse().unwrap_or(0);
+    let n = validators.len().max(1);
+    if parsed >= n {
+        eprintln!(
+            "fractal-node: FRACTAL_VALIDATOR_INDEX={raw} ≥ validator_set_size={n}; clamping to 0"
+        );
+        0
+    } else {
+        parsed
+    }
+}
+
 pub struct NodeInner {
     pub chain_id: u64,
     pub height: u64,
@@ -80,6 +97,10 @@ pub struct NodeInner {
     pub parent_qc_hash: fractal_crypto::Hash256,
     /// Static validator set (`docs/prd.md` §7.2). Block leader = `validators.expected_proposer(view)`.
     pub validators: ValidatorSet,
+    /// This node's index inside `validators` (`docs/prd.md` §7 M7-c). `producer_loop`
+    /// only proposes when `validators.is_proposer_for_view(view, validator_index)`.
+    /// Defaults to `0`; set via `FRACTAL_VALIDATOR_INDEX` in `run_dev`/`run_follower`.
+    pub validator_index: usize,
     pub state: State,
     pub mempool: Mempool,
     pub base_fee: u128,
@@ -102,8 +123,16 @@ impl NodeInner {
         Self::devnet_with_validators(ValidatorSet::phase1_singleton())
     }
 
-    /// Devnet with an explicit validator set (e.g. `ValidatorSet::phase2_bft7_fixture()`).
+    /// Devnet with an explicit validator set + this node's `validator_index = 0`.
+    /// For multi-index tests, use [`devnet_with_validator_index`].
     pub fn devnet_with_validators(validators: ValidatorSet) -> Self {
+        Self::devnet_with_validator_index(validators, 0)
+    }
+
+    /// Devnet with an explicit validator set and this node's `validator_index`
+    /// (`docs/prd.md` §7 M7-c). The producer loop only proposes when
+    /// `validators.is_proposer_for_view(view, validator_index)`.
+    pub fn devnet_with_validator_index(validators: ValidatorSet, validator_index: usize) -> Self {
         let mut state = State::default();
         state.accounts.insert(
             HARDHAT_DEFAULT_SIGNER_0,
@@ -133,6 +162,7 @@ impl NodeInner {
             head_hash: genesis_parent_hash(),
             parent_qc_hash: hash_qc(&genesis_parent_qc()).expect("genesis_parent_qc borsh"),
             validators,
+            validator_index,
             state,
             mempool: Mempool::default(),
             base_fee: 1,
@@ -145,6 +175,13 @@ impl NodeInner {
             eth_rpc_to_internal_tx_hash: BTreeMap::new(),
             eth_internal_to_rpc_tx_hash: BTreeMap::new(),
         }
+    }
+
+    /// Whether this node should propose for `view` (`docs/prd.md` §7 M7-c).
+    /// In single-validator (Phase 1) setups, always `true` for `validator_index = 0`.
+    #[must_use]
+    pub fn is_my_turn(&self, view: u64) -> bool {
+        self.validators.is_proposer_for_view(view, self.validator_index)
     }
 
     /// Replay txs and check roots against a received block (follower verification).
@@ -545,58 +582,89 @@ fn now_ms() -> u64 {
         .as_millis() as u64
 }
 
-pub async fn producer_loop(node: NodeHandle) {
-    let mut ticker = tokio::time::interval(tokio::time::Duration::from_millis(500));
-    loop {
-        ticker.tick().await;
-        let mut n = node.lock().await;
-        let base = n.base_fee;
-        let gas_limit_cfg = n.gas_limit;
-        let pooled = n.mempool.drain_ready_gas_budget(gas_limit_cfg, base);
-        let eth_raws: Vec<Option<Vec<u8>>> = pooled.iter().map(|p| p.eth_signed_raw.clone()).collect();
-        let txs: Vec<Transaction> = pooled.into_iter().map(|p| p.tx).collect();
-        let parent = n.head_hash;
-        let qc = n.parent_qc_hash;
-        let height = n.height + 1;
-        let view = n.view;
-        let ts = now_ms();
-        let chain_id = n.chain_id;
-        let proposer = n.validators.expected_proposer(view);
-        let gas_limit = n.gas_limit;
-        match execute_and_build_block(
-            chain_id,
-            height,
-            view,
-            parent,
-            qc,
-            proposer,
-            ts,
-            gas_limit,
-            &mut n.state,
-            txs,
-            eth_raws,
-        ) {
-            Ok(block) => {
-                let hh = header_hash(&block.header).unwrap_or([0u8; 32]);
-                n.head_hash = hh;
-                n.height = block.header.height;
-                match next_parent_qc_hash_after_commit(&block.header, hh) {
-                    Ok(next_qc) => n.parent_qc_hash = next_qc,
-                    Err(e) => eprintln!("fractal-node: parent_qc_hash advance failed: {e}"),
-                }
-                n.view = n.view.wrapping_add(1);
-                n.base_fee = next_base_fee(n.base_fee, block.header.gas_used, &n.fee_params);
-                n.sync_rpc_index_from_block(&block);
-                n.blocks.push(block);
+/// Outcome of one produce-tick (`docs/prd.md` §7 M7-c).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProduceTickOutcome {
+    /// Block produced; height advanced.
+    Produced(u64),
+    /// Skipped because `validators.is_proposer_for_view(view, validator_index)` is false.
+    NotMyTurn,
+    /// Tick reached the producer but `apply_block_with_evm` failed (already logged).
+    BuildFailed,
+}
+
+/// Build one block from the mempool if this node is the current view's leader.
+/// Extracted from `producer_loop` so tests can drive single ticks deterministically.
+pub async fn try_produce_one_tick(node: &NodeHandle) -> ProduceTickOutcome {
+    let mut n = node.lock().await;
+    let view = n.view;
+    if !n.is_my_turn(view) {
+        return ProduceTickOutcome::NotMyTurn;
+    }
+    let base = n.base_fee;
+    let gas_limit_cfg = n.gas_limit;
+    let pooled = n.mempool.drain_ready_gas_budget(gas_limit_cfg, base);
+    let eth_raws: Vec<Option<Vec<u8>>> = pooled.iter().map(|p| p.eth_signed_raw.clone()).collect();
+    let txs: Vec<Transaction> = pooled.into_iter().map(|p| p.tx).collect();
+    let parent = n.head_hash;
+    let qc = n.parent_qc_hash;
+    let height = n.height + 1;
+    let ts = now_ms();
+    let chain_id = n.chain_id;
+    let proposer = n.validators.expected_proposer(view);
+    let gas_limit = n.gas_limit;
+    match execute_and_build_block(
+        chain_id,
+        height,
+        view,
+        parent,
+        qc,
+        proposer,
+        ts,
+        gas_limit,
+        &mut n.state,
+        txs,
+        eth_raws,
+    ) {
+        Ok(block) => {
+            let hh = header_hash(&block.header).unwrap_or([0u8; 32]);
+            n.head_hash = hh;
+            n.height = block.header.height;
+            match next_parent_qc_hash_after_commit(&block.header, hh) {
+                Ok(next_qc) => n.parent_qc_hash = next_qc,
+                Err(e) => eprintln!("fractal-node: parent_qc_hash advance failed: {e}"),
             }
-            Err(e) => eprintln!("fractal-node: block execution failed: {e}"),
+            n.view = n.view.wrapping_add(1);
+            n.base_fee = next_base_fee(n.base_fee, block.header.gas_used, &n.fee_params);
+            n.sync_rpc_index_from_block(&block);
+            n.blocks.push(block);
+            ProduceTickOutcome::Produced(n.height)
+        }
+        Err(e) => {
+            eprintln!("fractal-node: block execution failed: {e}");
+            ProduceTickOutcome::BuildFailed
         }
     }
 }
 
+pub async fn producer_loop(node: NodeHandle) {
+    let mut ticker = tokio::time::interval(tokio::time::Duration::from_millis(500));
+    loop {
+        ticker.tick().await;
+        let _ = try_produce_one_tick(&node).await;
+    }
+}
+
 pub async fn run_dev() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let node: NodeHandle = Arc::new(Mutex::new(NodeInner::devnet_with_validators(
-        devnet_validator_set_from_env(),
+    let validators = devnet_validator_set_from_env();
+    let validator_index = devnet_validator_index_from_env(&validators);
+    eprintln!(
+        "fractal-node: validator_set_size={} validator_index={validator_index}",
+        validators.len()
+    );
+    let node: NodeHandle = Arc::new(Mutex::new(NodeInner::devnet_with_validator_index(
+        validators,
+        validator_index,
     )));
     let addr: std::net::SocketAddr = std::env::var("FRACTAL_RPC_ADDR")
         .unwrap_or_else(|_| "127.0.0.1:8545".into())
@@ -638,8 +706,15 @@ pub async fn run_follower() -> Result<(), Box<dyn std::error::Error + Send + Syn
         "fractal-node follower: {} bootstrap multiaddr(s)",
         bootstraps.len()
     );
-    let node: NodeHandle = Arc::new(Mutex::new(NodeInner::devnet_with_validators(
-        devnet_validator_set_from_env(),
+    let validators = devnet_validator_set_from_env();
+    let validator_index = devnet_validator_index_from_env(&validators);
+    eprintln!(
+        "fractal-node follower: validator_set_size={} validator_index={validator_index}",
+        validators.len()
+    );
+    let node: NodeHandle = Arc::new(Mutex::new(NodeInner::devnet_with_validator_index(
+        validators,
+        validator_index,
     )));
     let addr: std::net::SocketAddr = std::env::var("FRACTAL_RPC_ADDR")
         .unwrap_or_else(|_| "127.0.0.1:8546".into())

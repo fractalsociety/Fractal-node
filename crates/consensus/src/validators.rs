@@ -56,6 +56,17 @@ impl ValidatorSet {
         self.ids[self.leader_index(view)]
     }
 
+    /// Whether the validator at `my_index` should be the round leader for `view`.
+    ///
+    /// Used by `producer_loop` to gate block production on the local node's
+    /// `FRACTAL_VALIDATOR_INDEX` (`docs/prd.md` §7 M7-c) — only the round
+    /// leader proposes; followers skip the produce tick. For singleton sets
+    /// this is always `my_index == 0`.
+    #[must_use]
+    pub fn is_proposer_for_view(&self, view: u64, my_index: usize) -> bool {
+        self.leader_index(view) == my_index
+    }
+
     /// Ordered list for RPC / debugging (clone is cheap: ≤7 ids).
     #[must_use]
     pub fn ids(&self) -> &[ValidatorId] {
@@ -88,5 +99,29 @@ mod tests {
             seen.insert(v.ids[i as usize]);
         }
         assert_eq!(seen.len(), 7, "fixture ids must be distinct");
+    }
+
+    #[test]
+    fn is_proposer_for_view_singleton_always_index_zero() {
+        let v = ValidatorSet::phase1_singleton();
+        for view in 0u64..20 {
+            assert!(v.is_proposer_for_view(view, 0));
+            assert!(!v.is_proposer_for_view(view, 1)); // out-of-range never matches
+        }
+    }
+
+    #[test]
+    fn is_proposer_for_view_bft7_each_index_owns_exactly_one_mod() {
+        let v = ValidatorSet::phase2_bft7_fixture();
+        for idx in 0usize..7 {
+            for view in 0u64..21 {
+                let want = (view as usize) % 7 == idx;
+                assert_eq!(
+                    v.is_proposer_for_view(view, idx),
+                    want,
+                    "idx={idx} view={view} expected {want}"
+                );
+            }
+        }
     }
 }
