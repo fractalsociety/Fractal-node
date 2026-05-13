@@ -1507,6 +1507,7 @@ dependencies = [
 name = "fractal-crypto"
 version = "0.1.0"
 dependencies = [
+ "blst",
  "borsh",
  "ed25519-dalek",
  "rand 0.8.6",

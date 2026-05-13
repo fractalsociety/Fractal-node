@@ -27,6 +27,7 @@ repository = "https://github.com/fractalwork/fractalchain"
 
 [workspace.dependencies]
 blake3 = "1.5"
+blst = "0.3"
 borsh = { version = "1.5", features = ["derive"] }
 ed25519-dalek = { version = "2.1", features = ["rand_core"] }
 rand = { version = "0.8", features = ["std", "std_rng"] }
