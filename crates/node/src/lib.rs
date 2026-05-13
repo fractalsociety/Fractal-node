@@ -8,7 +8,10 @@ use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use borsh::BorshDeserialize;
-use fractal_consensus::{execute_and_build_block, header_hash, ordered_tx_root, Block};
+use fractal_consensus::{
+    execute_and_build_block, expected_parent_qc_for_parent_header, genesis_parent_qc, hash_qc,
+    header_hash, next_parent_qc_hash_after_commit, ordered_tx_root, Block,
+};
 use fractal_core::{Address, EvmEngine, State, Transaction};
 use fractal_crypto::hash::keccak256;
 use fractal_mempool::{next_base_fee, BaseFeeParams, Mempool, PooledTx};
@@ -28,6 +31,8 @@ pub enum SyncApplyError {
     Height { expected: u64, got: u64 },
     #[error("parent hash does not match local head")]
     ParentHash,
+    #[error("parent_qc_hash does not match expected HotStuff-2 singleton QC chain")]
+    ParentQcHash,
     #[error("state root mismatch after replay")]
     StateRoot,
     #[error("tx root mismatch after replay")]
@@ -105,7 +110,7 @@ impl NodeInner {
             height: 0,
             view: 0,
             head_hash: genesis_parent_hash(),
-            parent_qc_hash: [0u8; 32],
+            parent_qc_hash: hash_qc(&genesis_parent_qc()).expect("genesis_parent_qc borsh"),
             proposer: [0u8; 32],
             state,
             mempool: Mempool::default(),
@@ -135,6 +140,15 @@ impl NodeInner {
         if block.header.parent_hash != self.head_hash {
             return Err(SyncApplyError::ParentHash);
         }
+        let expected_parent_qc = if self.height == 0 {
+            hash_qc(&genesis_parent_qc())?
+        } else {
+            let parent_block = &self.blocks[(self.height - 1) as usize];
+            expected_parent_qc_for_parent_header(&parent_block.header)?
+        };
+        if block.header.parent_qc_hash != expected_parent_qc {
+            return Err(SyncApplyError::ParentQcHash);
+        }
         if block.eth_signed_raw.len() != block.transactions.len() {
             return Err(SyncApplyError::BlockEthRawLayout);
         }
@@ -157,7 +171,9 @@ impl NodeInner {
         }
         self.state = scratch;
         self.height = block.header.height;
-        self.head_hash = header_hash(&block.header)?;
+        let hh = header_hash(&block.header)?;
+        self.head_hash = hh;
+        self.parent_qc_hash = next_parent_qc_hash_after_commit(&block.header, hh)?;
         self.view = block.header.view.wrapping_add(1);
         self.base_fee = next_base_fee(self.base_fee, block.header.gas_used, &self.fee_params);
         self.blocks.push(block.clone());
@@ -539,6 +555,10 @@ pub async fn producer_loop(node: NodeHandle) {
                 let hh = header_hash(&block.header).unwrap_or([0u8; 32]);
                 n.head_hash = hh;
                 n.height = block.header.height;
+                match next_parent_qc_hash_after_commit(&block.header, hh) {
+                    Ok(next_qc) => n.parent_qc_hash = next_qc,
+                    Err(e) => eprintln!("fractal-node: parent_qc_hash advance failed: {e}"),
+                }
                 n.view = n.view.wrapping_add(1);
                 n.base_fee = next_base_fee(n.base_fee, block.header.gas_used, &n.fee_params);
                 n.sync_rpc_index_from_block(&block);

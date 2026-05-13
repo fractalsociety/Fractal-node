@@ -2,13 +2,22 @@
 //!
 //! Full vote aggregation / libp2p gossip lands in later milestones; this crate freezes the
 //! on-disk / wire shape and deterministic header hashing for the execution pipeline.
+//!
+//! [`qc`] defines quorum certificate hashing and the Phase-1 singleton `parent_qc_hash` chain
+//! (`docs/prd.md` §18 M7-a).
 
 use borsh::{BorshDeserialize, BorshSerialize};
 use fractal_core::{state_root, ExecError, State, Transaction};
 use fractal_crypto::hash::{keccak256, Hash256};
 use thiserror::Error;
 
+pub mod qc;
+
 pub use fractal_core::Transaction as Tx;
+pub use qc::{
+    expected_parent_qc_for_parent_header, genesis_parent_qc, hash_qc, next_parent_qc_hash_after_commit,
+    singleton_qc_certifying, QuorumCertificate,
+};
 
 #[derive(Debug, Error)]
 pub enum BuildBlockError {
@@ -30,7 +39,8 @@ pub struct BlockHeader {
     pub height: u64,
     pub view: u64,
     pub parent_hash: Hash256,
-    /// Parent QC hash (HotStuff-2); zeroed in singleton Phase 1.
+    /// Parent QC hash (HotStuff-2): `keccak256(borsh(QC))` certifying the parent block header.
+    /// First real block uses [`crate::genesis_parent_qc`]; see [`crate::qc`].
     pub parent_qc_hash: Hash256,
     pub proposer: [u8; 32],
     pub timestamp_ms: u64,
@@ -93,7 +103,8 @@ pub fn eth_signed_raws_for_txs(txs_len: usize) -> Vec<Option<Vec<u8>>> {
     vec![None; txs_len]
 }
 
-/// Execute `txs` on top of `state`, compute roots, and assemble a `Block` (singleton QC omitted).
+/// Execute `txs` on top of `state`, compute roots, and assemble a `Block`.
+/// Caller supplies `parent_qc_hash` (see [`crate::qc`]).
 pub fn execute_and_build_block(
     chain_id: u64,
     height: u64,
