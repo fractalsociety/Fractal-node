@@ -28,8 +28,8 @@ pub use market::{
     ToolIntentBody, ToolMarket, DEFAULT_OPTIMISTIC_CHALLENGE_MS,
 };
 pub use policy::{
-    BudgetSpec, PolicyError, PolicyRegistry, PolicyTemplate, RateLimitSpec, ResolvedPolicy,
-    SemVer, TemplateId,
+    builtins as policy_builtins, BudgetSpec, PolicyError, PolicyRegistry, PolicyTemplate,
+    RateLimitSpec, ResolvedPolicy, SemVer, TemplateId,
 };
 pub use rate_limit::{RateLimitError, TokenBucket};
 pub use revocation::{RevocationEntry, RevocationError, RevocationSet};
