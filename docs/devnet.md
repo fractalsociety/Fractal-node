@@ -7,6 +7,12 @@ This page ties together **PRD §18 M6** pieces in-repo (anchored on **`docs/prd.
 - Default local bind: `http://127.0.0.1:8545` (`FRACTAL_RPC_ADDR`).
 - **CORS** is enabled on the HTTP JSON-RPC server so browser tools (e.g. `tools/explorer`) can call `eth_*` methods cross-origin during development.
 
+## Validator set (PRD §7 M7-b)
+
+- **`fractal-node`** reads **`FRACTAL_VALIDATOR_SET`** when started via **`run_dev`** / **`run_follower`** (not when using `NodeInner::devnet()` in unit tests).
+- Values: unset or anything other than `7` / `bft7` → Phase-1 **singleton** (`n = 1`). `7` or `bft7` → in-repo **BFT-7 fixture** (`ValidatorSet::phase2_bft7_fixture()`): seven deterministic 32-byte validator ids; block header **`proposer`** rotates with **`view % 7`** (single process simulates all leaders for local dev).
+- Producer and follower **must use the same** setting so synced blocks pass `InvalidProposer` checks.
+
 ## Faucet (tFRAC-style native balance)
 
 - Binary: `cargo run -p fractal-faucet` (or Docker service in `testnets/devnet/docker-compose.yml`).

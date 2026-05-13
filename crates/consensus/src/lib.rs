@@ -5,6 +5,8 @@
 //!
 //! [`qc`] defines quorum certificate hashing and the Phase-1 singleton `parent_qc_hash` chain
 //! (`docs/prd.md` §18 M7-a).
+//!
+//! [`validators`] holds static validator sets and view-based leader ids (`docs/prd.md` §18 M7-b).
 
 use borsh::{BorshDeserialize, BorshSerialize};
 use fractal_core::{state_root, ExecError, State, Transaction};
@@ -12,12 +14,14 @@ use fractal_crypto::hash::{keccak256, Hash256};
 use thiserror::Error;
 
 pub mod qc;
+pub mod validators;
 
 pub use fractal_core::Transaction as Tx;
 pub use qc::{
     expected_parent_qc_for_parent_header, genesis_parent_qc, hash_qc, next_parent_qc_hash_after_commit,
     singleton_qc_certifying, QuorumCertificate,
 };
+pub use validators::{ValidatorId, ValidatorSet};
 
 #[derive(Debug, Error)]
 pub enum BuildBlockError {

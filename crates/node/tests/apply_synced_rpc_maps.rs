@@ -22,7 +22,7 @@ fn apply_synced_block_fills_mined_txs_for_native_noop() {
         n.view,
         n.head_hash,
         n.parent_qc_hash,
-        [0u8; 32],
+        n.validators.expected_proposer(n.view),
         1,
         n.gas_limit,
         &mut scratch,
@@ -57,7 +57,7 @@ fn apply_synced_block_rejects_eth_raw_length_mismatch() {
         n.view,
         n.head_hash,
         n.parent_qc_hash,
-        [0u8; 32],
+        n.validators.expected_proposer(n.view),
         1,
         n.gas_limit,
         &mut scratch,
@@ -85,7 +85,7 @@ fn apply_synced_block_rejects_bad_parent_qc_hash() {
         n.view,
         n.head_hash,
         [0u8; 32],
-        [0u8; 32],
+        n.validators.expected_proposer(n.view),
         1,
         n.gas_limit,
         &mut scratch,
@@ -97,4 +97,40 @@ fn apply_synced_block_rejects_bad_parent_qc_hash() {
         n.apply_synced_block(&block),
         Err(SyncApplyError::ParentQcHash)
     ));
+}
+
+#[test]
+fn apply_synced_block_rejects_invalid_proposer() {
+    let mut n = NodeInner::devnet();
+    let tx = Transaction {
+        signer: HARDHAT_DEFAULT_SIGNER_0,
+        nonce: 0,
+        vm: VmKind::Native,
+        body: TxBody::Native(NativeCall::NoOp),
+    };
+    let mut scratch = n.state.clone();
+    let block = execute_and_build_block(
+        n.chain_id,
+        1,
+        n.view,
+        n.head_hash,
+        n.parent_qc_hash,
+        [0xfe; 32],
+        1,
+        n.gas_limit,
+        &mut scratch,
+        vec![tx],
+        eth_signed_raws_for_txs(1),
+    )
+    .expect("block");
+    assert!(matches!(
+        n.apply_synced_block(&block),
+        Err(SyncApplyError::InvalidProposer)
+    ));
+}
+
+#[test]
+fn devnet_with_bft7_fixture_has_seven_validators() {
+    let n = NodeInner::devnet_with_validators(fractal_consensus::ValidatorSet::phase2_bft7_fixture());
+    assert_eq!(n.validators.len(), 7);
 }

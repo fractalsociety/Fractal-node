@@ -3,6 +3,8 @@
 pub mod p2p;
 mod eth_signed;
 
+pub use fractal_consensus::ValidatorSet;
+
 use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -33,6 +35,8 @@ pub enum SyncApplyError {
     ParentHash,
     #[error("parent_qc_hash does not match expected HotStuff-2 singleton QC chain")]
     ParentQcHash,
+    #[error("block proposer does not match validator set leader for this view")]
+    InvalidProposer,
     #[error("state root mismatch after replay")]
     StateRoot,
     #[error("tx root mismatch after replay")]
@@ -58,13 +62,24 @@ pub fn genesis_parent_hash() -> fractal_crypto::Hash256 {
     keccak256(GENESIS_TAG)
 }
 
+fn devnet_validator_set_from_env() -> ValidatorSet {
+    match std::env::var("FRACTAL_VALIDATOR_SET")
+        .map(|s| s.to_ascii_lowercase())
+        .as_deref()
+    {
+        Ok("7") | Ok("bft7") => ValidatorSet::phase2_bft7_fixture(),
+        _ => ValidatorSet::phase1_singleton(),
+    }
+}
+
 pub struct NodeInner {
     pub chain_id: u64,
     pub height: u64,
     pub view: u64,
     pub head_hash: fractal_crypto::Hash256,
     pub parent_qc_hash: fractal_crypto::Hash256,
-    pub proposer: fractal_crypto::Hash256,
+    /// Static validator set (`docs/prd.md` §7.2). Block leader = `validators.expected_proposer(view)`.
+    pub validators: ValidatorSet,
     pub state: State,
     pub mempool: Mempool,
     pub base_fee: u128,
@@ -82,7 +97,13 @@ pub struct NodeInner {
 }
 
 impl NodeInner {
+    /// Default local/test node: Phase-1 singleton validator set (deterministic; ignores process env).
     pub fn devnet() -> Self {
+        Self::devnet_with_validators(ValidatorSet::phase1_singleton())
+    }
+
+    /// Devnet with an explicit validator set (e.g. `ValidatorSet::phase2_bft7_fixture()`).
+    pub fn devnet_with_validators(validators: ValidatorSet) -> Self {
         let mut state = State::default();
         state.accounts.insert(
             HARDHAT_DEFAULT_SIGNER_0,
@@ -111,7 +132,7 @@ impl NodeInner {
             view: 0,
             head_hash: genesis_parent_hash(),
             parent_qc_hash: hash_qc(&genesis_parent_qc()).expect("genesis_parent_qc borsh"),
-            proposer: [0u8; 32],
+            validators,
             state,
             mempool: Mempool::default(),
             base_fee: 1,
@@ -148,6 +169,10 @@ impl NodeInner {
         };
         if block.header.parent_qc_hash != expected_parent_qc {
             return Err(SyncApplyError::ParentQcHash);
+        }
+        let expected_proposer = self.validators.expected_proposer(block.header.view);
+        if block.header.proposer != expected_proposer {
+            return Err(SyncApplyError::InvalidProposer);
         }
         if block.eth_signed_raw.len() != block.transactions.len() {
             return Err(SyncApplyError::BlockEthRawLayout);
@@ -536,7 +561,7 @@ pub async fn producer_loop(node: NodeHandle) {
         let view = n.view;
         let ts = now_ms();
         let chain_id = n.chain_id;
-        let proposer = n.proposer;
+        let proposer = n.validators.expected_proposer(view);
         let gas_limit = n.gas_limit;
         match execute_and_build_block(
             chain_id,
@@ -570,7 +595,9 @@ pub async fn producer_loop(node: NodeHandle) {
 }
 
 pub async fn run_dev() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let node: NodeHandle = Arc::new(Mutex::new(NodeInner::devnet()));
+    let node: NodeHandle = Arc::new(Mutex::new(NodeInner::devnet_with_validators(
+        devnet_validator_set_from_env(),
+    )));
     let addr: std::net::SocketAddr = std::env::var("FRACTAL_RPC_ADDR")
         .unwrap_or_else(|_| "127.0.0.1:8545".into())
         .parse()?;
@@ -611,7 +638,9 @@ pub async fn run_follower() -> Result<(), Box<dyn std::error::Error + Send + Syn
         "fractal-node follower: {} bootstrap multiaddr(s)",
         bootstraps.len()
     );
-    let node: NodeHandle = Arc::new(Mutex::new(NodeInner::devnet()));
+    let node: NodeHandle = Arc::new(Mutex::new(NodeInner::devnet_with_validators(
+        devnet_validator_set_from_env(),
+    )));
     let addr: std::net::SocketAddr = std::env::var("FRACTAL_RPC_ADDR")
         .unwrap_or_else(|_| "127.0.0.1:8546".into())
         .parse()?;
