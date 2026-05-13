@@ -38,13 +38,14 @@ pub fn run_argv_value(argv: &[String]) -> Result<Value, String> {
         ("policy", Some("show")) => cmd_policy_show(&argv[3..]),
         ("cap", Some("mint")) => cmd_cap_mint(&argv[3..]),
         ("cap", Some("show")) => cmd_cap_show(&argv[3..]),
+        ("cap", Some("attenuate")) => cmd_cap_attenuate(&argv[3..]),
         ("help" | "--help" | "-h", _) => Ok(json!({ "usage": usage() })),
         _ => Err(usage()),
     }
 }
 
 fn usage() -> String {
-    "usage: fractal-wallet-cli <command> [args]\n  policy list\n  policy show <template_id>\n  cap mint --template <id> --chain-id <n> --not-after-ms <t> [--workspace <id>] [--cap-id <hex32>] [--nonce <n>]\n  cap show <token_hex>"
+    "usage: fractal-wallet-cli <command> [args]\n  policy list\n  policy show <template_id>\n  cap mint --template <id> --chain-id <n> --not-after-ms <t> [--workspace <id>] [--cap-id <hex32>] [--nonce <n>]\n  cap show <token_hex>\n  cap attenuate --parent-hex <hex> --issuer-secret <hex32> [--not-after-ms <t>] [--workspace <id>] [--max-total-spend <amount>] [--tool-mask <hex>] [--cap-id <hex32>] [--nonce <n>]"
         .into()
 }
 
@@ -104,7 +105,7 @@ fn render_policy(id: TemplateId, r: &ResolvedPolicy) -> Value {
 }
 
 #[derive(Debug, Default)]
-struct CapMintArgs {
+struct CapFlags {
     template: Option<TemplateId>,
     chain_id: Option<u32>,
     not_after_ms: Option<u64>,
@@ -112,10 +113,15 @@ struct CapMintArgs {
     workspace: Option<u64>,
     nonce: Option<u64>,
     cap_id_hex: Option<String>,
+    // attenuate-only:
+    parent_hex: Option<String>,
+    issuer_secret_hex: Option<String>,
+    max_total_spend: Option<u128>,
+    tool_mask_hex: Option<String>,
 }
 
-fn parse_flags(args: &[String]) -> Result<CapMintArgs, String> {
-    let mut out = CapMintArgs::default();
+fn parse_flags(args: &[String]) -> Result<CapFlags, String> {
+    let mut out = CapFlags::default();
     let mut i = 0;
     while i < args.len() {
         let k = &args[i];
@@ -134,6 +140,12 @@ fn parse_flags(args: &[String]) -> Result<CapMintArgs, String> {
             "--workspace" => out.workspace = Some(v.parse().map_err(|e| format!("--workspace: {e}"))?),
             "--nonce" => out.nonce = Some(v.parse().map_err(|e| format!("--nonce: {e}"))?),
             "--cap-id" => out.cap_id_hex = Some(v.clone()),
+            "--parent-hex" => out.parent_hex = Some(v.clone()),
+            "--issuer-secret" => out.issuer_secret_hex = Some(v.clone()),
+            "--max-total-spend" => {
+                out.max_total_spend = Some(v.parse().map_err(|e| format!("--max-total-spend: {e}"))?)
+            }
+            "--tool-mask" => out.tool_mask_hex = Some(v.clone()),
             other => return Err(format!("unknown flag: {other}")),
         }
         i += 2;
@@ -222,14 +234,175 @@ fn cmd_cap_mint(args: &[String]) -> Result<Value, String> {
 }
 
 fn parse_cap_id(s: &str) -> Result<[u8; 32], String> {
+    parse_hex32(s, "--cap-id")
+}
+
+fn parse_hex32(s: &str, label: &str) -> Result<[u8; 32], String> {
     let h = s.strip_prefix("0x").unwrap_or(s);
-    let bytes = hex::decode(h).map_err(|e| format!("--cap-id hex: {e}"))?;
+    let bytes = hex::decode(h).map_err(|e| format!("{label} hex: {e}"))?;
     if bytes.len() != 32 {
-        return Err("--cap-id must be 32 bytes".into());
+        return Err(format!("{label} must be 32 bytes"));
     }
     let mut out = [0u8; 32];
     out.copy_from_slice(&bytes);
     Ok(out)
+}
+
+fn parse_hex(s: &str, label: &str) -> Result<Vec<u8>, String> {
+    let h = s.strip_prefix("0x").unwrap_or(s);
+    hex::decode(h).map_err(|e| format!("{label} hex: {e}"))
+}
+
+fn parse_u64_hex_or_dec(s: &str, label: &str) -> Result<u64, String> {
+    if let Some(h) = s.strip_prefix("0x") {
+        u64::from_str_radix(h, 16).map_err(|e| format!("{label} hex: {e}"))
+    } else {
+        s.parse::<u64>().map_err(|e| format!("{label}: {e}"))
+    }
+}
+
+fn cmd_cap_attenuate(args: &[String]) -> Result<Value, String> {
+    let parsed = parse_flags(args)?;
+    let parent_hex = parsed
+        .parent_hex
+        .as_ref()
+        .ok_or("--parent-hex required")?;
+    let issuer_secret_hex = parsed
+        .issuer_secret_hex
+        .as_ref()
+        .ok_or("--issuer-secret required")?;
+
+    let parent_bytes = parse_hex(parent_hex, "--parent-hex")?;
+    let parent =
+        CapabilityToken::try_from_slice(&parent_bytes).map_err(|e| format!("parent decode: {e}"))?;
+    parent
+        .verify()
+        .map_err(|e| format!("parent signature invalid: {e:?}"))?;
+
+    let issuer_secret = parse_hex32(issuer_secret_hex, "--issuer-secret")?;
+    let issuer_sk = SigningKey::from_bytes(&issuer_secret);
+    if issuer_sk.verifying_key().to_bytes() != parent.body.issuer {
+        return Err("--issuer-secret does not match parent.issuer".into());
+    }
+
+    // Child scope: clone parent, optionally narrow workspace + tool mask.
+    let child_workspace = match parsed.workspace {
+        Some(w) => Some(w),
+        None => parent.body.scope.workspace_id,
+    };
+    let child_mask = match &parsed.tool_mask_hex {
+        Some(s) => parse_u64_hex_or_dec(s, "--tool-mask")?,
+        None => parent.body.scope.tool_class_mask,
+    };
+    if child_mask & parent.body.scope.tool_class_mask != child_mask {
+        return Err("--tool-mask must be a subset of parent's tool_class_mask".into());
+    }
+
+    // Child time window: clone parent, optionally narrow `not_after`.
+    let child_not_after = parsed.not_after_ms.unwrap_or(parent.body.not_after);
+    if child_not_after > parent.body.not_after {
+        return Err("--not-after-ms must be ≤ parent.not_after".into());
+    }
+    let child_not_before = match parsed.not_before_ms {
+        Some(t) => t,
+        None => parent.body.not_before,
+    };
+    if child_not_before < parent.body.not_before {
+        return Err("--not-before-ms must be ≥ parent.not_before".into());
+    }
+
+    // Child caveats: every parent caveat must be matched by a child caveat that is stricter or equal
+    // (`caveat::caveats_attenuate_parent`). Start by cloning parent's, then optionally lower the
+    // `MaxTotalSpend` cap if `--max-total-spend` is provided.
+    let mut child_caveats: Vec<Caveat> = parent.body.caveats.clone();
+    if let Some(new_cap) = parsed.max_total_spend {
+        let mut applied = false;
+        let mut parent_cap_min: Option<u128> = None;
+        for c in parent.body.caveats.iter() {
+            if let Caveat::MaxTotalSpend(p) = c {
+                parent_cap_min = Some(parent_cap_min.map_or(*p, |m| m.min(*p)));
+            }
+        }
+        if let Some(p_cap) = parent_cap_min {
+            if new_cap > p_cap {
+                return Err(format!(
+                    "--max-total-spend ({new_cap}) > parent MaxTotalSpend ({p_cap})"
+                ));
+            }
+        }
+        for c in child_caveats.iter_mut() {
+            if let Caveat::MaxTotalSpend(v) = c {
+                *v = new_cap;
+                applied = true;
+            }
+        }
+        if !applied {
+            child_caveats.push(Caveat::MaxTotalSpend(new_cap));
+        }
+    }
+
+    let cap_id = match &parsed.cap_id_hex {
+        Some(h) => parse_cap_id(h)?,
+        None => {
+            use rand::RngCore;
+            let mut secret = [0u8; 32];
+            OsRng.fill_bytes(&mut secret);
+            derive_cap_id(&secret, parsed.nonce.unwrap_or(0))
+        }
+    };
+
+    // Generate a fresh subject key for the child session.
+    let mut rng = OsRng;
+    let subject_sk = SigningKey::generate(&mut rng);
+
+    let child_body = CapabilitySignBody {
+        version: parent.body.version,
+        cap_id,
+        chain_id: parent.body.chain_id,
+        issuer: parent.body.issuer,
+        subject: subject_sk.verifying_key().to_bytes(),
+        parent_cap_id: Some(parent.body.cap_id),
+        scope: Scope {
+            workspace_id: child_workspace,
+            project_id: parent.body.scope.project_id,
+            task_id: parent.body.scope.task_id,
+            tool_class_mask: child_mask,
+            providers: parent.body.scope.providers.clone(),
+        },
+        caveats: child_caveats,
+        budget_account: parent.body.budget_account,
+        not_before: child_not_before,
+        not_after: child_not_after,
+        nonce: parsed.nonce.unwrap_or(parent.body.nonce.saturating_add(1)),
+    };
+
+    if !CapabilityToken::verify_attenuation_from_parent(&child_body, &parent.body) {
+        return Err(
+            "child fails verify_attenuation_from_parent (scope/time/caveat envelope not strictly narrower)"
+                .into(),
+        );
+    }
+
+    let token = CapabilityToken::sign(child_body, &issuer_sk).map_err(|e| format!("sign: {e}"))?;
+    token
+        .verify()
+        .map_err(|e| format!("self-verify after sign: {e:?}"))?;
+    let token_bytes = borsh::to_vec(&token).map_err(|e| format!("borsh: {e}"))?;
+
+    Ok(json!({
+        "parentCapId": format!("0x{}", hex::encode(parent.body.cap_id)),
+        "childCapId": format!("0x{}", hex::encode(cap_id)),
+        "issuerPub": format!("0x{}", hex::encode(parent.body.issuer)),
+        "subjectPub": format!("0x{}", hex::encode(subject_sk.verifying_key().to_bytes())),
+        "subjectSecret": format!("0x{}", hex::encode(subject_sk.to_bytes())),
+        "chainId": parent.body.chain_id,
+        "notBeforeMs": child_not_before,
+        "notAfterMs": child_not_after,
+        "toolClassMask": format!("0x{:016x}", child_mask),
+        "caveatCount": token.body.caveats.len(),
+        "attenuationOk": true,
+        "tokenHex": format!("0x{}", hex::encode(token_bytes)),
+    }))
 }
 
 fn cmd_cap_show(args: &[String]) -> Result<Value, String> {

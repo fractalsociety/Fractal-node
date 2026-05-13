@@ -95,3 +95,119 @@ fn unknown_command_returns_usage_error() {
     let err = fractal_cli::run_argv_value(&argv(&["zzz"])).unwrap_err();
     assert!(err.starts_with("usage:"));
 }
+
+fn mint_research_root() -> Value {
+    fractal_cli::run_argv_value(&argv(&[
+        "cap",
+        "mint",
+        "--template",
+        "1", // research-agent
+        "--chain-id",
+        "41",
+        "--not-after-ms",
+        "1000000",
+        "--workspace",
+        "7",
+        "--nonce",
+        "1",
+    ]))
+    .expect("root mint succeeds")
+}
+
+#[test]
+fn cap_attenuate_round_trip_holds_invariants() {
+    let parent = mint_research_root();
+    let parent_hex = parent.get("tokenHex").and_then(Value::as_str).unwrap();
+    let issuer_secret = parent.get("issuerSecret").and_then(Value::as_str).unwrap();
+
+    // Strictly narrower: half the time, half the spend, same workspace.
+    let child = fractal_cli::run_argv_value(&argv(&[
+        "cap",
+        "attenuate",
+        "--parent-hex",
+        parent_hex,
+        "--issuer-secret",
+        issuer_secret,
+        "--not-after-ms",
+        "500000",
+        "--max-total-spend",
+        "1000000000000000000", // 1 FRAC (parent has 3 FRAC)
+        "--nonce",
+        "2",
+    ]))
+    .expect("attenuate succeeds");
+
+    assert_eq!(child.get("attenuationOk").and_then(Value::as_bool), Some(true));
+    let child_token = child.get("tokenHex").and_then(Value::as_str).unwrap();
+
+    let show = fractal_cli::run_argv_value(&argv(&["cap", "show", child_token])).unwrap();
+    assert_eq!(show.get("signatureOk").and_then(Value::as_bool), Some(true));
+    assert_eq!(show.get("notAfterMs").and_then(Value::as_u64), Some(500_000));
+    let parent_cap_id = parent.get("capId").and_then(Value::as_str).unwrap();
+    assert_eq!(
+        show.get("parentCapId").and_then(Value::as_str),
+        Some(parent_cap_id)
+    );
+    let caveats = show.get("caveats").and_then(Value::as_array).unwrap();
+    assert!(caveats
+        .iter()
+        .any(|c| c.as_str().unwrap_or("").contains("MaxTotalSpend(1000000000000000000)")));
+}
+
+#[test]
+fn cap_attenuate_rejects_widening_time() {
+    let parent = mint_research_root();
+    let parent_hex = parent.get("tokenHex").and_then(Value::as_str).unwrap();
+    let issuer_secret = parent.get("issuerSecret").and_then(Value::as_str).unwrap();
+    let err = fractal_cli::run_argv_value(&argv(&[
+        "cap",
+        "attenuate",
+        "--parent-hex",
+        parent_hex,
+        "--issuer-secret",
+        issuer_secret,
+        "--not-after-ms",
+        "9999999999", // wider than parent's 1_000_000
+    ]))
+    .unwrap_err();
+    assert!(err.contains("not-after-ms"), "err = {err}");
+}
+
+#[test]
+fn cap_attenuate_rejects_widening_spend() {
+    let parent = mint_research_root();
+    let parent_hex = parent.get("tokenHex").and_then(Value::as_str).unwrap();
+    let issuer_secret = parent.get("issuerSecret").and_then(Value::as_str).unwrap();
+    // parent has MaxTotalSpend(3 FRAC) = 3e18; ask for 5 FRAC = 5e18.
+    let err = fractal_cli::run_argv_value(&argv(&[
+        "cap",
+        "attenuate",
+        "--parent-hex",
+        parent_hex,
+        "--issuer-secret",
+        issuer_secret,
+        "--max-total-spend",
+        "5000000000000000000",
+    ]))
+    .unwrap_err();
+    assert!(err.contains("MaxTotalSpend"), "err = {err}");
+}
+
+#[test]
+fn cap_attenuate_rejects_wrong_secret() {
+    let parent = mint_research_root();
+    let parent_hex = parent.get("tokenHex").and_then(Value::as_str).unwrap();
+    // Use a *different* mint's issuer secret — should fail the issuer-match check.
+    let other = mint_research_root();
+    let other_secret = other.get("issuerSecret").and_then(Value::as_str).unwrap();
+    let err = fractal_cli::run_argv_value(&argv(&[
+        "cap",
+        "attenuate",
+        "--parent-hex",
+        parent_hex,
+        "--issuer-secret",
+        other_secret,
+    ]))
+    .unwrap_err();
+    assert!(err.contains("does not match parent.issuer"), "err = {err}");
+}
