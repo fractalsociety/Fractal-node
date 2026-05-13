@@ -7,6 +7,8 @@
 //! (`docs/prd.md` §18 M7-a).
 //!
 //! [`validators`] holds static validator sets and view-based leader ids (`docs/prd.md` §18 M7-b).
+//!
+//! [`vote`] holds per-validator HotStuff-2 vote wire types (`docs/prd.md` §18 M7-d-3).
 
 use borsh::{BorshDeserialize, BorshSerialize};
 use fractal_core::{state_root, ExecError, State, Transaction};
@@ -15,6 +17,7 @@ use thiserror::Error;
 
 pub mod qc;
 pub mod validators;
+pub mod vote;
 
 pub use fractal_core::Transaction as Tx;
 pub use qc::{
@@ -22,6 +25,7 @@ pub use qc::{
     singleton_qc_certifying, QuorumCertificate,
 };
 pub use validators::{ValidatorEntry, ValidatorId, ValidatorSet};
+pub use vote::{Vote, VoteError, VoteSignBody};
 
 #[derive(Debug, Error)]
 pub enum BuildBlockError {
