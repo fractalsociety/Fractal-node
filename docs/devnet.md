@@ -10,8 +10,22 @@ This page ties together **PRD §18 M6** pieces in-repo (anchored on **`docs/prd.
 ## Validator set (PRD §7 M7-b)
 
 - **`fractal-node`** reads **`FRACTAL_VALIDATOR_SET`** when started via **`run_dev`** / **`run_follower`** (not when using `NodeInner::devnet()` in unit tests).
-- Values: unset or anything other than `7` / `bft7` → Phase-1 **singleton** (`n = 1`). `7` or `bft7` → in-repo **BFT-7 fixture** (`ValidatorSet::phase2_bft7_fixture()`): seven deterministic 32-byte validator ids; block header **`proposer`** rotates with **`view % 7`** (single process simulates all leaders for local dev).
-- Producer and follower **must use the same** setting so synced blocks pass `InvalidProposer` checks.
+- Values: unset or anything other than `7` / `bft7` → Phase-1 **singleton** (`n = 1`). `7` or `bft7` → in-repo **BFT-7 fixture** (`ValidatorSet::phase2_bft7_fixture()`): seven validators with BLS keys; block header **`proposer`** rotates with the active HotStuff **view** (see `fractal_consensus::ValidatorSet::expected_proposer`).
+- Producer and follower **must use the same** `FRACTAL_VALIDATOR_SET` so synced blocks pass `InvalidProposer` checks.
+- **`FRACTAL_VALIDATOR_INDEX`:** which validator this process is (`0 .. validator_set_size-1`). Default **`0`**. If the value is **≥** the set size, the node logs and **clamps to `0`** so a stale env var cannot disable a singleton devnet. The producer **only builds a block when this index is the leader for the current view** (`NotMyTurn` ticks otherwise); see `fractal_node::try_produce_one_tick`.
+- **`FRACTAL_VALIDATOR_SECRET_HEX`:** optional **32-byte** BLS secret ( **64** hex digits, optional `0x` prefix). If set, it must decode to a valid **blst** secret and **should** match `validators.bls_pubkey(FRACTAL_VALIDATOR_INDEX)` or peers will reject your votes (the node logs a pubkey mismatch warning). If unset or malformed, the node uses the **deterministic dev fallback** secret for `(validator_set, index)` when one exists (`run_dev` / `run_follower`).
+
+## Vote gossip (libp2p GossipSub, PRD §18 M7-d-5)
+
+Votes use the **same QUIC/libp2p swarm** as block sync (request-response on `/fractalchain/sync/1.0.0`); gossip is **not** a second TCP stack.
+
+- **Topic string:** **`/fractalchain/votes/1.0.0`** — canonical constant **`fractal_network::VOTES_TOPIC_STR`** (`crates/network/src/lib.rs`). Subscribers and publishers must use this exact string (GossipSub `IdentTopic`).
+- **Payload:** **borsh** encoding of **`fractal_consensus::Vote`** (BLS signature over a narrow sign-body: view, height, header hash). Inbound messages are verified and applied to the local **`VotePool`**; see `crates/consensus/src/vote.rs` and `NodeInner::record_vote`.
+- **`run_dev` / `run_follower`:** the binary **automatically** connects the execution node to gossip: it creates an internal channel, calls **`NodeInner::set_vote_sink`**, and passes the receiver into **`producer_network_task`** / **`follower_network_task`** so each committed block can **`forward_vote_after_commit`**. Operators do **not** configure `vote_sink` by hand for these entrypoints.
+- **Embeds / tests:** use **`NodeInner::set_vote_sink(Some(tx))`** plus the same **`vote_rx`** passed into `fractal_node::p2p::producer_network_task(..., Some(vote_rx))` (see **`crates/node/tests/m7_d5_gossipsub_votes.rs`**).
+- **Publish retries:** `gossipsub::publish` can return **`NoPeersSubscribedToTopic`** until the mesh has grafted a peer; the P2P task **queues** the last payload and retries after swarm activity (`crates/node/src/p2p.rs`).
+- **Followers:** set **`FRACTAL_BOOTSTRAP`** to the producer’s printed QUIC multiaddr (with `/p2p/<PeerId>`). Use the **same** `FRACTAL_VALIDATOR_SET` as the producer; each process should use its own **`FRACTAL_VALIDATOR_INDEX`** on multi-validator devnets.
+- **Implementation map:** `crates/node/src/p2p.rs` (GossipSub config, subscribe, publish, inbound decode), `crates/node/src/lib.rs` (`run_dev`, `run_follower`, `forward_vote_after_commit`), **`crates/node/tests/m7_d5_gossipsub_votes.rs`** (two-node vote exchange smoke).
 
 ## Faucet (tFRAC-style native balance)
 
