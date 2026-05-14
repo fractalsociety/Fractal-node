@@ -39,7 +39,7 @@ jsonrpsee = { version = "0.24", features = ["server", "macros"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "sync", "signal", "net"] }
-libp2p = { version = "0.56", features = ["tokio", "quic", "request-response", "macros"] }
+libp2p = { version = "0.56", features = ["tokio", "quic", "request-response", "gossipsub", "macros"] }
 async-trait = "0.1"
 futures = "0.3"
 http = "1.1"

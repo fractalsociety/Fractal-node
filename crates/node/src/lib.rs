@@ -165,6 +165,8 @@ pub struct NodeInner {
     /// `Vote` after BLS verification and aggregates into a [`FormedQc`] once
     /// `validators.quorum_threshold()` is met.
     pub vote_pool: VotePool,
+    /// When set, serialized [`Vote`]s are sent to the libp2p task for gossipsub publish.
+    pub vote_sink: Option<tokio::sync::mpsc::UnboundedSender<Vec<u8>>>,
     pub state: State,
     pub mempool: Mempool,
     pub base_fee: u128,
@@ -240,6 +242,7 @@ impl NodeInner {
             validator_index,
             validator_secret,
             vote_pool: VotePool::new(),
+            vote_sink: None,
             state,
             mempool: Mempool::default(),
             base_fee: 1,
@@ -259,6 +262,32 @@ impl NodeInner {
     #[must_use]
     pub fn is_my_turn(&self, view: u64) -> bool {
         self.validators.is_proposer_for_view(view, self.validator_index)
+    }
+
+    /// Wire gossip vote publishing (`docs/prd.md` §18 M7-d-5). When `None`, votes stay local only.
+    pub fn set_vote_sink(&mut self, sink: Option<tokio::sync::mpsc::UnboundedSender<Vec<u8>>>) {
+        self.vote_sink = sink;
+    }
+
+    /// Record this validator's vote for `committed` in the local pool and enqueue it for
+    /// gossipsub when [`Self::vote_sink`] is set.
+    pub fn forward_vote_after_commit(&mut self, committed: &Block) {
+        let Ok(hh) = header_hash(&committed.header) else {
+            return;
+        };
+        let Some(vote) = self.build_self_vote(
+            committed.header.view,
+            committed.header.height,
+            hh,
+        ) else {
+            return;
+        };
+        let _ = self.record_vote(vote.clone());
+        if let Some(ref tx) = self.vote_sink {
+            if let Ok(bytes) = borsh::to_vec(&vote) {
+                let _ = tx.send(bytes);
+            }
+        }
     }
 
     /// Build a [`Vote`] for the just-committed block at `(view, height, header_hash)`
@@ -351,6 +380,7 @@ impl NodeInner {
         self.base_fee = next_base_fee(self.base_fee, block.header.gas_used, &self.fee_params);
         self.blocks.push(block.clone());
         self.sync_rpc_index_from_block(block);
+        self.forward_vote_after_commit(block);
         Ok(())
     }
 
@@ -748,6 +778,7 @@ pub async fn try_produce_one_tick(node: &NodeHandle) -> ProduceTickOutcome {
             n.view = n.view.wrapping_add(1);
             n.base_fee = next_base_fee(n.base_fee, block.header.gas_used, &n.fee_params);
             n.sync_rpc_index_from_block(&block);
+            n.forward_vote_after_commit(&block);
             n.blocks.push(block);
             ProduceTickOutcome::Produced(n.height)
         }
@@ -775,11 +806,14 @@ pub async fn run_dev() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         validators.len(),
         if validator_secret.is_some() { "enabled" } else { "disabled" }
     );
-    let node: NodeHandle = Arc::new(Mutex::new(NodeInner::devnet_with_validator_secret(
+    let (vote_tx, vote_rx) = tokio::sync::mpsc::unbounded_channel();
+    let mut inner = NodeInner::devnet_with_validator_secret(
         validators,
         validator_index,
         validator_secret,
-    )));
+    );
+    inner.set_vote_sink(Some(vote_tx));
+    let node: NodeHandle = Arc::new(Mutex::new(inner));
     let addr: std::net::SocketAddr = std::env::var("FRACTAL_RPC_ADDR")
         .unwrap_or_else(|_| "127.0.0.1:8545".into())
         .parse()?;
@@ -792,7 +826,9 @@ pub async fn run_dev() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let (tx_ready, rx_ready) = tokio::sync::oneshot::channel();
     let p2p_node = node.clone();
     tokio::spawn(async move {
-        if let Err(e) = p2p::producer_network_task(p2p_node, listen, Some(tx_ready)).await {
+        if let Err(e) = p2p::producer_network_task(p2p_node, listen, Some(tx_ready), Some(vote_rx))
+            .await
+        {
             eprintln!("fractal-node p2p: {e}");
         }
     });
@@ -828,17 +864,20 @@ pub async fn run_follower() -> Result<(), Box<dyn std::error::Error + Send + Syn
         validators.len(),
         if validator_secret.is_some() { "enabled" } else { "disabled" }
     );
-    let node: NodeHandle = Arc::new(Mutex::new(NodeInner::devnet_with_validator_secret(
+    let (vote_tx, vote_rx) = tokio::sync::mpsc::unbounded_channel();
+    let mut inner = NodeInner::devnet_with_validator_secret(
         validators,
         validator_index,
         validator_secret,
-    )));
+    );
+    inner.set_vote_sink(Some(vote_tx));
+    let node: NodeHandle = Arc::new(Mutex::new(inner));
     let addr: std::net::SocketAddr = std::env::var("FRACTAL_RPC_ADDR")
         .unwrap_or_else(|_| "127.0.0.1:8546".into())
         .parse()?;
     let (handle, bound) = fractal_rpc::serve_http(addr, node.clone()).await?;
     eprintln!("fractal-node follower json-rpc at http://{bound}");
-    tokio::spawn(p2p::follower_network_task(node, bootstraps));
+    tokio::spawn(p2p::follower_network_task(node, bootstraps, Some(vote_rx)));
     tokio::signal::ctrl_c().await?;
     handle.stop()?;
     Ok(())

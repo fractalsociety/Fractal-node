@@ -44,3 +44,6 @@ pub fn sync_request_response_config() -> request_response::Config {
         .with_request_timeout(Duration::from_secs(120))
         .with_max_concurrent_streams(32)
 }
+
+/// Gossipsub topic for HotStuff-2 votes (`docs/prd.md` §18 M7-d-5).
+pub const VOTES_TOPIC_STR: &str = "/fractalchain/votes/1.0.0";
