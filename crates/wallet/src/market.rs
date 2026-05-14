@@ -1,4 +1,4 @@
-//! Tool market: intent → quote → match → receipt → settle (`docs/wallet.md` §7, §9.3 W5).
+//! Tool market: intent → quote → match → receipt → settle (`docs/wallet.md` §7, §9.3).
 
 use std::collections::HashMap;
 

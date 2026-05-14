@@ -27,6 +27,10 @@ Votes use the **same QUIC/libp2p swarm** as block sync (request-response on `/fr
 - **Followers:** set **`FRACTAL_BOOTSTRAP`** to the producer’s printed QUIC multiaddr (with `/p2p/<PeerId>`). Use the **same** `FRACTAL_VALIDATOR_SET` as the producer; each process should use its own **`FRACTAL_VALIDATOR_INDEX`** on multi-validator devnets.
 - **Implementation map:** `crates/node/src/p2p.rs` (GossipSub config, subscribe, publish, inbound decode), `crates/node/src/lib.rs` (`run_dev`, `run_follower`, `forward_vote_after_commit`), **`crates/node/tests/m7_d5_gossipsub_votes.rs`** (two-node vote exchange smoke).
 
+## P2P host identity (PRD §8.1)
+
+- **`FRACTAL_P2P_IDENTITY_PATH`:** optional path to a file storing the libp2p **protobuf-encoded Ed25519 private key** (same format as [`Keypair::to_protobuf_encoding`](https://docs.rs/libp2p-identity/latest/libp2p_identity/struct.Keypair.html#method.to_protobuf_encoding) in `libp2p-identity`). If the file is missing, the node creates it (and parent directories) on first start. **Stable `PeerId`** across restarts lets **`FRACTAL_BOOTSTRAP`** `/p2p/...` strings stay valid for operators. If unset, each run uses a **fresh** Ed25519 key (unchanged default for tests and one-shot local runs).
+
 ## Faucet (tFRAC-style native balance)
 
 - Binary: `cargo run -p fractal-faucet` (or Docker service in `testnets/devnet/docker-compose.yml`).

@@ -2,7 +2,7 @@
 //!
 //! Anchored on `docs/wallet.md` §15.2 (built-in policy templates) and §4.2
 //! (capability mint / verify). All subcommands are **offline** in this slice; no chain RPC.
-//! **W6-b:** `tools/wallet-web/` static stub + `policy dump-builtins`. **W6-c (next):** provider SDK surfaces.
+//! **W6-b:** `tools/wallet-web/` static stub + `policy dump-builtins` + `policy tool-classes` (§8.1 catalog).
 //! The argv shape stays tiny and dependency-free so integration tests can call `run_argv` directly.
 
 use std::collections::BTreeMap;
@@ -36,6 +36,7 @@ pub fn run_argv_value(argv: &[String]) -> Result<Value, String> {
         ("policy", Some("list")) => Ok(cmd_policy_list()),
         ("policy", Some("show")) => cmd_policy_show(&argv[3..]),
         ("policy", Some("dump-builtins")) => Ok(cmd_policy_dump_builtins()),
+        ("policy", Some("tool-classes")) => Ok(cmd_policy_tool_classes()),
         ("cap", Some("mint")) => cmd_cap_mint(&argv[3..]),
         ("cap", Some("show")) => cmd_cap_show(&argv[3..]),
         ("cap", Some("attenuate")) => cmd_cap_attenuate(&argv[3..]),
@@ -45,7 +46,7 @@ pub fn run_argv_value(argv: &[String]) -> Result<Value, String> {
 }
 
 fn usage() -> String {
-    "usage: fractal-wallet-cli <command> [args]\n  policy list\n  policy show <template_id>\n  policy dump-builtins\n  cap mint --template <id> --chain-id <n> --not-after-ms <t> [--workspace <id>] [--cap-id <hex32>] [--nonce <n>]\n  cap show <token_hex>\n  cap attenuate --parent-hex <hex> --issuer-secret <hex32> [--not-after-ms <t>] [--workspace <id>] [--max-total-spend <amount>] [--tool-mask <hex>] [--cap-id <hex32>] [--nonce <n>]"
+    "usage: fractal-wallet-cli <command> [args]\n  policy list\n  policy show <template_id>\n  policy dump-builtins\n  policy tool-classes\n  cap mint --template <id> --chain-id <n> --not-after-ms <t> [--workspace <id>] [--cap-id <hex32>] [--nonce <n>]\n  cap show <token_hex>\n  cap attenuate --parent-hex <hex> --issuer-secret <hex32> [--not-after-ms <t>] [--workspace <id>] [--max-total-spend <amount>] [--tool-mask <hex>] [--cap-id <hex32>] [--nonce <n>]"
         .into()
 }
 
@@ -96,6 +97,30 @@ fn cmd_policy_dump_builtins() -> Value {
     json!({
         "schemaVersion": 1,
         "templates": templates,
+    })
+}
+
+/// JSON catalog for `docs/wallet.md` §8.1 (borsh discriminants + default verification tier).
+fn cmd_policy_tool_classes() -> Value {
+    let rows: Vec<Value> = ToolClass::VARIANTS
+        .into_iter()
+        .map(|c| {
+            json!({
+                "specName": c.spec_name(),
+                "discriminant": c as u8,
+                "bitHex": format!("0x{:016x}", c.bit()),
+                "pricingNotes": c.spec_pricing_notes(),
+                "defaultVerificationTier": format!("{:?}", c.default_verification_tier()),
+            })
+        })
+        .collect();
+    json!({
+        "schemaVersion": 1,
+        "source": "docs/wallet.md §8.1",
+        "phase1MaskHex": format!("0x{:016x}", ToolClass::all_phase1_mask()),
+        "phase2SliceMaskHex": format!("0x{:016x}", ToolClass::phase2_tool_class_mask()),
+        "fullCatalogMaskHex": format!("0x{:016x}", ToolClass::all_v2_catalog_mask()),
+        "classes": rows,
     })
 }
 

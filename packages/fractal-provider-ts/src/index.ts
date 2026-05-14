@@ -6,7 +6,8 @@
 
 export type Hex = `0x${string}`;
 
-/** §7.1 — signed tool intent body (map fields to borsh layout in `fractal_wallet::market::ToolIntentBody`). */
+/** §7.1 — signed tool intent body (map fields to borsh layout in `fractal_wallet::market::ToolIntentBody`).
+ * `toolClass` is a `ToolClass` borsh discriminant (`docs/wallet.md` §8.1): Phase 1 uses `0..=3`; full v2.0 catalog is `0..=13`. */
 export interface ToolIntentBodyWire {
   intentId: Hex;
   agentSession: Hex;

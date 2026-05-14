@@ -440,6 +440,8 @@ Not every tool needs the same verification. A browser search returning HTML is f
 | `OCR` | Image-to-text | Per page | Optimistic |
 | `CODE_EXECUTION` | Sandboxed code runs | Per second | TEE-attested |
 
+**Wire / SDK:** `fractal_wallet::ToolClass` assigns **borsh discriminants** `0..=13` equal to the bitmask bit index (`docs/wallet.md` §25.1 keeps `0..=3` as the Phase 1 set). Run **`cargo run -p fractal-cli -- policy tool-classes`** for JSON (`specName`, `discriminant`, default verification tier, pricing notes, and `phase1` / §25.2 `phase2` slice masks).
+
 ### 8.2 Verification tiers
 
 ```
@@ -491,6 +493,8 @@ ToolReceipt {
 ```
 
 Receipts are posted as transactions. Their core fields go on-chain; large payloads go to a DA layer (Celestia-style, or a FractalWork-native DA module) and are referenced by hash.
+
+**Rust:** `fractal_wallet::{ToolReceipt, ToolReceiptBody, MeteringRecord, TeeAttestation}` in `crates/wallet/src/task_receipt.rs` — provider signs `borsh(ToolReceiptBody)`; `receipt_id = BLAKE3(intent_id || provider_sig)`; Merkle leaves are `BLAKE3(borsh(ToolReceipt))` for `tool_receipt_root` in §9.2.
 
 ### 9.2 TaskReceipt — what a finished task looks like
 

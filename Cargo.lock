@@ -1557,6 +1557,7 @@ name = "fractal-core"
 version = "0.1.0"
 dependencies = [
  "borsh",
+ "ed25519-dalek",
  "fractal-crypto",
  "fractal-wallet",
  "rand 0.8.6",

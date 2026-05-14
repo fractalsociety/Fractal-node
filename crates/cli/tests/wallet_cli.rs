@@ -14,6 +14,25 @@ fn argv(parts: &[&str]) -> Vec<String> {
 }
 
 #[test]
+fn policy_tool_classes_matches_v2_catalog() {
+    let v = fractal_cli::run_argv_value(&argv(&["policy", "tool-classes"])).unwrap();
+    let classes = v.get("classes").and_then(Value::as_array).unwrap();
+    assert_eq!(classes.len(), 14);
+    assert_eq!(
+        classes[0].get("specName").and_then(Value::as_str),
+        Some("BROWSER")
+    );
+    assert_eq!(
+        classes[13].get("specName").and_then(Value::as_str),
+        Some("CODE_EXECUTION")
+    );
+    assert_eq!(
+        v.get("phase1MaskHex").and_then(Value::as_str),
+        Some("0x000000000000000f")
+    );
+}
+
+#[test]
 fn policy_list_shows_three_builtins() {
     let v = fractal_cli::run_argv_value(&argv(&["policy", "list"])).unwrap();
     let templates = v.get("templates").and_then(Value::as_array).unwrap();

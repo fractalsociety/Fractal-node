@@ -86,25 +86,67 @@ fn wallet_task_receipt_anchor_non_empty_witness_requires_wallet_feature() {
 }
 
 #[cfg(feature = "wallet")]
+mod wallet_task_receipt_tool_fixture {
+    use ed25519_dalek::SigningKey;
+    use fractal_wallet::{
+        provider_id_from_public_key, MeteringRecord, ToolClass, ToolReceipt, ToolReceiptBody,
+    };
+
+    pub fn sign_one(
+        agent: &SigningKey,
+        provider: &SigningKey,
+        intent_byte: u8,
+        task_id: u64,
+        cost: u128,
+    ) -> ToolReceipt {
+        let provider_pk = provider.verifying_key().to_bytes();
+        let body = ToolReceiptBody {
+            intent_id: [intent_byte; 32],
+            task_id,
+            agent_session: agent.verifying_key().to_bytes(),
+            provider_id: provider_id_from_public_key(&provider_pk),
+            tool_class: ToolClass::Browser,
+            payload_commitment: [0xabu8; 32],
+            output_commitment: [0xcdu8; 32],
+            output_pointer: "da://x".into(),
+            metering: MeteringRecord {
+                input_tokens: 0,
+                output_tokens: 0,
+                wall_duration_ms: 0,
+                bytes_metered: 0,
+            },
+            cost,
+            started_at: 1,
+            completed_at: 2,
+            attestation: None,
+        };
+        ToolReceipt::sign_new(body, provider).unwrap()
+    }
+}
+
+#[cfg(feature = "wallet")]
 #[test]
 fn wallet_task_receipt_anchor_witness_verified() {
+    use ed25519_dalek::SigningKey;
     use fractal_core::wallet_anchor;
-    use fractal_wallet::{build_task_receipt, ToolReceiptSummary};
+    use fractal_wallet::build_task_receipt;
+    use rand::rngs::OsRng;
+
+    let mut rng = OsRng;
+    let agent = SigningKey::generate(&mut rng);
+    let prov = SigningKey::generate(&mut rng);
+    let agent_pk = agent.verifying_key().to_bytes();
 
     let mut state = funded_state();
-    let summaries = vec![ToolReceiptSummary {
-        receipt_id: [1u8; 32],
-        intent_id: [2u8; 32],
-        task_id: 100,
-        cost: 5,
-    }];
-    let root = fractal_wallet::tool_receipt_root(&summaries);
+    let r = wallet_task_receipt_tool_fixture::sign_one(&agent, &prov, 0x55, 100, 5);
+    let receipts = vec![r];
+    let root = fractal_wallet::tool_receipt_root(&receipts);
     let tr = build_task_receipt(
         100,
-        [3u8; 32],
+        agent_pk,
         [4u8; 32],
         "da://x".into(),
-        &summaries,
+        &receipts,
         5,
         root,
     )
@@ -131,22 +173,25 @@ fn wallet_task_receipt_anchor_witness_verified() {
 #[cfg(feature = "wallet")]
 #[test]
 fn wallet_task_receipt_anchor_witness_mismatch() {
-    use fractal_wallet::{build_task_receipt, ToolReceiptSummary};
+    use ed25519_dalek::SigningKey;
+    use fractal_wallet::build_task_receipt;
+    use rand::rngs::OsRng;
+
+    let mut rng = OsRng;
+    let agent = SigningKey::generate(&mut rng);
+    let prov = SigningKey::generate(&mut rng);
+    let agent_pk = agent.verifying_key().to_bytes();
 
     let mut state = funded_state();
-    let summaries = vec![ToolReceiptSummary {
-        receipt_id: [1u8; 32],
-        intent_id: [2u8; 32],
-        task_id: 101,
-        cost: 3,
-    }];
-    let root = fractal_wallet::tool_receipt_root(&summaries);
+    let r = wallet_task_receipt_tool_fixture::sign_one(&agent, &prov, 0x66, 101, 3);
+    let receipts = vec![r];
+    let root = fractal_wallet::tool_receipt_root(&receipts);
     let tr = build_task_receipt(
         101,
-        [3u8; 32],
+        agent_pk,
         [4u8; 32],
         "da://y".into(),
-        &summaries,
+        &receipts,
         3,
         root,
     )

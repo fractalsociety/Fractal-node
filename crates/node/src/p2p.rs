@@ -1,5 +1,6 @@
 //! libp2p QUIC + request-response block sync (PRD §18 M2) + gossipsub votes (M7-d-5).
 
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use fractal_consensus::{Block, Vote};
@@ -16,6 +17,50 @@ use tokio::sync::mpsc::UnboundedReceiver;
 use tokio::sync::oneshot;
 
 use crate::NodeHandle;
+
+/// PRD §8.1 (peer identity): load or create a libp2p **Ed25519** keypair stored as protobuf private key bytes.
+///
+/// On first use, creates parent directories, writes `path.identity.tmp` then renames to `path` (atomic on same filesystem).
+pub fn load_or_create_p2p_keypair(path: &Path) -> std::io::Result<libp2p::identity::Keypair> {
+    use libp2p::identity::Keypair;
+    fn decode_err(e: libp2p::identity::DecodingError) -> std::io::Error {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            format!("FRACTAL_P2P_IDENTITY_PATH decode: {e}"),
+        )
+    }
+    fn encode_err(e: libp2p::identity::DecodingError) -> std::io::Error {
+        std::io::Error::new(
+            std::io::ErrorKind::Other,
+            format!("encode libp2p keypair: {e}"),
+        )
+    }
+    if path.exists() {
+        let bytes = std::fs::read(path)?;
+        return Keypair::from_protobuf_encoding(&bytes).map_err(decode_err);
+    }
+    if let Some(parent) = path.parent() {
+        if !parent.as_os_str().is_empty() {
+            std::fs::create_dir_all(parent)?;
+        }
+    }
+    let kp = Keypair::generate_ed25519();
+    let enc = kp.to_protobuf_encoding().map_err(encode_err)?;
+    let tmp = path.with_extension("identity.tmp");
+    std::fs::write(&tmp, &enc)?;
+    std::fs::rename(&tmp, path)?;
+    Ok(kp)
+}
+
+/// Host keypair for the libp2p swarm: stable [`PeerId`] when **`FRACTAL_P2P_IDENTITY_PATH`** is set, else ephemeral Ed25519.
+pub fn p2p_keypair_from_env() -> std::io::Result<libp2p::identity::Keypair> {
+    use libp2p::identity::Keypair;
+    match std::env::var_os("FRACTAL_P2P_IDENTITY_PATH") {
+        None => Ok(Keypair::generate_ed25519()),
+        Some(raw) if raw.is_empty() => Ok(Keypair::generate_ed25519()),
+        Some(raw) => load_or_create_p2p_keypair(&PathBuf::from(raw)),
+    }
+}
 
 fn fractal_gossipsub_config() -> std::io::Result<gossipsub::Config> {
     gossipsub::ConfigBuilder::default()
@@ -117,7 +162,8 @@ pub async fn producer_network_task(
     let votes_topic = IdentTopic::new(fractal_network::VOTES_TOPIC_STR);
     let votes_topic_hash = votes_topic.hash();
 
-    let mut swarm: Swarm<NodeBehaviour> = SwarmBuilder::with_new_identity()
+    let keypair = p2p_keypair_from_env()?;
+    let mut swarm: Swarm<NodeBehaviour> = SwarmBuilder::with_existing_identity(keypair)
         .with_tokio()
         .with_quic()
         .with_behaviour(|key| {
@@ -301,7 +347,8 @@ pub async fn follower_network_task(
     let votes_topic = IdentTopic::new(fractal_network::VOTES_TOPIC_STR);
     let votes_topic_hash = votes_topic.hash();
 
-    let mut swarm: Swarm<NodeBehaviour> = SwarmBuilder::with_new_identity()
+    let keypair = p2p_keypair_from_env()?;
+    let mut swarm: Swarm<NodeBehaviour> = SwarmBuilder::with_existing_identity(keypair)
         .with_tokio()
         .with_quic()
         .with_behaviour(|key| {
@@ -525,5 +572,31 @@ mod bootstrap_parse_tests {
             .unwrap();
         let s = format!("{a},{b}");
         assert!(parse_fractal_bootstraps(&s).is_err());
+    }
+}
+
+#[cfg(test)]
+mod p2p_identity_tests {
+    use super::load_or_create_p2p_keypair;
+    use libp2p::PeerId;
+
+    #[test]
+    fn load_or_create_stable_peer_id() {
+        let dir = std::env::temp_dir().join(format!(
+            "fractal_p2p_id_test_{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("host.key");
+        let k1 = load_or_create_p2p_keypair(&path).unwrap();
+        let pid1 = PeerId::from_public_key(&k1.public());
+        let k2 = load_or_create_p2p_keypair(&path).unwrap();
+        let pid2 = PeerId::from_public_key(&k2.public());
+        assert_eq!(pid1, pid2);
+        assert!(path.is_file());
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 }

@@ -2,7 +2,7 @@
 //!
 //! Implements Phase 1 checklist pieces (W1–W6): capabilities, budgets, rate limits,
 //! revocation Merkle, tool market (trusted + optimistic + disputes), policy templates,
-//! emergency stop, task receipt binding, and **provider id** helper for SDK re-exports.
+//! emergency stop, **§9.1 `ToolReceipt`** + task receipt binding (§9.2), and **provider id** helper for SDK re-exports.
 
 pub mod budget;
 pub mod capability;
@@ -34,8 +34,9 @@ pub use policy::{
 pub use rate_limit::{RateLimitError, TokenBucket};
 pub use revocation::{RevocationEntry, RevocationError, RevocationSet};
 pub use task_receipt::{
-    build_task_receipt, summary_commitment, tool_receipt_root, verify_tool_costs, TaskReceipt,
-    TaskReceiptBuildError, ToolReceiptSummary,
+    build_task_receipt, derive_tool_receipt_id, tool_receipt_leaf_commitment, tool_receipt_root,
+    verify_tool_receipt_costs, MeteringRecord, TaskReceipt, TaskReceiptBuildError, TeeAttestation,
+    ToolReceipt, ToolReceiptAgentAckBody, ToolReceiptBody, ToolReceiptVerifyError,
 };
 pub use types::{
     Amount, IntentId, ProviderId, PublicKey, QuoteId, ReceiptId, TaskId, TeeType, TimestampMs,
