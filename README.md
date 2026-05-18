@@ -27,8 +27,8 @@ cargo --version
 The fastest path is **one HyperBFT shard** with JSON-RPC, masterchain anchors, and STWO→Plonky2 on a short interval:
 
 ```bash
-git clone https://github.com/locktea/fractalchainz.git
-cd fractalchainz
+git clone https://github.com/fractalsociety/Fractal-node.git
+cd Fractal-node
 
 # Build and start (RPC http://127.0.0.1:8545, fresh DB under .track-b-lab/)
 ./scripts/run-track-b-lab.sh
