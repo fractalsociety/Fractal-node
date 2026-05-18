@@ -1,0 +1,19 @@
+[package]
+name = "fractal-proof-aggregator"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Tier-2 Plonky2 recursive SNARK aggregation → globalZkRoot (PRD §7.8, M11)."
+
+[dependencies]
+anyhow = "1"
+borsh.workspace = true
+fractal-crypto = { path = "../crypto" }
+fractal-proof-condenser = { path = "../proof-condenser" }
+fractal-shard = { path = "../shard" }
+plonky2 = { version = "1.1", default-features = true }
+thiserror.workspace = true
+
+[dev-dependencies]
+fractal-consensus = { path = "../consensus" }
+hex = "0.4"

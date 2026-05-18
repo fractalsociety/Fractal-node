@@ -1,0 +1,12 @@
+[package]
+name = "fractal-shard"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Shard routing and masterchain wire types (PRD v0.2 Track B / M10)."
+
+[dependencies]
+borsh.workspace = true
+fractal-consensus = { path = "../consensus" }
+fractal-crypto = { path = "../crypto" }
+thiserror.workspace = true

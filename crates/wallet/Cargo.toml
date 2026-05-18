@@ -1,0 +1,23 @@
+[package]
+name = "fractal-wallet"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "FractalWork agent wallet: capabilities, budgets, revocation, tool market (spec v2.0)"
+
+[dependencies]
+blake3.workspace = true
+borsh.workspace = true
+ed25519-dalek.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+rand.workspace = true
+
+[[test]]
+name = "sub_agent_e2e"
+path = "tests/sub_agent_e2e.rs"
+
+[[test]]
+name = "revocation_smt"
+path = "tests/revocation_smt.rs"

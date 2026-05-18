@@ -1,0 +1,23 @@
+[package]
+name = "fractal-rpc"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+borsh.workspace = true
+fractal-core = { path = "../core", features = ["wallet"] }
+fractal-consensus = { path = "../consensus" }
+fractal-crypto = { path = "../crypto" }
+fractal-eth-wire = { path = "../eth-wire" }
+fractal-shard = { path = "../shard" }
+fractal-proof-aggregator = { path = "../proof-aggregator" }
+futures.workspace = true
+hex.workspace = true
+http.workspace = true
+jsonrpsee.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+tower.workspace = true
+tower-http.workspace = true

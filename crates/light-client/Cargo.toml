@@ -1,0 +1,20 @@
+[package]
+name = "fractal-light-client"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Light-client verifier: Plonky2 SNARK + globalStateRoot without a full node (PRD §7.10)."
+
+[dependencies]
+borsh.workspace = true
+fractal-proof-aggregator = { path = "../proof-aggregator" }
+fractal-shard = { path = "../shard" }
+hex.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+ureq = { version = "2.10", default-features = false, features = ["json"] }
+
+[dev-dependencies]
+fractal-crypto = { path = "../crypto" }
+hex.workspace = true

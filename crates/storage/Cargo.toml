@@ -1,0 +1,18 @@
+[package]
+name = "fractal-storage"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "RocksDB persistence: PRD §10.3 column bundles + M9 checkpoint_proofs (`FractalRocksDb`)."
+
+[dependencies]
+alloy-primitives = { version = "1.5", default-features = true, features = ["rlp"] }
+alloy-rlp = "0.3.15"
+alloy-trie = { version = "0.9.5", default-features = true, features = ["ethereum"] }
+borsh.workspace = true
+fractal-consensus = { path = "../consensus" }
+fractal-core = { path = "../core" }
+fractal-crypto = { path = "../crypto" }
+fractal-shard = { path = "../shard" }
+rocksdb.workspace = true
+thiserror.workspace = true

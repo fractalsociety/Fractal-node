@@ -1,0 +1,20 @@
+[package]
+name = "fractal-faucet"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "PRD M6 devnet faucet: rate-limited tFRAC drip via borsh Transfer txs"
+
+[[bin]]
+name = "fractal-faucet"
+path = "src/main.rs"
+
+[dependencies]
+axum = "0.7"
+borsh.workspace = true
+fractal-core = { path = "../core" }
+hex.workspace = true
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "net"] }
+ureq = { version = "2.10", default-features = false, features = ["json"] }

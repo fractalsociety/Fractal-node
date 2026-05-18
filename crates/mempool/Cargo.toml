@@ -1,0 +1,10 @@
+[package]
+name = "fractal-mempool"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+borsh.workspace = true
+fractal-core = { path = "../core" }
+thiserror.workspace = true

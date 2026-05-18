@@ -1,0 +1,20 @@
+[package]
+name = "fractal-indexer-stub"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "PRD W6-d/W6-e: JSON-RPC poll loop with optional block metadata (operator stub; not a production indexer)"
+
+[[bin]]
+name = "fractal-indexer-stub"
+path = "src/main.rs"
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+ureq = { version = "2.10", default-features = false, features = ["json"] }
+borsh.workspace = true
+hex.workspace = true
+fractal-crypto = { path = "../crypto" }
+fractal-core = { path = "../core", features = ["wallet"] }
+fractal-wallet = { path = "../wallet" }

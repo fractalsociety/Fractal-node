@@ -1,0 +1,13 @@
+{
+  "tool_class": 0,
+  "successful": [
+    { "settled_at_ms": 1000, "weight": 1 },
+    { "settled_at_ms": 2000, "weight": 2 }
+  ],
+  "failed_settlements": 0,
+  "slashing_events": 0,
+  "first_seen_ms": 500,
+  "now_ms": 3000,
+  "available_stake": 1000000000000000000,
+  "distinct_client_count": 2
+}

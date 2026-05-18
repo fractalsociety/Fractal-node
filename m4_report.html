@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>FractalChain M4 Progress Report</title>
+    <style>
+      body { font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; margin: 24px; line-height: 1.4; }
+      code, pre { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace; }
+      .card { border: 1px solid #ddd; border-radius: 10px; padding: 16px 18px; margin: 14px 0; }
+      h1 { margin: 0 0 10px; }
+      h2 { margin: 0 0 8px; font-size: 18px; }
+      ul { margin: 8px 0 0 18px; }
+      .ok { color: #0a7; font-weight: 700; }
+      .warn { color: #b70; font-weight: 700; }
+    </style>
+  </head>
+  <body>
+    <h1>M4 Update</h1>
+
+    <div class="card">
+      <h2>What I just implemented</h2>
+      <ul>
+        <li><strong>Receipt logs</strong>: <code>eth_getTransactionReceipt</code> now returns a <code>logs</code> array of full log objects (same shape as <code>eth_getLogs</code>), including <code>blockHash</code>. <code>logIndex</code> is block-scoped (sum of prior logs in the block before this tx).</li>
+        <li><strong>Real EVM CALL execution</strong> (devnet): <code>fractal-evm</code> now runs stored bytecode via <code>revm</code> and commits storage writes.</li>
+        <li><strong>Persistent EVM storage</strong>: added <code>State.evm_storage</code> (slot map) and wired it into the EVM database bridge.</li>
+        <li><strong>RPC storage reads</strong>: <code>eth_getStorageAt</code> now returns real values from <code>State.evm_storage</code>.</li>
+        <li><strong>Contract bytecode eth_call path verified</strong>: added an automated test proving a contract CALL can <code>SSTORE</code> and <code>RETURN</code> 32 bytes deterministically.</li>
+        <li><strong><code>eth_getLogs</code> filters</strong>: <code>topics</code> (null wildcards, exact 32-byte hashes, OR-arrays per position), <code>blockHash</code> single-block mode (exclusive with <code>fromBlock</code>/<code>toBlock</code>), <code>address</code> as one address or an array (OR), block tags <code>earliest</code> / <code>pending</code> / <code>latest</code> / hex.</li>
+        <li><strong>CREATE (revm)</strong>: <code>TxBody::EvmCreate</code> uses top-level <code>TxKind::Create</code>; deployed code is init <code>RETURN</code> output; gas/logs/receipt bloom follow the same path as <code>EvmCall</code>; deployer nonce comes from revm (no double bump).</li>
+        <li><strong><code>logsBloom</code></strong>: standard 2048-bit Ethereum bloom on receipts and merged block bloom.</li>
+        <li><strong>Receipt <code>status</code></strong>: <code>eth_getTransactionReceipt</code> emits <code>0x1</code> / <code>0x0</code> from <code>State.evm_tx_success</code> (via <code>ChainInteraction::evm_receipt_success</code>); missing entry defaults to success for legacy state.</li>
+        <li><strong><code>ExecError::EvmRevert</code></strong>: revm <code>ExecutionResult::Revert</code> maps to structured revert return data; other halts remain <code>EvmFailed</code>.</li>
+        <li><strong><code>eth_call</code> / <code>eth_estimateGas</code></strong>: errors use <code>ExecError</code>; <code>EvmRevert</code> surfaces as JSON-RPC error code <code>3</code> (<code>execution reverted</code>) with <code>data</code> as hex return data. <code>eth_estimateGas</code> runs the same simulation as <code>eth_call</code> and returns <code>gas_used</code> on success.</li>
+      </ul>
+    </div>
+
+    <div class="card">
+      <h2>Key files touched</h2>
+      <ul>
+        <li><code>crates/core/src/state.rs</code> (adds <code>evm_storage</code>)</li>
+        <li><code>crates/evm/src/engine.rs</code> (State-backed <code>revm::Database</code> + commit)</li>
+        <li><code>crates/evm/tests/m4_eth_call_bytecode.rs</code> (bytecode CALL + SSTORE + RETURN test)</li>
+        <li><code>crates/evm/tests/m4_evm_revert.rs</code> (revert → <code>EvmRevert</code>)</li>
+        <li><code>crates/rpc/src/module.rs</code> (<code>RpcLog</code>, <code>make_rpc_log</code>, <code>eth_getTransactionReceipt.logs</code>, <code>eth_getStorageAt</code>, receipt <code>status</code>, <code>eth_call</code> / estimate revert mapping)</li>
+        <li><code>crates/node/src/lib.rs</code> (<code>receipt_rpc_logs</code>, <code>logs_for_filter</code>, block-scoped log indices, <code>evm_receipt_success</code>, estimate gas simulation)</li>
+        <li><code>crates/node/tests/m4_evm_receipt_success.rs</code></li>
+      </ul>
+    </div>
+
+    <div class="card">
+      <h2>Status</h2>
+      <p class="ok">cargo test -q: PASS</p>
+      <p class="warn">Still devnet-grade:</p>
+      <ul>
+        <li>Mined txs that fail EVM apply still do not land in blocks today, so <code>0x0</code> is mainly reserved for when failed EVM inclusion is modeled; the plumbing reads <code>evm_tx_success</code>.</li>
+      </ul>
+    </div>
+
+    <div class="card">
+      <h2>Next PRD M4 step I recommend</h2>
+      <ul>
+        <li><strong>CREATE2 / value / salt:</strong> extend as needed for tooling parity.</li>
+        <li><strong>Failed-tx inclusion (optional):</strong> if the chain ever commits reverted txs, write <code>evm_tx_success = false</code> and reconcile nonce/gas accounting with Ethereum semantics.</li>
+      </ul>
+    </div>
+  </body>
+</html>
+

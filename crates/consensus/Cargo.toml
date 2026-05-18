@@ -1,0 +1,13 @@
+[package]
+name = "fractal-consensus"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+borsh.workspace = true
+fractal-bft-wire = { path = "../bft-wire" }
+fractal-core = { path = "../core" }
+fractal-evm = { path = "../evm" }
+fractal-crypto = { path = "../crypto" }
+thiserror.workspace = true

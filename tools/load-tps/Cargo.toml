@@ -1,0 +1,16 @@
+[package]
+name = "fractal-load-tps"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[[bin]]
+name = "fractal-load-tps"
+path = "src/main.rs"
+
+[dependencies]
+borsh = { workspace = true }
+fractal-core = { path = "../../crates/core" }
+hex = { workspace = true }
+serde_json = { workspace = true }
+ureq = { version = "2.10", features = ["json"] }

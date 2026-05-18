@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>FractalChain — RPC status (dev)</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <style>
+    :root {
+      color-scheme: light;
+      --fg: #0f172a;
+      --bg: #ffffff;
+      --muted: #475569;
+      --border: #cbd5e1;
+      --pre-bg: #f1f5f9;
+      --err: #b91c1c;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        color-scheme: dark;
+        --fg: #f1f5f9;
+        --bg: #0f172a;
+        --muted: #94a3b8;
+        --border: #334155;
+        --pre-bg: #1e293b;
+        --err: #f87171;
+      }
+    }
+    body { font-family: system-ui, sans-serif; max-width: 36rem; margin: 0 auto; padding: 1.25rem; color: var(--fg); background: var(--bg); line-height: 1.45; }
+    h1 { font-size: 1.2rem; }
+    label { display: block; font-size: 0.9rem; margin-bottom: 0.25rem; color: var(--muted); }
+    input { width: 100%; box-sizing: border-box; padding: 0.45rem 0.5rem; font-family: ui-monospace, monospace; border: 1px solid var(--border); border-radius: 6px; background: var(--bg); color: var(--fg); }
+    button { margin-top: 0.6rem; padding: 0.45rem 1rem; cursor: pointer; border-radius: 6px; border: 1px solid var(--border); background: var(--bg); color: var(--fg); }
+    pre { background: var(--pre-bg); padding: 0.75rem; border-radius: 8px; overflow: auto; font-size: 0.82rem; border: 1px solid var(--border); color: var(--fg); }
+    .err { color: var(--err); margin-top: 0.5rem; }
+    .muted { color: var(--muted); font-size: 0.88rem; }
+  </style>
+</head>
+<body>
+  <h1>FractalChain — RPC liveness</h1>
+  <p class="muted">PRD M6 operator stub · POST JSON-RPC · requires CORS on the node</p>
+  <label for="rpc">JSON-RPC URL</label>
+  <input id="rpc" type="text" value="http://127.0.0.1:8545" autocomplete="off" spellcheck="false" />
+  <button type="button" id="go">Check</button>
+  <p id="err" class="err" role="alert"></p>
+  <pre id="out">(not run yet)</pre>
+  <script>
+    async function rpc(url, method, params = []) {
+      const r = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params }),
+      });
+      const j = await r.json();
+      if (j.error) throw new Error(JSON.stringify(j.error, null, 2));
+      return j.result;
+    }
+    document.getElementById("go").onclick = async () => {
+      const url = document.getElementById("rpc").value.trim();
+      const err = document.getElementById("err");
+      const out = document.getElementById("out");
+      err.textContent = "";
+      out.textContent = "Loading…";
+      try {
+        const [chainId, bn, ver] = await Promise.all([
+          rpc(url, "eth_chainId"),
+          rpc(url, "eth_blockNumber"),
+          rpc(url, "web3_clientVersion"),
+        ]);
+        out.textContent = JSON.stringify({ eth_chainId: chainId, eth_blockNumber: bn, web3_clientVersion: ver }, null, 2);
+      } catch (e) {
+        out.textContent = "";
+        err.textContent = String(e);
+      }
+    };
+  </script>
+</body>
+</html>

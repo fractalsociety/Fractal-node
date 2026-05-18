@@ -1,0 +1,30 @@
+[package]
+name = "fractal-masterchain"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Dedicated masterchain BFT coordinator (PRD §7.10, M11)."
+
+[[bin]]
+name = "fractal-masterchain"
+path = "src/main.rs"
+
+[dependencies]
+borsh.workspace = true
+fractal-consensus = { path = "../consensus" }
+fractal-crypto = { path = "../crypto" }
+fractal-network = { path = "../network" }
+fractal-proof-aggregator = { path = "../proof-aggregator" }
+fractal-rpc = { path = "../rpc" }
+fractal-shard = { path = "../shard" }
+fractal-storage = { path = "../storage" }
+futures.workspace = true
+hex.workspace = true
+libp2p.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+ureq = { version = "2.10", features = ["json"] }
+
+[dev-dependencies]
+fractal-core = { path = "../core" }
