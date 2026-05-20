@@ -17,6 +17,7 @@ use std::convert::Infallible;
 const FRACTAL_DEFAULT_CHAIN_ID: u64 = 41;
 /// Must be ≥ fractal-node block `gas_limit` so Hardhat-style 60M gas txs validate in revm (EIP-7825 cap).
 const FRACTAL_TX_GAS_CAP: u64 = 60_000_000;
+const FRACTAL_DEVNET_GAS_PRICE: u128 = 1;
 
 /// Minimal `revm`-backed engine (M4 initial slice).
 ///
@@ -90,6 +91,7 @@ impl EvmEngine for RevmEngine {
         tx.data = Bytes::from(calldata);
         tx.value = U256::from(0u64);
         tx.gas_limit = gas_limit;
+        tx.gas_price = FRACTAL_DEVNET_GAS_PRICE;
         tx.nonce = caller_nonce;
         tx.chain_id = Some(FRACTAL_DEFAULT_CHAIN_ID);
 
@@ -145,6 +147,7 @@ impl EvmEngine for RevmEngine {
         tx.data = Bytes::from(init_code);
         tx.value = U256::from(value);
         tx.gas_limit = gas_limit;
+        tx.gas_price = FRACTAL_DEVNET_GAS_PRICE;
         tx.nonce = nonce;
         tx.chain_id = Some(FRACTAL_DEFAULT_CHAIN_ID);
 
@@ -276,7 +279,9 @@ impl<'a> DatabaseCommit for StateDb<'a> {
                 .entry(a)
                 .or_insert(fractal_core::Account { nonce: 0, balance: 0 })
                 .nonce = info.nonce;
-            if let Some(code) = info.code {
+            if info.code_hash == KECCAK_EMPTY {
+                self.st.evm_code.remove(&a);
+            } else if let Some(code) = info.code {
                 let raw = code.bytecode().to_vec();
                 if !raw.is_empty() {
                     self.st.evm_code.insert(a, raw);
