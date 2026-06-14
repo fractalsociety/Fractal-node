@@ -255,10 +255,10 @@ The prerequisite classification layer is implemented.
 - [x] Keep conflicting owned-object transactions queued instead of draining them together.
 - [x] Add focused tests for owned-object classification.
 - [x] Add focused tests for mempool owned-object prioritization and conflict filtering.
-- [ ] Add object-version tracking beyond account nonce.
-- [ ] Add explicit mixed-transaction detection for transactions touching both owned and shared state.
-- [ ] Add metrics for owned versus consensus mempool lanes.
-- [ ] Add RPC/debug endpoint to inspect a transaction's execution scope before submission.
+- [x] Add object-version tracking beyond account nonce.
+- [x] Add explicit mixed-transaction detection for transactions touching both owned and shared state.
+- [x] Add metrics for owned versus consensus mempool lanes.
+- [x] Add RPC/debug endpoint to inspect a transaction's execution scope before submission.
 
 ### Phase B: Proof-Final Settlement
 

@@ -2,7 +2,7 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 
 use borsh::BorshDeserialize;
-use fractal_core::Address;
+use fractal_core::{Address, OwnedObjectId, TxExecutionScope};
 use fractal_crypto::hash::keccak256;
 use http::Method;
 use jsonrpsee::server::{ServerBuilder, ServerHandle};
@@ -210,6 +210,27 @@ pub struct RpcProofMetrics {
     pub proof_final_height: String,
     pub latest_rejection_reason: Option<String>,
     pub rejection_reasons: Vec<RpcProofRejectionMetric>,
+}
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RpcMempoolLaneMetrics {
+    pub pending_total: String,
+    pub pending_owned: String,
+    pub pending_mixed: String,
+    pub pending_consensus: String,
+    pub pending_consensus_lane: String,
+}
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RpcTxScope {
+    pub tx_hash: String,
+    pub lane: String,
+    pub certificate_eligible: bool,
+    pub mixed: bool,
+    pub owner: Option<String>,
+    pub owned_objects: Vec<String>,
 }
 
 #[derive(Clone, Serialize)]
@@ -515,6 +536,8 @@ pub trait ChainInteraction: Send {
 
     fn proof_metrics(&self) -> RpcProofMetrics;
 
+    fn mempool_lane_metrics(&self) -> RpcMempoolLaneMetrics;
+
     fn chain_config(&self) -> RpcChainConfig;
 
     fn submit_validity_proof(
@@ -573,6 +596,34 @@ pub fn build_module(ctx: SharedChain) -> RpcModule<SharedChain> {
             }
         })
         .expect("register fractal_daMetrics");
+
+    module
+        .register_async_method(
+            "fractal_mempoolLaneMetrics",
+            |_params: Params<'static>, ctx, _| {
+                let ctx = ctx.clone();
+                async move {
+                    let g = ctx.lock().await;
+                    Ok::<RpcMempoolLaneMetrics, ErrorObjectOwned>(g.mempool_lane_metrics())
+                }
+            },
+        )
+        .expect("register fractal_mempoolLaneMetrics");
+
+    module
+        .register_async_method(
+            "fractal_debugTxScope",
+            |params: Params<'static>, _ctx, _| async move {
+                let tx_hex: String = params
+                    .one()
+                    .map_err(|_| err_invalid_params("expected borsh transaction hex"))?;
+                let tx_bytes = parse_bytes_hex(&tx_hex)?;
+                let tx = fractal_core::Transaction::try_from_slice(&tx_bytes)
+                    .map_err(|_| err_invalid_params("invalid Transaction borsh"))?;
+                Ok::<RpcTxScope, ErrorObjectOwned>(rpc_tx_scope(&tx, &keccak256(&tx_bytes)))
+            },
+        )
+        .expect("register fractal_debugTxScope");
 
     module
         .register_async_method(
@@ -1198,6 +1249,49 @@ pub fn build_module(ctx: SharedChain) -> RpcModule<SharedChain> {
         .expect("register eth_getLogs");
 
     module
+}
+
+fn rpc_tx_scope(tx: &fractal_core::Transaction, tx_hash: &[u8; 32]) -> RpcTxScope {
+    match tx.execution_scope() {
+        TxExecutionScope::Owned { owner, objects } => RpcTxScope {
+            tx_hash: hash_hex(tx_hash),
+            lane: "owned".into(),
+            certificate_eligible: true,
+            mixed: false,
+            owner: Some(addr_hex(&owner)),
+            owned_objects: objects.iter().map(rpc_owned_object_id).collect(),
+        },
+        TxExecutionScope::Mixed {
+            owner,
+            owned_objects,
+        } => RpcTxScope {
+            tx_hash: hash_hex(tx_hash),
+            lane: "mixed".into(),
+            certificate_eligible: false,
+            mixed: true,
+            owner: Some(addr_hex(&owner)),
+            owned_objects: owned_objects.iter().map(rpc_owned_object_id).collect(),
+        },
+        TxExecutionScope::Consensus => RpcTxScope {
+            tx_hash: hash_hex(tx_hash),
+            lane: "consensus".into(),
+            certificate_eligible: false,
+            mixed: false,
+            owner: None,
+            owned_objects: Vec::new(),
+        },
+    }
+}
+
+fn rpc_owned_object_id(object_id: &OwnedObjectId) -> String {
+    match object_id {
+        OwnedObjectId::AccountNonce(address) => format!("accountNonce:{}", addr_hex(address)),
+        OwnedObjectId::Agent(agent_id) => format!("agent:{agent_id}"),
+        OwnedObjectId::Receipt(receipt_id) => format!("receipt:{}", hash_hex(receipt_id)),
+        OwnedObjectId::WalletTaskReceipt(commitment) => {
+            format!("walletTaskReceipt:{}", hash_hex(commitment))
+        }
+    }
 }
 
 fn rpc_block_from_consensus(

@@ -18,6 +18,15 @@ pub struct Mempool {
     pending: Vec<PooledTx>,
 }
 
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct MempoolLaneMetrics {
+    pub pending_total: usize,
+    pub pending_owned: usize,
+    pub pending_mixed: usize,
+    pub pending_consensus: usize,
+    pub pending_consensus_lane: usize,
+}
+
 impl Mempool {
     pub fn len(&self) -> usize {
         self.pending.len()
@@ -25,6 +34,22 @@ impl Mempool {
 
     pub fn insert(&mut self, tx: PooledTx) {
         self.pending.push(tx);
+    }
+
+    pub fn lane_metrics(&self) -> MempoolLaneMetrics {
+        let mut metrics = MempoolLaneMetrics {
+            pending_total: self.pending.len(),
+            ..MempoolLaneMetrics::default()
+        };
+        for p in &self.pending {
+            match p.tx.execution_scope() {
+                TxExecutionScope::Owned { .. } => metrics.pending_owned += 1,
+                TxExecutionScope::Mixed { .. } => metrics.pending_mixed += 1,
+                TxExecutionScope::Consensus => metrics.pending_consensus += 1,
+            }
+        }
+        metrics.pending_consensus_lane = metrics.pending_mixed + metrics.pending_consensus;
+        metrics
     }
 
     pub fn drain_ready_gas_budget(&mut self, max_gas: u64, base_fee: u128) -> Vec<PooledTx> {
@@ -166,6 +191,24 @@ mod tests {
         }
     }
 
+    fn mixed_file_dispute(signer: [u8; 20], nonce: u64, tip: u128) -> PooledTx {
+        PooledTx {
+            tx: Transaction {
+                signer,
+                nonce,
+                vm: fractal_core::VmKind::Native,
+                body: fractal_core::TxBody::Native(fractal_core::NativeCall::FileDispute {
+                    receipt_id: [3u8; 32],
+                    reason_code: 1,
+                    evidence_hash: [4u8; 32],
+                }),
+            },
+            max_priority_fee_per_gas: tip,
+            max_fee_per_gas: u128::MAX,
+            eth_signed_raw: None,
+        }
+    }
+
     #[test]
     fn drain_keeps_conflicting_owned_object_queued() {
         let signer = [7u8; 20];
@@ -202,5 +245,38 @@ mod tests {
         let drained = mp.drain_ready(2, 1);
 
         assert!(drained[0].is_owned_object_tx());
+    }
+
+    #[test]
+    fn lane_metrics_count_owned_mixed_and_consensus_pending_transactions() {
+        let signer = [7u8; 20];
+        let mut mp = Mempool::default();
+        mp.insert(owned_noop(signer, 0, 1));
+        mp.insert(mixed_file_dispute(signer, 1, 1));
+        mp.insert(PooledTx {
+            tx: Transaction {
+                signer,
+                nonce: 2,
+                vm: fractal_core::VmKind::Evm,
+                body: fractal_core::TxBody::Transfer {
+                    to: [8u8; 20],
+                    amount: 1,
+                },
+            },
+            max_priority_fee_per_gas: 1,
+            max_fee_per_gas: u128::MAX,
+            eth_signed_raw: None,
+        });
+
+        assert_eq!(
+            mp.lane_metrics(),
+            MempoolLaneMetrics {
+                pending_total: 3,
+                pending_owned: 1,
+                pending_mixed: 1,
+                pending_consensus: 1,
+                pending_consensus_lane: 2,
+            }
+        );
     }
 }

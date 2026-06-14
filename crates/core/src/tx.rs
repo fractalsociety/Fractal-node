@@ -111,6 +111,11 @@ pub enum OwnedObjectId {
 pub enum TxExecutionScope {
     /// Must enter the ordered consensus lane because it touches shared state.
     Consensus,
+    /// Must enter the ordered consensus lane because it touches both owned and shared state.
+    Mixed {
+        owner: Address,
+        owned_objects: Vec<OwnedObjectId>,
+    },
     /// Can use the certified owned-object lane once validators countersign it.
     Owned {
         owner: Address,
@@ -224,22 +229,40 @@ pub struct Transaction {
 
 impl Transaction {
     pub fn execution_scope(&self) -> TxExecutionScope {
-        let owned = |mut objects: Vec<OwnedObjectId>| {
+        let normalize = |mut objects: Vec<OwnedObjectId>| {
             objects.insert(0, OwnedObjectId::AccountNonce(self.signer));
             objects.sort();
             objects.dedup();
-            TxExecutionScope::Owned {
-                owner: self.signer,
-                objects,
-            }
+            objects
+        };
+        let owned = |objects: Vec<OwnedObjectId>| TxExecutionScope::Owned {
+            owner: self.signer,
+            objects: normalize(objects),
+        };
+        let mixed = |objects: Vec<OwnedObjectId>| TxExecutionScope::Mixed {
+            owner: self.signer,
+            owned_objects: normalize(objects),
         };
 
         match (&self.vm, &self.body) {
+            (VmKind::Native, TxBody::Native(NativeCall::SuspendAgent { agent_id, .. })) => {
+                mixed(vec![OwnedObjectId::Agent(*agent_id)])
+            }
             (VmKind::Native, TxBody::Native(NativeCall::UpdateAgent { agent_id, .. })) => {
                 owned(vec![OwnedObjectId::Agent(*agent_id)])
             }
             (VmKind::Native, TxBody::Native(NativeCall::SettleReceipt(receipt))) => {
                 owned(vec![OwnedObjectId::Receipt(receipt.receipt_id)])
+            }
+            (VmKind::Native, TxBody::Native(NativeCall::SettleBatch(payload))) => mixed(
+                payload
+                    .receipts
+                    .iter()
+                    .map(|receipt| OwnedObjectId::Receipt(receipt.receipt_id))
+                    .collect(),
+            ),
+            (VmKind::Native, TxBody::Native(NativeCall::FileDispute { receipt_id, .. })) => {
+                mixed(vec![OwnedObjectId::Receipt(*receipt_id)])
             }
             (
                 VmKind::Native,
@@ -253,6 +276,10 @@ impl Transaction {
     pub fn is_owned_object_tx(&self) -> bool {
         matches!(self.execution_scope(), TxExecutionScope::Owned { .. })
     }
+
+    pub fn is_mixed_object_tx(&self) -> bool {
+        matches!(self.execution_scope(), TxExecutionScope::Mixed { .. })
+    }
 }
 
 #[cfg(test)]
@@ -261,6 +288,25 @@ mod tests {
 
     fn signer() -> Address {
         [7u8; 20]
+    }
+
+    fn receipt(receipt_id: Hash256) -> OnChainTaskReceipt {
+        OnChainTaskReceipt {
+            receipt_id,
+            job_id: [1u8; 32],
+            requester: signer(),
+            worker: 1,
+            verifier: 2,
+            artifact_root: [3u8; 32],
+            output_hash: [4u8; 32],
+            score: 100,
+            payout_amount: 10,
+            verifier_fee: 1,
+            protocol_fee: 1,
+            final_status: 1,
+            finalized_at: 123,
+            schema_version: 1,
+        }
     }
 
     #[test]
@@ -326,6 +372,63 @@ mod tests {
         };
 
         assert_eq!(tx.execution_scope(), TxExecutionScope::Consensus);
+    }
+
+    #[test]
+    fn settle_batch_is_explicitly_mixed() {
+        let receipt_id = [9u8; 32];
+        let tx = Transaction {
+            signer: signer(),
+            nonce: 0,
+            vm: VmKind::Native,
+            body: TxBody::Native(NativeCall::SettleBatch(SettleBatchPayload {
+                batch_id: [8u8; 32],
+                operator: signer(),
+                receipts: vec![receipt(receipt_id)],
+                payout_entries: Vec::new(),
+                submitted_at: 123,
+                operator_sig: [0u8; 64],
+            })),
+        };
+
+        assert_eq!(
+            tx.execution_scope(),
+            TxExecutionScope::Mixed {
+                owner: signer(),
+                owned_objects: vec![
+                    OwnedObjectId::AccountNonce(signer()),
+                    OwnedObjectId::Receipt(receipt_id)
+                ],
+            }
+        );
+        assert!(tx.is_mixed_object_tx());
+        assert!(!tx.is_owned_object_tx());
+    }
+
+    #[test]
+    fn file_dispute_is_explicitly_mixed() {
+        let receipt_id = [4u8; 32];
+        let tx = Transaction {
+            signer: signer(),
+            nonce: 0,
+            vm: VmKind::Native,
+            body: TxBody::Native(NativeCall::FileDispute {
+                receipt_id,
+                reason_code: 7,
+                evidence_hash: [6u8; 32],
+            }),
+        };
+
+        assert_eq!(
+            tx.execution_scope(),
+            TxExecutionScope::Mixed {
+                owner: signer(),
+                owned_objects: vec![
+                    OwnedObjectId::AccountNonce(signer()),
+                    OwnedObjectId::Receipt(receipt_id)
+                ],
+            }
+        );
     }
 
     #[test]
@@ -402,6 +505,25 @@ mod tests {
                 to: [8u8; 20],
                 amount: 1,
             },
+        };
+
+        assert_eq!(
+            OwnedObjectCertificate::from_owned_transaction(&tx, Vec::new(), Vec::new()),
+            Err(OwnedObjectCertificateError::NotOwnedObject)
+        );
+    }
+
+    #[test]
+    fn owned_object_certificate_rejects_mixed_transaction() {
+        let tx = Transaction {
+            signer: signer(),
+            nonce: 0,
+            vm: VmKind::Native,
+            body: TxBody::Native(NativeCall::FileDispute {
+                receipt_id: [5u8; 32],
+                reason_code: 1,
+                evidence_hash: [6u8; 32],
+            }),
         };
 
         assert_eq!(

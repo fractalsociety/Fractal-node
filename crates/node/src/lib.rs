@@ -21,8 +21,8 @@ use fractal_crypto::hash::keccak256;
 use fractal_crypto::BlsSecretKey;
 use fractal_mempool::{next_base_fee, BaseFeeParams, Mempool, PooledTx};
 use fractal_rpc::{
-    logs_bloom_256, make_rpc_log, ChainInteraction, RpcChainConfig, RpcDaMetrics, RpcProofMetrics,
-    RpcProofRejectionMetric,
+    logs_bloom_256, make_rpc_log, ChainInteraction, RpcChainConfig, RpcDaMetrics,
+    RpcMempoolLaneMetrics, RpcProofMetrics, RpcProofRejectionMetric,
 };
 use fractal_storage::{ProofFinalityStore, StoredProofFinalityRecord};
 use libp2p::multiaddr::Protocol;
@@ -1134,6 +1134,17 @@ impl ChainInteraction for NodeInner {
                     count: format!("0x{count:x}"),
                 })
                 .collect(),
+        }
+    }
+
+    fn mempool_lane_metrics(&self) -> RpcMempoolLaneMetrics {
+        let metrics = self.mempool.lane_metrics();
+        RpcMempoolLaneMetrics {
+            pending_total: format!("0x{:x}", metrics.pending_total),
+            pending_owned: format!("0x{:x}", metrics.pending_owned),
+            pending_mixed: format!("0x{:x}", metrics.pending_mixed),
+            pending_consensus: format!("0x{:x}", metrics.pending_consensus),
+            pending_consensus_lane: format!("0x{:x}", metrics.pending_consensus_lane),
         }
     }
 

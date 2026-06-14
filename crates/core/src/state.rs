@@ -10,7 +10,9 @@ use crate::merkle::{merkle_root, verify_merkle_proof};
 use crate::native_types::{
     AgentRecord, DisputeRecord, OnChainTaskReceipt, PayoutEntry, SettleBatchPayload, StoredBatch,
 };
-use crate::tx::{NativeCall, Transaction, TxBody, VmKind};
+use crate::tx::{
+    NativeCall, OwnedObjectId, OwnedObjectVersion, Transaction, TxBody, TxExecutionScope, VmKind,
+};
 use crate::EvmEngine;
 
 #[derive(BorshSerialize, BorshDeserialize, Clone, Debug, PartialEq, Eq)]
@@ -55,6 +57,8 @@ pub struct State {
     pub evm_tx_success: BTreeMap<fractal_crypto::Hash256, bool>,
     /// W6-d: first signer to anchor a wallet `TaskReceipt` commitment (`docs/wallet.md` §9.2).
     pub wallet_task_receipt_anchors: BTreeMap<fractal_crypto::Hash256, Address>,
+    /// Monotonic versions for owned objects whose version is not already the account nonce.
+    pub owned_object_versions: BTreeMap<OwnedObjectId, u64>,
 }
 
 impl Default for State {
@@ -78,6 +82,7 @@ impl Default for State {
             evm_tx_logs: BTreeMap::new(),
             evm_tx_success: BTreeMap::new(),
             wallet_task_receipt_anchors: BTreeMap::new(),
+            owned_object_versions: BTreeMap::new(),
         }
     }
 }
@@ -90,6 +95,37 @@ pub struct EvmLog {
 }
 
 impl State {
+    pub fn owned_object_version(&self, object_id: &OwnedObjectId) -> u64 {
+        match object_id {
+            OwnedObjectId::AccountNonce(address) => {
+                self.accounts.get(address).map(|a| a.nonce).unwrap_or(0)
+            }
+            _ => self
+                .owned_object_versions
+                .get(object_id)
+                .copied()
+                .unwrap_or(0),
+        }
+    }
+
+    pub fn owned_object_versions_for_transaction(
+        &self,
+        tx: &Transaction,
+    ) -> Option<Vec<OwnedObjectVersion>> {
+        let TxExecutionScope::Owned { objects, .. } = tx.execution_scope() else {
+            return None;
+        };
+        Some(
+            objects
+                .into_iter()
+                .map(|object_id| OwnedObjectVersion {
+                    version: self.owned_object_version(&object_id),
+                    object_id,
+                })
+                .collect(),
+        )
+    }
+
     pub fn apply_transaction(&mut self, tx: &Transaction) -> Result<(), ExecError> {
         let signer = tx.signer;
         let account = self.accounts.get(&signer).ok_or(ExecError::UnknownSigner)?;
@@ -100,13 +136,18 @@ impl State {
             });
         }
 
-        match (&tx.vm, &tx.body) {
+        let scope = tx.execution_scope();
+        let result = match (&tx.vm, &tx.body) {
             (VmKind::Native, TxBody::Native(call)) => self.apply_native(signer, call),
             (VmKind::Evm, TxBody::Transfer { to, amount }) => {
                 self.apply_transfer(signer, *to, *amount)
             }
             _ => Err(ExecError::InvalidShape),
+        };
+        if result.is_ok() {
+            self.bump_owned_object_versions_for_scope(&scope);
         }
+        result
     }
 
     /// Apply a transaction, delegating EVM execution to `evm` when needed.
@@ -124,7 +165,8 @@ impl State {
             });
         }
 
-        match (&tx.vm, &tx.body) {
+        let scope = tx.execution_scope();
+        let result = match (&tx.vm, &tx.body) {
             (VmKind::Native, TxBody::Native(call)) => self.apply_native(signer, call),
             (VmKind::Evm, TxBody::Transfer { to, amount }) => {
                 self.apply_transfer(signer, *to, *amount)
@@ -176,12 +218,34 @@ impl State {
                 Ok(())
             }
             _ => Err(ExecError::InvalidShape),
+        };
+        if result.is_ok() {
+            self.bump_owned_object_versions_for_scope(&scope);
         }
+        result
     }
 
     fn bump_nonce(&mut self, signer: Address) {
         let a = self.accounts.get_mut(&signer).expect("signer exists");
         a.nonce = a.nonce.saturating_add(1);
+    }
+
+    fn bump_owned_object_versions_for_scope(&mut self, scope: &TxExecutionScope) {
+        let objects = match scope {
+            TxExecutionScope::Owned { objects, .. } => objects,
+            TxExecutionScope::Mixed { owned_objects, .. } => owned_objects,
+            TxExecutionScope::Consensus => return,
+        };
+        for object_id in objects {
+            if matches!(object_id, OwnedObjectId::AccountNonce(_)) {
+                continue;
+            }
+            let version = self
+                .owned_object_versions
+                .entry(object_id.clone())
+                .or_insert(0);
+            *version = version.saturating_add(1);
+        }
     }
 
     fn require_governance(&self, signer: Address) -> Result<(), ExecError> {
@@ -581,5 +645,149 @@ impl State {
             self.bump_nonce(signer);
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn signer() -> Address {
+        [7u8; 20]
+    }
+
+    fn funded_state() -> State {
+        let mut state = State::default();
+        state.accounts.insert(
+            signer(),
+            Account {
+                nonce: 0,
+                balance: 1_000_000,
+            },
+        );
+        state
+    }
+
+    fn receipt(receipt_id: fractal_crypto::Hash256) -> OnChainTaskReceipt {
+        OnChainTaskReceipt {
+            receipt_id,
+            job_id: [1u8; 32],
+            requester: signer(),
+            worker: 1,
+            verifier: 2,
+            artifact_root: [3u8; 32],
+            output_hash: [4u8; 32],
+            score: 100,
+            payout_amount: 10,
+            verifier_fee: 1,
+            protocol_fee: 1,
+            final_status: 1,
+            finalized_at: 123,
+            schema_version: 1,
+        }
+    }
+
+    #[test]
+    fn owned_object_versions_include_account_nonce_and_agent_version() {
+        let mut state = funded_state();
+        state.agents.insert(
+            42,
+            AgentRecord {
+                agent_id: 42,
+                address: signer(),
+                operator: signer(),
+                pubkey: [1u8; 32],
+                kind: 1,
+                metadata_uri: "ipfs://old".into(),
+                reputation_score: 0,
+                completed_jobs: 0,
+                status: 0,
+                registered_at: 0,
+                schema_version: 1,
+            },
+        );
+        let tx = Transaction {
+            signer: signer(),
+            nonce: 0,
+            vm: VmKind::Native,
+            body: TxBody::Native(NativeCall::UpdateAgent {
+                agent_id: 42,
+                new_metadata_uri: "ipfs://new".into(),
+                new_pubkey: None,
+            }),
+        };
+
+        assert_eq!(
+            state.owned_object_versions_for_transaction(&tx).unwrap(),
+            vec![
+                OwnedObjectVersion {
+                    object_id: OwnedObjectId::AccountNonce(signer()),
+                    version: 0,
+                },
+                OwnedObjectVersion {
+                    object_id: OwnedObjectId::Agent(42),
+                    version: 0,
+                },
+            ]
+        );
+
+        state.apply_transaction(&tx).unwrap();
+
+        assert_eq!(
+            state.owned_object_version(&OwnedObjectId::AccountNonce(signer())),
+            1
+        );
+        assert_eq!(state.owned_object_version(&OwnedObjectId::Agent(42)), 1);
+    }
+
+    #[test]
+    fn owned_receipt_version_bumps_after_settle_receipt() {
+        let mut state = funded_state();
+        let receipt_id = [9u8; 32];
+        let tx = Transaction {
+            signer: signer(),
+            nonce: 0,
+            vm: VmKind::Native,
+            body: TxBody::Native(NativeCall::SettleReceipt(receipt(receipt_id))),
+        };
+
+        assert_eq!(
+            state.owned_object_version(&OwnedObjectId::Receipt(receipt_id)),
+            0
+        );
+        state.apply_transaction(&tx).unwrap();
+        assert_eq!(
+            state.owned_object_version(&OwnedObjectId::Receipt(receipt_id)),
+            1
+        );
+    }
+
+    #[test]
+    fn mixed_settle_batch_versions_owned_receipts_but_is_not_certificate_eligible() {
+        let mut state = funded_state();
+        let receipt_id = [8u8; 32];
+        let tx = Transaction {
+            signer: signer(),
+            nonce: 0,
+            vm: VmKind::Native,
+            body: TxBody::Native(NativeCall::SettleBatch(SettleBatchPayload {
+                batch_id: [3u8; 32],
+                operator: signer(),
+                receipts: vec![receipt(receipt_id)],
+                payout_entries: Vec::new(),
+                submitted_at: 123,
+                operator_sig: [0u8; 64],
+            })),
+        };
+
+        assert!(state.owned_object_versions_for_transaction(&tx).is_none());
+        assert!(tx.is_mixed_object_tx());
+
+        state.apply_transaction(&tx).unwrap();
+
+        assert_eq!(
+            state.owned_object_version(&OwnedObjectId::Receipt(receipt_id)),
+            1
+        );
     }
 }
