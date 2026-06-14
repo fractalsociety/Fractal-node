@@ -11,8 +11,10 @@ use crate::native_types::{
     AgentRecord, DisputeRecord, OnChainTaskReceipt, PayoutEntry, SettleBatchPayload, StoredBatch,
 };
 use crate::tx::{
-    NativeCall, OwnedObjectId, OwnedObjectVersion, Transaction, TxBody, TxExecutionScope, VmKind,
+    NativeCall, OwnedObjectId, OwnedObjectPrecheck, OwnedObjectPrecheckError, OwnedObjectVersion,
+    Transaction, TxBody, TxExecutionScope, VmKind,
 };
+use crate::tx_gas_limit;
 use crate::EvmEngine;
 
 #[derive(BorshSerialize, BorshDeserialize, Clone, Debug, PartialEq, Eq)]
@@ -124,6 +126,85 @@ impl State {
                 })
                 .collect(),
         )
+    }
+
+    pub fn precheck_owned_transaction(
+        &self,
+        tx: &Transaction,
+        object_versions: &[OwnedObjectVersion],
+        gas_limit: u64,
+        max_fee_per_gas: u128,
+        base_fee_per_gas: u128,
+    ) -> Result<OwnedObjectPrecheck, OwnedObjectPrecheckError> {
+        let TxExecutionScope::Owned { owner, objects } = tx.execution_scope() else {
+            return Err(OwnedObjectPrecheckError::NotOwnedObject);
+        };
+        if owner != tx.signer {
+            return Err(OwnedObjectPrecheckError::Owner);
+        }
+
+        let account = self
+            .accounts
+            .get(&tx.signer)
+            .ok_or(OwnedObjectPrecheckError::UnknownSigner)?;
+        if account.nonce != tx.nonce {
+            return Err(OwnedObjectPrecheckError::BadNonce {
+                expected: account.nonce,
+                actual: tx.nonce,
+            });
+        }
+
+        let mut supplied_versions = object_versions.to_vec();
+        supplied_versions.sort();
+        supplied_versions.dedup();
+        let supplied_objects = supplied_versions
+            .iter()
+            .map(|v| v.object_id.clone())
+            .collect::<Vec<_>>();
+        if supplied_objects != objects {
+            return Err(OwnedObjectPrecheckError::ObjectVersionSet);
+        }
+        for supplied in &supplied_versions {
+            let expected = self.owned_object_version(&supplied.object_id);
+            if supplied.version != expected {
+                return Err(OwnedObjectPrecheckError::ObjectVersion {
+                    object_id: supplied.object_id.clone(),
+                    expected,
+                    actual: supplied.version,
+                });
+            }
+        }
+
+        let tx_gas = tx_gas_limit(tx).map_err(|_| OwnedObjectPrecheckError::InvalidShape)?;
+        if tx_gas > gas_limit {
+            return Err(OwnedObjectPrecheckError::GasLimit { tx_gas, gas_limit });
+        }
+        if max_fee_per_gas < base_fee_per_gas {
+            return Err(OwnedObjectPrecheckError::FeeBelowBase {
+                max_fee_per_gas,
+                base_fee_per_gas,
+            });
+        }
+        let required = u128::from(tx_gas)
+            .checked_mul(max_fee_per_gas)
+            .ok_or(OwnedObjectPrecheckError::FeeOverflow)?;
+        if account.balance < required {
+            return Err(OwnedObjectPrecheckError::InsufficientFeeBalance {
+                balance: account.balance,
+                required,
+            });
+        }
+        let tx_hash = keccak256(&borsh::to_vec(tx).map_err(|_| OwnedObjectPrecheckError::Encode)?);
+
+        Ok(OwnedObjectPrecheck {
+            tx_hash,
+            owner,
+            signer_nonce: tx.nonce,
+            object_versions: supplied_versions,
+            tx_gas,
+            max_fee_per_gas,
+            base_fee_per_gas,
+        })
     }
 
     pub fn apply_transaction(&mut self, tx: &Transaction) -> Result<(), ExecError> {
@@ -738,6 +819,161 @@ mod tests {
             1
         );
         assert_eq!(state.owned_object_version(&OwnedObjectId::Agent(42)), 1);
+    }
+
+    fn state_with_agent() -> State {
+        let mut state = funded_state();
+        state.accounts.get_mut(&signer()).unwrap().balance = 10_000_000;
+        state.agents.insert(
+            42,
+            AgentRecord {
+                agent_id: 42,
+                address: signer(),
+                operator: signer(),
+                pubkey: [1u8; 32],
+                kind: 1,
+                metadata_uri: "ipfs://old".into(),
+                reputation_score: 0,
+                completed_jobs: 0,
+                status: 0,
+                registered_at: 0,
+                schema_version: 1,
+            },
+        );
+        state
+    }
+
+    fn update_agent_tx(nonce: u64) -> Transaction {
+        Transaction {
+            signer: signer(),
+            nonce,
+            vm: VmKind::Native,
+            body: TxBody::Native(NativeCall::UpdateAgent {
+                agent_id: 42,
+                new_metadata_uri: "ipfs://new".into(),
+                new_pubkey: None,
+            }),
+        }
+    }
+
+    #[test]
+    fn owned_transaction_precheck_accepts_current_versions_gas_and_fee() {
+        let state = state_with_agent();
+        let tx = update_agent_tx(0);
+        let versions = state.owned_object_versions_for_transaction(&tx).unwrap();
+
+        let precheck = state
+            .precheck_owned_transaction(&tx, &versions, 10_000, 2, 1)
+            .expect("precheck");
+
+        assert_eq!(precheck.owner, signer());
+        assert_eq!(precheck.signer_nonce, 0);
+        assert_eq!(precheck.object_versions, versions);
+        assert!(precheck.tx_gas <= 10_000);
+        assert_eq!(precheck.max_fee_per_gas, 2);
+        assert_eq!(precheck.base_fee_per_gas, 1);
+    }
+
+    #[test]
+    fn owned_transaction_precheck_rejects_bad_nonce() {
+        let mut state = state_with_agent();
+        state.accounts.get_mut(&signer()).unwrap().nonce = 3;
+        let tx = update_agent_tx(0);
+        let versions = vec![
+            OwnedObjectVersion {
+                object_id: OwnedObjectId::AccountNonce(signer()),
+                version: 3,
+            },
+            OwnedObjectVersion {
+                object_id: OwnedObjectId::Agent(42),
+                version: 0,
+            },
+        ];
+
+        assert_eq!(
+            state.precheck_owned_transaction(&tx, &versions, 10_000, 2, 1),
+            Err(OwnedObjectPrecheckError::BadNonce {
+                expected: 3,
+                actual: 0
+            })
+        );
+    }
+
+    #[test]
+    fn owned_transaction_precheck_rejects_stale_object_version() {
+        let state = state_with_agent();
+        let tx = update_agent_tx(0);
+        let versions = vec![
+            OwnedObjectVersion {
+                object_id: OwnedObjectId::AccountNonce(signer()),
+                version: 0,
+            },
+            OwnedObjectVersion {
+                object_id: OwnedObjectId::Agent(42),
+                version: 9,
+            },
+        ];
+
+        assert_eq!(
+            state.precheck_owned_transaction(&tx, &versions, 10_000, 2, 1),
+            Err(OwnedObjectPrecheckError::ObjectVersion {
+                object_id: OwnedObjectId::Agent(42),
+                expected: 0,
+                actual: 9,
+            })
+        );
+    }
+
+    #[test]
+    fn owned_transaction_precheck_rejects_mixed_transaction() {
+        let state = state_with_agent();
+        let tx = Transaction {
+            signer: signer(),
+            nonce: 0,
+            vm: VmKind::Native,
+            body: TxBody::Native(NativeCall::FileDispute {
+                receipt_id: [5u8; 32],
+                reason_code: 1,
+                evidence_hash: [6u8; 32],
+            }),
+        };
+
+        assert_eq!(
+            state.precheck_owned_transaction(&tx, &[], 10_000, 2, 1),
+            Err(OwnedObjectPrecheckError::NotOwnedObject)
+        );
+    }
+
+    #[test]
+    fn owned_transaction_precheck_rejects_gas_and_fee_failures() {
+        let mut state = state_with_agent();
+        let tx = update_agent_tx(0);
+        let versions = state.owned_object_versions_for_transaction(&tx).unwrap();
+
+        assert_eq!(
+            state.precheck_owned_transaction(&tx, &versions, 1, 2, 1),
+            Err(OwnedObjectPrecheckError::GasLimit {
+                tx_gas: tx_gas_limit(&tx).unwrap(),
+                gas_limit: 1,
+            })
+        );
+        assert_eq!(
+            state.precheck_owned_transaction(&tx, &versions, 10_000, 1, 2),
+            Err(OwnedObjectPrecheckError::FeeBelowBase {
+                max_fee_per_gas: 1,
+                base_fee_per_gas: 2,
+            })
+        );
+
+        state.accounts.get_mut(&signer()).unwrap().balance = 1;
+        let required = u128::from(tx_gas_limit(&tx).unwrap()).saturating_mul(2);
+        assert_eq!(
+            state.precheck_owned_transaction(&tx, &versions, 10_000, 2, 1),
+            Err(OwnedObjectPrecheckError::InsufficientFeeBalance {
+                balance: 1,
+                required,
+            })
+        );
     }
 
     #[test]

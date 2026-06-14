@@ -32,7 +32,9 @@ pub use state::EvmLog;
 pub use state::{Account, State};
 pub use tx::{
     NativeCall, OwnedObjectCertificate, OwnedObjectCertificateError,
-    OwnedObjectCertificateSignBody, OwnedObjectId, OwnedObjectValidatorSignature,
+    OwnedObjectCertificateEvidenceError, OwnedObjectCertificateSignBody,
+    OwnedObjectConflictingCertificateEvidence, OwnedObjectConflictingCertificateFinding,
+    OwnedObjectId, OwnedObjectPrecheck, OwnedObjectPrecheckError, OwnedObjectValidatorSignature,
     OwnedObjectVersion, Transaction, TxBody, TxExecutionScope, VmKind,
 };
 

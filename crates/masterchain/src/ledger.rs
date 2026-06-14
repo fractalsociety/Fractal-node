@@ -12,6 +12,79 @@ use fractal_shard::{
     masterchain_block_from_anchors_and_messages, shard_anchor_from_header,
 };
 
+pub type ZoneId = u64;
+
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct ExecutionZoneMetadataV1 {
+    pub version: u8,
+    pub proof_system: u8,
+    pub da_namespace: [u8; 8],
+    pub sequencer_policy: u8,
+    pub forced_inclusion_timeout_masterchain_blocks: u64,
+}
+
+impl ExecutionZoneMetadataV1 {
+    pub const VERSION: u8 = 1;
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct ExecutionZoneRecordV1 {
+    pub version: u8,
+    pub zone_id: ZoneId,
+    pub creator: [u8; 20],
+    pub metadata: ExecutionZoneMetadataV1,
+    pub created_at_masterchain_height: u64,
+    pub latest_proof_final_height: u64,
+    pub latest_state_root: Hash256,
+    pub latest_message_root: Hash256,
+}
+
+impl ExecutionZoneRecordV1 {
+    pub const VERSION: u8 = 1;
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct ZoneProofFinalUpdateV1 {
+    pub zone_id: ZoneId,
+    pub zone_block_height: u64,
+    pub state_root: Hash256,
+    pub message_root: Hash256,
+    pub proof_digest: Hash256,
+    pub prover: [u8; 20],
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, BorshSerialize, BorshDeserialize)]
+pub struct AsyncCrossZoneMessageV1 {
+    pub from_zone: ZoneId,
+    pub to_zone: ZoneId,
+    pub nonce: u64,
+    pub payload_hash: Hash256,
+    pub payload: Vec<u8>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct ForcedInclusionRequestV1 {
+    pub zone_id: ZoneId,
+    pub requester: [u8; 20],
+    pub request_id: Hash256,
+    pub tx_hash: Hash256,
+    pub payload: Vec<u8>,
+    pub submitted_at_masterchain_height: u64,
+    pub deadline_masterchain_height: u64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct ForcedInclusionEventV1 {
+    pub version: u8,
+    pub request: ForcedInclusionRequestV1,
+    pub included_at_masterchain_height: u64,
+    pub sequencer_late_by_blocks: u64,
+}
+
+impl ForcedInclusionEventV1 {
+    pub const VERSION: u8 = 1;
+}
+
 /// Invalid-proof handling policy for the future mandatory-proof regime (§7.8).
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct ProofSlashingPolicyV1 {
@@ -209,6 +282,10 @@ pub struct MasterchainLedger {
     pub prover_reward_credits_wei: std::collections::BTreeMap<[u8; 20], u128>,
     pub prover_reward_events: Vec<ProverRewardEventV1>,
     pub treasury_balance_wei: u128,
+    pub execution_zones: std::collections::BTreeMap<ZoneId, ExecutionZoneRecordV1>,
+    pub pending_cross_zone_messages: Vec<AsyncCrossZoneMessageV1>,
+    pub pending_forced_inclusions: Vec<ForcedInclusionRequestV1>,
+    pub forced_inclusion_events: Vec<ForcedInclusionEventV1>,
     /// Set when a shard posts a newer anchor; cleared after `seal_round`.
     pub pending_anchor_updates: bool,
 }
@@ -239,6 +316,18 @@ pub enum MasterchainError {
     ProverPendingLimit,
     #[error("proof range covers {range} blocks, above market max {max}")]
     ProofRangeTooLarge { range: u64, max: u64 },
+    #[error("execution zone already exists")]
+    ZoneAlreadyExists,
+    #[error("execution zone {0} is unknown")]
+    UnknownZone(ZoneId),
+    #[error("execution zone update height {height} is not newer than current proof-final height {current}")]
+    StaleZoneUpdate { height: u64, current: u64 },
+    #[error("execution zone proof digest is empty")]
+    EmptyZoneProofDigest,
+    #[error("forced-inclusion timeout/SLA must be greater than zero")]
+    InvalidForcedInclusionTimeout,
+    #[error("forced inclusion request already exists")]
+    ForcedInclusionAlreadyExists,
 }
 
 impl MasterchainLedger {
@@ -398,6 +487,151 @@ impl MasterchainLedger {
         self.pending_anchor_updates = true;
     }
 
+    pub fn create_execution_zone(
+        &mut self,
+        zone_id: ZoneId,
+        creator: [u8; 20],
+        metadata: ExecutionZoneMetadataV1,
+    ) -> Result<ExecutionZoneRecordV1, MasterchainError> {
+        if metadata.forced_inclusion_timeout_masterchain_blocks == 0 {
+            return Err(MasterchainError::InvalidForcedInclusionTimeout);
+        }
+        if self.execution_zones.contains_key(&zone_id) {
+            return Err(MasterchainError::ZoneAlreadyExists);
+        }
+        let record = ExecutionZoneRecordV1 {
+            version: ExecutionZoneRecordV1::VERSION,
+            zone_id,
+            creator,
+            metadata,
+            created_at_masterchain_height: self.masterchain_height,
+            latest_proof_final_height: 0,
+            latest_state_root: [0u8; 32],
+            latest_message_root: [0u8; 32],
+        };
+        self.execution_zones.insert(zone_id, record.clone());
+        self.pending_anchor_updates = true;
+        Ok(record)
+    }
+
+    pub fn execution_zone(&self, zone_id: ZoneId) -> Option<&ExecutionZoneRecordV1> {
+        self.execution_zones.get(&zone_id)
+    }
+
+    pub fn submit_zone_proof_final_update(
+        &mut self,
+        update: ZoneProofFinalUpdateV1,
+    ) -> Result<ExecutionZoneRecordV1, MasterchainError> {
+        if update.proof_digest == [0u8; 32] {
+            return Err(MasterchainError::EmptyZoneProofDigest);
+        }
+        let zone = self
+            .execution_zones
+            .get_mut(&update.zone_id)
+            .ok_or(MasterchainError::UnknownZone(update.zone_id))?;
+        if update.zone_block_height <= zone.latest_proof_final_height {
+            return Err(MasterchainError::StaleZoneUpdate {
+                height: update.zone_block_height,
+                current: zone.latest_proof_final_height,
+            });
+        }
+        zone.latest_proof_final_height = update.zone_block_height;
+        zone.latest_state_root = update.state_root;
+        zone.latest_message_root = update.message_root;
+        self.pending_anchor_updates = true;
+        Ok(zone.clone())
+    }
+
+    pub fn submit_cross_zone_message(
+        &mut self,
+        msg: AsyncCrossZoneMessageV1,
+    ) -> Result<(), MasterchainError> {
+        if !self.execution_zones.contains_key(&msg.from_zone) {
+            return Err(MasterchainError::UnknownZone(msg.from_zone));
+        }
+        if !self.execution_zones.contains_key(&msg.to_zone) {
+            return Err(MasterchainError::UnknownZone(msg.to_zone));
+        }
+        self.pending_cross_zone_messages.push(msg);
+        self.pending_anchor_updates = true;
+        Ok(())
+    }
+
+    pub fn drain_cross_zone_messages_for(
+        &mut self,
+        to_zone: ZoneId,
+    ) -> Result<Vec<AsyncCrossZoneMessageV1>, MasterchainError> {
+        if !self.execution_zones.contains_key(&to_zone) {
+            return Err(MasterchainError::UnknownZone(to_zone));
+        }
+        self.pending_cross_zone_messages.sort();
+        self.pending_cross_zone_messages.dedup();
+        let mut delivered = Vec::new();
+        let mut pending = Vec::new();
+        for msg in self.pending_cross_zone_messages.drain(..) {
+            if msg.to_zone == to_zone {
+                delivered.push(msg);
+            } else {
+                pending.push(msg);
+            }
+        }
+        self.pending_cross_zone_messages = pending;
+        Ok(delivered)
+    }
+
+    pub fn submit_forced_inclusion(
+        &mut self,
+        zone_id: ZoneId,
+        requester: [u8; 20],
+        tx_hash: Hash256,
+        payload: Vec<u8>,
+    ) -> Result<ForcedInclusionRequestV1, MasterchainError> {
+        let zone = self
+            .execution_zones
+            .get(&zone_id)
+            .ok_or(MasterchainError::UnknownZone(zone_id))?;
+        let request_id = forced_inclusion_request_id(
+            zone_id,
+            &requester,
+            &tx_hash,
+            self.masterchain_height,
+        );
+        if self
+            .pending_forced_inclusions
+            .iter()
+            .chain(
+                self.forced_inclusion_events
+                    .iter()
+                    .map(|event| &event.request),
+            )
+            .any(|req| req.request_id == request_id)
+        {
+            return Err(MasterchainError::ForcedInclusionAlreadyExists);
+        }
+        let request = ForcedInclusionRequestV1 {
+            zone_id,
+            requester,
+            request_id,
+            tx_hash,
+            payload,
+            submitted_at_masterchain_height: self.masterchain_height,
+            deadline_masterchain_height: self
+                .masterchain_height
+                .saturating_add(zone.metadata.forced_inclusion_timeout_masterchain_blocks),
+        };
+        self.pending_forced_inclusions.push(request.clone());
+        self.pending_anchor_updates = true;
+        Ok(request)
+    }
+
+    pub fn pending_forced_inclusions(&self) -> &[ForcedInclusionRequestV1] {
+        &self.pending_forced_inclusions
+    }
+
+    pub fn forced_inclusion_events(&self) -> &[ForcedInclusionEventV1] {
+        &self.forced_inclusion_events
+    }
+
     fn flush_stwo_digests_for_anchor(
         &mut self,
         shard_id: u32,
@@ -478,6 +712,8 @@ impl MasterchainLedger {
         if !self.pending_anchor_updates
             && self.pending_validity_proofs.is_empty()
             && self.pending_cross_shard_messages.is_empty()
+            && self.pending_cross_zone_messages.is_empty()
+            && self.pending_forced_inclusions.is_empty()
         {
             return Ok(None);
         }
@@ -491,6 +727,7 @@ impl MasterchainLedger {
         }
         let anchors: Vec<ShardAnchor> = self.latest_anchors.values().cloned().collect();
         self.masterchain_height = self.masterchain_height.saturating_add(1);
+        self.flush_due_forced_inclusions();
         let proofs = std::mem::take(&mut self.pending_validity_proofs);
         let cross_shard_messages = std::mem::take(&mut self.pending_cross_shard_messages);
         let proofs = match dedupe_submissions(&proofs) {
@@ -594,6 +831,25 @@ impl MasterchainLedger {
         }
         self.pending_anchor_updates = false;
         Ok(Some(mc))
+    }
+
+    fn flush_due_forced_inclusions(&mut self) {
+        let height = self.masterchain_height;
+        let mut pending = Vec::new();
+        for request in self.pending_forced_inclusions.drain(..) {
+            if request.deadline_masterchain_height <= height {
+                self.forced_inclusion_events.push(ForcedInclusionEventV1 {
+                    version: ForcedInclusionEventV1::VERSION,
+                    sequencer_late_by_blocks: height
+                        .saturating_sub(request.deadline_masterchain_height),
+                    included_at_masterchain_height: height,
+                    request,
+                });
+            } else {
+                pending.push(request);
+            }
+        }
+        self.pending_forced_inclusions = pending;
     }
 
     /// Shard-embedded path: ingest + seal in one step.
@@ -809,6 +1065,32 @@ pub fn invalid_proof_evidence_hash(
         slash_amount_wei,
     })
     .expect("invalid proof evidence borsh");
+    keccak256(&bytes)
+}
+
+#[must_use]
+pub fn forced_inclusion_request_id(
+    zone_id: ZoneId,
+    requester: &[u8; 20],
+    tx_hash: &Hash256,
+    submitted_at_masterchain_height: u64,
+) -> Hash256 {
+    #[derive(BorshSerialize)]
+    struct RequestId<'a> {
+        tag: [u8; 16],
+        zone_id: ZoneId,
+        requester: &'a [u8; 20],
+        tx_hash: &'a Hash256,
+        submitted_at_masterchain_height: u64,
+    }
+    let bytes = borsh::to_vec(&RequestId {
+        tag: *b"FRAC_FORCE_INC__",
+        zone_id,
+        requester,
+        tx_hash,
+        submitted_at_masterchain_height,
+    })
+    .expect("forced inclusion request id borsh");
     keccak256(&bytes)
 }
 

@@ -7,9 +7,11 @@ use fractal_masterchain::{
     MasterchainHandle,
     bft::{verify_masterchain_qc, verify_masterchain_timeout_cert},
     ledger::{
+        AsyncCrossZoneMessageV1, ExecutionZoneMetadataV1,
         INVALID_PROOF_BAD_RANGE, INVALID_PROOF_MISSING_VERIFIED_STWO,
         INVALID_PROOF_RANGE_EXCEEDS_ANCHOR, MasterchainError, MasterchainLedger,
         ProofSlashingPolicyV1, ProverEconomicsParamsV1, ProverMarketParamsV1, prover_reward_wei,
+        ZoneProofFinalUpdateV1,
     },
     masterchain_gossip_task,
     node::MasterchainBftNode,
@@ -217,6 +219,133 @@ fn prover_market() -> ProverMarketParamsV1 {
         max_pending_submissions_per_prover: 1,
         max_range_blocks: 10,
     }
+}
+
+fn zone_metadata(timeout_blocks: u64, namespace: [u8; 8]) -> ExecutionZoneMetadataV1 {
+    ExecutionZoneMetadataV1 {
+        version: ExecutionZoneMetadataV1::VERSION,
+        proof_system: 1,
+        da_namespace: namespace,
+        sequencer_policy: 1,
+        forced_inclusion_timeout_masterchain_blocks: timeout_blocks,
+    }
+}
+
+#[test]
+fn zone_creation_and_proof_final_update() {
+    let mut ledger = MasterchainLedger::default();
+    let metadata = zone_metadata(3, *b"zone0001");
+
+    let zone = ledger
+        .create_execution_zone(100, [0x11; 20], metadata.clone())
+        .expect("zone created");
+
+    assert_eq!(zone.zone_id, 100);
+    assert_eq!(zone.metadata, metadata);
+    assert_eq!(zone.latest_proof_final_height, 0);
+
+    let updated = ledger
+        .submit_zone_proof_final_update(ZoneProofFinalUpdateV1 {
+            zone_id: 100,
+            zone_block_height: 7,
+            state_root: [0x22; 32],
+            message_root: [0x33; 32],
+            proof_digest: [0x44; 32],
+            prover: [0x55; 20],
+        })
+        .expect("proof-final update");
+
+    assert_eq!(updated.latest_proof_final_height, 7);
+    assert_eq!(updated.latest_state_root, [0x22; 32]);
+    assert_eq!(updated.latest_message_root, [0x33; 32]);
+    assert_eq!(
+        ledger.execution_zone(100).unwrap().latest_proof_final_height,
+        7
+    );
+    assert_eq!(
+        ledger.submit_zone_proof_final_update(ZoneProofFinalUpdateV1 {
+            zone_id: 100,
+            zone_block_height: 7,
+            state_root: [0x66; 32],
+            message_root: [0x77; 32],
+            proof_digest: [0x88; 32],
+            prover: [0x55; 20],
+        }),
+        Err(MasterchainError::StaleZoneUpdate {
+            height: 7,
+            current: 7,
+        })
+    );
+}
+
+#[test]
+fn async_cross_zone_message_delivery_is_ordered_and_deduped() {
+    let mut ledger = MasterchainLedger::default();
+    ledger
+        .create_execution_zone(1, [0x11; 20], zone_metadata(3, *b"zone0001"))
+        .unwrap();
+    ledger
+        .create_execution_zone(2, [0x22; 20], zone_metadata(3, *b"zone0002"))
+        .unwrap();
+
+    let msg_b = AsyncCrossZoneMessageV1 {
+        from_zone: 1,
+        to_zone: 2,
+        nonce: 2,
+        payload_hash: [0xBB; 32],
+        payload: vec![0xBB],
+    };
+    let msg_a = AsyncCrossZoneMessageV1 {
+        from_zone: 1,
+        to_zone: 2,
+        nonce: 1,
+        payload_hash: [0xAA; 32],
+        payload: vec![0xAA],
+    };
+    ledger.submit_cross_zone_message(msg_b.clone()).unwrap();
+    ledger.submit_cross_zone_message(msg_a.clone()).unwrap();
+    ledger.submit_cross_zone_message(msg_a.clone()).unwrap();
+
+    let delivered = ledger.drain_cross_zone_messages_for(2).unwrap();
+
+    assert_eq!(delivered, vec![msg_a, msg_b]);
+    assert!(ledger.drain_cross_zone_messages_for(2).unwrap().is_empty());
+}
+
+#[test]
+fn forced_inclusion_materializes_after_sequencer_censorship_sla() {
+    let mut ledger = MasterchainLedger::default();
+    ledger
+        .ingest_shard_anchor(anchor(0, 10, 1))
+        .expect("anchor");
+    ledger
+        .create_execution_zone(9, [0x11; 20], zone_metadata(2, *b"zone0009"))
+        .unwrap();
+
+    let request = ledger
+        .submit_forced_inclusion(9, [0xAA; 20], [0xCC; 32], vec![1, 2, 3])
+        .expect("forced inclusion request");
+
+    assert_eq!(request.submitted_at_masterchain_height, 0);
+    assert_eq!(request.deadline_masterchain_height, 2);
+    assert_eq!(ledger.pending_forced_inclusions().len(), 1);
+
+    ledger.seal_round([0u8; 20]).expect("round 1").unwrap();
+    assert!(ledger.forced_inclusion_events().is_empty());
+    assert_eq!(ledger.pending_forced_inclusions().len(), 1);
+
+    ledger.seal_round([0u8; 20]).expect("round 2").unwrap();
+    assert!(ledger.pending_forced_inclusions().is_empty());
+    assert_eq!(ledger.forced_inclusion_events().len(), 1);
+    assert_eq!(
+        ledger.forced_inclusion_events()[0],
+        fractal_masterchain::ledger::ForcedInclusionEventV1 {
+            version: fractal_masterchain::ledger::ForcedInclusionEventV1::VERSION,
+            request,
+            included_at_masterchain_height: 2,
+            sequencer_late_by_blocks: 0,
+        }
+    );
 }
 
 #[test]

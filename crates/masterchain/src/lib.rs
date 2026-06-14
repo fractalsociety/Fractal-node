@@ -12,12 +12,14 @@ mod rpc;
 
 pub use bft::{MasterchainTimeoutGossipV1, MasterchainVoteGossipV1};
 pub use ledger::{
+    AsyncCrossZoneMessageV1, ExecutionZoneMetadataV1, ExecutionZoneRecordV1,
+    ForcedInclusionEventV1, ForcedInclusionRequestV1,
     INVALID_PROOF_AGGREGATOR_REJECTED, INVALID_PROOF_BAD_RANGE, INVALID_PROOF_DUPLICATE,
     INVALID_PROOF_EMPTY_DIGEST, INVALID_PROOF_MISSING_VERIFIED_STWO,
     INVALID_PROOF_RANGE_EXCEEDS_ANCHOR, INVALID_PROOF_UNKNOWN_SHARD, InvalidProofSlashEventV1,
     MasterchainError, MasterchainLedger, ProofSlashingPolicyV1, ProverIdentityV1,
     ProverMarketParamsV1, anchor_from_block_header, invalid_proof_evidence_hash,
-    submission_reason_code,
+    forced_inclusion_request_id, submission_reason_code, ZoneId, ZoneProofFinalUpdateV1,
 };
 pub use network::{masterchain_gossip_task, parse_masterchain_bootstraps};
 pub use node::{

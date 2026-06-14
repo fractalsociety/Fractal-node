@@ -289,18 +289,24 @@ The prerequisite classification layer is implemented.
 - [x] Define `OwnedObjectCertificate` wire type.
 - [x] Include transaction hash, owner, owned object ids, object versions, and signer nonce in the certificate.
 - [x] Include validator countersignatures and signer bitmap/set.
-- [ ] Add certificate hash and canonical serialization.
-- [ ] Add validator-side precheck for owned transactions: shape, owner, object version, nonce, gas, fee.
-- [ ] Add validator countersign API.
-- [ ] Add certificate aggregation path for `2f + 1` validator signatures.
-- [ ] Add certificate verification function.
-- [ ] Add certificate mempool/lane separate from consensus mempool.
-- [ ] Add conflict detection for duplicate certificates over the same object/version.
-- [ ] Add slashable evidence type for conflicting owned-object certificates.
-- [ ] Add tests for valid certificate creation and verification.
-- [ ] Add tests rejecting mixed/shared transactions on the certificate path.
-- [ ] Add tests for conflicting certificate evidence.
-- [ ] Decide whether certified transactions are later embedded in consensus blocks for indexing/archival history.
+- [x] Add certificate hash and canonical serialization.
+- [x] Add validator-side precheck for owned transactions: shape, owner, object version, nonce, gas, fee.
+- [x] Add validator countersign API.
+- [x] Add certificate aggregation path for `2f + 1` validator signatures.
+- [x] Add certificate verification function.
+- [x] Add certificate mempool/lane separate from consensus mempool.
+- [x] Add conflict detection for duplicate certificates over the same object/version.
+- [x] Add slashable evidence type for conflicting owned-object certificates.
+- [x] Add tests for valid certificate creation and verification.
+- [x] Add tests rejecting mixed/shared transactions on the certificate path.
+- [x] Add tests for conflicting certificate evidence.
+- [x] Decide whether certified transactions are later embedded in consensus blocks for indexing/archival history.
+
+Decision: certified owned-object transactions should be embedded later in consensus
+checkpoint blocks for indexing, archival history, replay, and explorer consistency.
+The certificate path remains the execution/finality fast path; consensus embedding is
+an archival/indexing commitment and must not re-execute the already-certified
+owned-object transition.
 
 ### Phase D: Data Availability Commitments
 
@@ -325,21 +331,21 @@ The prerequisite classification layer is implemented.
 
 ### Phase E: Proof-Secured Execution Zones
 
-- [ ] Define `ZoneId`.
-- [ ] Define zone registry state.
-- [ ] Add zone creation transaction.
-- [ ] Add zone metadata: proof system, DA namespace, sequencer policy, forced-inclusion policy.
+- [x] Define `ZoneId`.
+- [x] Define zone registry state.
+- [x] Add zone creation transaction.
+- [x] Add zone metadata: proof system, DA namespace, sequencer policy, forced-inclusion policy.
 - [ ] Define zone block/header commitment.
-- [ ] Define zone state root and message root.
-- [ ] Add zone proof submission.
+- [x] Define zone state root and message root.
+- [x] Add zone proof submission.
 - [ ] Add zone proof verification against the masterchain.
-- [ ] Add async message envelope.
+- [x] Add async message envelope.
 - [ ] Add cross-zone message inclusion proof format.
-- [ ] Add forced-inclusion queue.
-- [ ] Add forced-inclusion timeout/SLA rule.
-- [ ] Add tests for zone creation and proof-final zone updates.
-- [ ] Add tests for async cross-zone message delivery.
-- [ ] Add tests for forced inclusion after sequencer censorship.
+- [x] Add forced-inclusion queue.
+- [x] Add forced-inclusion timeout/SLA rule.
+- [x] Add tests for zone creation and proof-final zone updates.
+- [x] Add tests for async cross-zone message delivery.
+- [x] Add tests for forced inclusion after sequencer censorship.
 
 ### Phase F: Production Hardening and Rollout
 

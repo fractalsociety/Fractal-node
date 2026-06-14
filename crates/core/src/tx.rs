@@ -1,9 +1,10 @@
 use borsh::{BorshDeserialize, BorshSerialize};
+use std::collections::BTreeSet;
 
 use crate::address::Address;
 use crate::native_types::{OnChainTaskReceipt, SettleBatchPayload};
 use fractal_crypto::hash::keccak256;
-use fractal_crypto::{BlsSignature, Hash256};
+use fractal_crypto::{BlsPublicKey, BlsSecretKey, BlsSignature, Hash256};
 use thiserror::Error;
 
 #[derive(BorshSerialize, BorshDeserialize, Clone, Debug, PartialEq, Eq)]
@@ -129,14 +130,84 @@ pub enum OwnedObjectCertificateError {
     NotOwnedObject,
     #[error("object version set does not match transaction owned-object set")]
     ObjectVersionSet,
+    #[error("validator signer set does not match validator signatures")]
+    SignerSet,
+    #[error("validator index {0} is out of range")]
+    ValidatorIndex(u32),
+    #[error("owned-object certificate has too few signatures: got {got}, need {need}")]
+    InsufficientSignatures { got: usize, need: usize },
+    #[error("owned-object certificate validator signature failed")]
+    BadSignature,
     #[error("owned-object certificate borsh encoding failed")]
     Encode,
+}
+
+#[derive(Debug, Error, PartialEq, Eq)]
+pub enum OwnedObjectCertificateEvidenceError {
+    #[error("first owned-object certificate is invalid: {0}")]
+    CertificateA(OwnedObjectCertificateError),
+    #[error("second owned-object certificate is invalid: {0}")]
+    CertificateB(OwnedObjectCertificateError),
+    #[error("owned-object certificate evidence repeats the same certificate")]
+    SameCertificate,
+    #[error("owned-object certificate evidence does not contain a shared object/version conflict")]
+    NoObjectVersionConflict,
+    #[error("owned-object certificate evidence does not identify a validator that signed both conflicts")]
+    NoSlashableSigner,
+    #[error("owned-object certificate evidence borsh encoding failed")]
+    Encode,
+}
+
+#[derive(Debug, Error, PartialEq, Eq)]
+pub enum OwnedObjectPrecheckError {
+    #[error("transaction is not eligible for owned-object certificate path")]
+    NotOwnedObject,
+    #[error("owned transaction owner does not match signer")]
+    Owner,
+    #[error("unknown signer account")]
+    UnknownSigner,
+    #[error("bad nonce: expected {expected}, got {actual}")]
+    BadNonce { expected: u64, actual: u64 },
+    #[error("object version set does not match transaction owned-object set")]
+    ObjectVersionSet,
+    #[error("object version mismatch for {object_id:?}: expected {expected}, got {actual}")]
+    ObjectVersion {
+        object_id: OwnedObjectId,
+        expected: u64,
+        actual: u64,
+    },
+    #[error("transaction gas {tx_gas} exceeds limit {gas_limit}")]
+    GasLimit { tx_gas: u64, gas_limit: u64 },
+    #[error("max fee per gas {max_fee_per_gas} is below base fee {base_fee_per_gas}")]
+    FeeBelowBase {
+        max_fee_per_gas: u128,
+        base_fee_per_gas: u128,
+    },
+    #[error("signer balance {balance} cannot cover max fee {required}")]
+    InsufficientFeeBalance { balance: u128, required: u128 },
+    #[error("gas fee arithmetic overflow")]
+    FeeOverflow,
+    #[error("owned-object precheck borsh encoding failed")]
+    Encode,
+    #[error("invalid transaction shape")]
+    InvalidShape,
 }
 
 #[derive(BorshSerialize, BorshDeserialize, Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub struct OwnedObjectVersion {
     pub object_id: OwnedObjectId,
     pub version: u64,
+}
+
+#[derive(BorshSerialize, BorshDeserialize, Clone, Debug, PartialEq, Eq)]
+pub struct OwnedObjectPrecheck {
+    pub tx_hash: Hash256,
+    pub owner: Address,
+    pub signer_nonce: u64,
+    pub object_versions: Vec<OwnedObjectVersion>,
+    pub tx_gas: u64,
+    pub max_fee_per_gas: u128,
+    pub base_fee_per_gas: u128,
 }
 
 #[derive(BorshSerialize, BorshDeserialize, Clone, Debug, PartialEq, Eq)]
@@ -171,7 +242,28 @@ pub struct OwnedObjectCertificate {
     pub validator_signatures: Vec<OwnedObjectValidatorSignature>,
 }
 
+#[derive(BorshSerialize, BorshDeserialize, Clone, Debug, PartialEq, Eq)]
+pub struct OwnedObjectConflictingCertificateEvidence {
+    pub certificate_a: OwnedObjectCertificate,
+    pub certificate_b: OwnedObjectCertificate,
+}
+
+#[derive(BorshSerialize, BorshDeserialize, Clone, Debug, PartialEq, Eq)]
+pub struct OwnedObjectConflictingCertificateFinding {
+    pub evidence_hash: Hash256,
+    pub conflicting_object_versions: Vec<OwnedObjectVersion>,
+    pub slashable_validator_indices: Vec<u32>,
+}
+
 impl OwnedObjectCertificate {
+    pub fn canonical_bytes(&self) -> Result<Vec<u8>, OwnedObjectCertificateError> {
+        borsh::to_vec(self).map_err(|_| OwnedObjectCertificateError::Encode)
+    }
+
+    pub fn certificate_hash(&self) -> Result<Hash256, OwnedObjectCertificateError> {
+        Ok(keccak256(&self.canonical_bytes()?))
+    }
+
     pub fn sign_body(&self) -> OwnedObjectCertificateSignBody {
         OwnedObjectCertificateSignBody {
             tx_hash: self.tx_hash,
@@ -179,6 +271,69 @@ impl OwnedObjectCertificate {
             signer_nonce: self.signer_nonce,
             object_versions: self.object_versions.clone(),
         }
+    }
+
+    pub fn countersign(
+        sign_body: &OwnedObjectCertificateSignBody,
+        validator_index: u32,
+        validator_secret: &BlsSecretKey,
+    ) -> Result<OwnedObjectValidatorSignature, OwnedObjectCertificateError> {
+        let bytes = sign_body.sign_bytes()?;
+        Ok(OwnedObjectValidatorSignature {
+            validator_index,
+            signature: validator_secret.sign(&bytes),
+        })
+    }
+
+    pub fn aggregate(
+        tx: &Transaction,
+        object_versions: Vec<OwnedObjectVersion>,
+        validator_signatures: Vec<OwnedObjectValidatorSignature>,
+        quorum_threshold: usize,
+    ) -> Result<Self, OwnedObjectCertificateError> {
+        let cert = Self::from_owned_transaction(tx, object_versions, validator_signatures)?;
+        if cert.validator_signatures.len() < quorum_threshold {
+            return Err(OwnedObjectCertificateError::InsufficientSignatures {
+                got: cert.validator_signatures.len(),
+                need: quorum_threshold,
+            });
+        }
+        Ok(cert)
+    }
+
+    pub fn verify(
+        &self,
+        validator_pubkeys: &[BlsPublicKey],
+        quorum_threshold: usize,
+    ) -> Result<(), OwnedObjectCertificateError> {
+        if self.validator_signatures.len() < quorum_threshold {
+            return Err(OwnedObjectCertificateError::InsufficientSignatures {
+                got: self.validator_signatures.len(),
+                need: quorum_threshold,
+            });
+        }
+        let signer_indices = self
+            .validator_signatures
+            .iter()
+            .map(|s| s.validator_index)
+            .collect::<Vec<_>>();
+        if signer_indices != self.signer_indices {
+            return Err(OwnedObjectCertificateError::SignerSet);
+        }
+        if signer_indices.windows(2).any(|w| w[0] >= w[1]) {
+            return Err(OwnedObjectCertificateError::SignerSet);
+        }
+
+        let bytes = self.sign_body().sign_bytes()?;
+        for sig in &self.validator_signatures {
+            let pk = validator_pubkeys.get(sig.validator_index as usize).ok_or(
+                OwnedObjectCertificateError::ValidatorIndex(sig.validator_index),
+            )?;
+            sig.signature
+                .verify(&bytes, pk)
+                .map_err(|_| OwnedObjectCertificateError::BadSignature)?;
+        }
+        Ok(())
     }
 
     pub fn from_owned_transaction(
@@ -215,6 +370,88 @@ impl OwnedObjectCertificate {
             object_versions,
             signer_indices,
             validator_signatures,
+        })
+    }
+}
+
+impl OwnedObjectConflictingCertificateEvidence {
+    pub fn evidence_hash(&self) -> Result<Hash256, OwnedObjectCertificateEvidenceError> {
+        borsh::to_vec(self)
+            .map(|bytes| keccak256(&bytes))
+            .map_err(|_| OwnedObjectCertificateEvidenceError::Encode)
+    }
+
+    pub fn verify(
+        &self,
+        validator_pubkeys: &[BlsPublicKey],
+        quorum_threshold: usize,
+    ) -> Result<OwnedObjectConflictingCertificateFinding, OwnedObjectCertificateEvidenceError> {
+        self.certificate_a
+            .verify(validator_pubkeys, quorum_threshold)
+            .map_err(OwnedObjectCertificateEvidenceError::CertificateA)?;
+        self.certificate_b
+            .verify(validator_pubkeys, quorum_threshold)
+            .map_err(OwnedObjectCertificateEvidenceError::CertificateB)?;
+
+        if self
+            .certificate_a
+            .certificate_hash()
+            .map_err(OwnedObjectCertificateEvidenceError::CertificateA)?
+            == self
+                .certificate_b
+                .certificate_hash()
+                .map_err(OwnedObjectCertificateEvidenceError::CertificateB)?
+        {
+            return Err(OwnedObjectCertificateEvidenceError::SameCertificate);
+        }
+        if self.certificate_a.sign_body() == self.certificate_b.sign_body() {
+            return Err(OwnedObjectCertificateEvidenceError::SameCertificate);
+        }
+
+        let a_versions = self
+            .certificate_a
+            .object_versions
+            .iter()
+            .cloned()
+            .collect::<BTreeSet<_>>();
+        let b_versions = self
+            .certificate_b
+            .object_versions
+            .iter()
+            .cloned()
+            .collect::<BTreeSet<_>>();
+        let conflicting_object_versions = a_versions
+            .intersection(&b_versions)
+            .cloned()
+            .collect::<Vec<_>>();
+        if conflicting_object_versions.is_empty() {
+            return Err(OwnedObjectCertificateEvidenceError::NoObjectVersionConflict);
+        }
+
+        let a_signers = self
+            .certificate_a
+            .signer_indices
+            .iter()
+            .copied()
+            .collect::<BTreeSet<_>>();
+        let b_signers = self
+            .certificate_b
+            .signer_indices
+            .iter()
+            .copied()
+            .collect::<BTreeSet<_>>();
+        let slashable_validator_indices = a_signers
+            .intersection(&b_signers)
+            .copied()
+            .collect::<Vec<_>>();
+        if slashable_validator_indices.is_empty() {
+            return Err(OwnedObjectCertificateEvidenceError::NoSlashableSigner);
+        }
+
+        Ok(OwnedObjectConflictingCertificateFinding {
+            evidence_hash: self.evidence_hash()?,
+            conflicting_object_versions,
+            slashable_validator_indices,
         })
     }
 }
@@ -307,6 +544,61 @@ mod tests {
             finalized_at: 123,
             schema_version: 1,
         }
+    }
+
+    fn update_agent_tx(nonce: u64, agent_id: u64, metadata_uri: &str) -> Transaction {
+        Transaction {
+            signer: signer(),
+            nonce,
+            vm: VmKind::Native,
+            body: TxBody::Native(NativeCall::UpdateAgent {
+                agent_id,
+                new_metadata_uri: metadata_uri.into(),
+                new_pubkey: None,
+            }),
+        }
+    }
+
+    fn agent_versions(nonce: u64, agent_id: u64, agent_version: u64) -> Vec<OwnedObjectVersion> {
+        vec![
+            OwnedObjectVersion {
+                object_id: OwnedObjectId::AccountNonce(signer()),
+                version: nonce,
+            },
+            OwnedObjectVersion {
+                object_id: OwnedObjectId::Agent(agent_id),
+                version: agent_version,
+            },
+        ]
+    }
+
+    fn validator_keys(count: u8) -> (Vec<BlsSecretKey>, Vec<BlsPublicKey>) {
+        let secrets = (1..=count)
+            .map(|seed| BlsSecretKey::from_ikm(&[seed; 32]).unwrap())
+            .collect::<Vec<_>>();
+        let pubkeys = secrets.iter().map(BlsSecretKey::public_key).collect();
+        (secrets, pubkeys)
+    }
+
+    fn aggregate_with_signers(
+        tx: &Transaction,
+        object_versions: Vec<OwnedObjectVersion>,
+        validators: &[BlsSecretKey],
+        signer_indices: &[usize],
+        quorum_threshold: usize,
+    ) -> OwnedObjectCertificate {
+        let unsigned =
+            OwnedObjectCertificate::from_owned_transaction(tx, object_versions.clone(), Vec::new())
+                .unwrap();
+        let body = unsigned.sign_body();
+        let signatures = signer_indices
+            .iter()
+            .map(|idx| {
+                OwnedObjectCertificate::countersign(&body, *idx as u32, &validators[*idx]).unwrap()
+            })
+            .collect::<Vec<_>>();
+        OwnedObjectCertificate::aggregate(tx, object_versions, signatures, quorum_threshold)
+            .unwrap()
     }
 
     #[test]
@@ -489,10 +781,97 @@ mod tests {
         assert_eq!(cert.signer_indices, vec![2]);
         assert_eq!(cert.validator_signatures.len(), 1);
         assert!(!cert.sign_body().sign_bytes().unwrap().is_empty());
+        assert_eq!(
+            cert.certificate_hash().unwrap(),
+            keccak256(&cert.canonical_bytes().unwrap())
+        );
 
         let bytes = borsh::to_vec(&cert).unwrap();
         let round_trip = OwnedObjectCertificate::try_from_slice(&bytes).unwrap();
         assert_eq!(round_trip, cert);
+        assert_eq!(round_trip.canonical_bytes().unwrap(), bytes);
+    }
+
+    #[test]
+    fn owned_object_certificate_countersign_aggregate_and_verify() {
+        let tx = update_agent_tx(7, 42, "ipfs://new");
+        let object_versions = agent_versions(7, 42, 3);
+        let (validators, pubkeys) = validator_keys(5);
+        let cert = aggregate_with_signers(&tx, object_versions, &validators, &[0, 1, 2, 3, 4], 3);
+
+        assert_eq!(cert.signer_indices, vec![0, 1, 2, 3, 4]);
+        cert.verify(&pubkeys, 3).expect("certificate verifies");
+    }
+
+    #[test]
+    fn valid_owned_object_certificate_creation_and_verification() {
+        let tx = update_agent_tx(9, 77, "ipfs://valid");
+        let object_versions = agent_versions(9, 77, 4);
+        let (validators, pubkeys) = validator_keys(4);
+
+        let cert = aggregate_with_signers(&tx, object_versions.clone(), &validators, &[0, 1, 2], 3);
+
+        assert_eq!(cert.owner, signer());
+        assert_eq!(cert.signer_nonce, 9);
+        assert_eq!(cert.object_versions, object_versions);
+        assert_eq!(cert.signer_indices, vec![0, 1, 2]);
+        cert.verify(&pubkeys, 3).unwrap();
+    }
+
+    #[test]
+    fn owned_object_certificate_aggregate_requires_quorum() {
+        let tx = Transaction {
+            signer: signer(),
+            nonce: 0,
+            vm: VmKind::Native,
+            body: TxBody::Native(NativeCall::NoOp),
+        };
+        let body = OwnedObjectCertificateSignBody {
+            tx_hash: keccak256(&borsh::to_vec(&tx).unwrap()),
+            owner: signer(),
+            signer_nonce: 0,
+            object_versions: vec![OwnedObjectVersion {
+                object_id: OwnedObjectId::AccountNonce(signer()),
+                version: 0,
+            }],
+        };
+        let sk = BlsSecretKey::from_ikm(&[9u8; 32]).unwrap();
+        let sig = OwnedObjectCertificate::countersign(&body, 0, &sk).unwrap();
+
+        assert_eq!(
+            OwnedObjectCertificate::aggregate(&tx, body.object_versions, vec![sig], 2),
+            Err(OwnedObjectCertificateError::InsufficientSignatures { got: 1, need: 2 })
+        );
+    }
+
+    #[test]
+    fn owned_object_certificate_verify_rejects_tampered_signer_set() {
+        let tx = Transaction {
+            signer: signer(),
+            nonce: 0,
+            vm: VmKind::Native,
+            body: TxBody::Native(NativeCall::NoOp),
+        };
+        let object_versions = vec![OwnedObjectVersion {
+            object_id: OwnedObjectId::AccountNonce(signer()),
+            version: 0,
+        }];
+        let unsigned = OwnedObjectCertificate::from_owned_transaction(
+            &tx,
+            object_versions.clone(),
+            Vec::new(),
+        )
+        .unwrap();
+        let sk = BlsSecretKey::from_ikm(&[8u8; 32]).unwrap();
+        let sig = OwnedObjectCertificate::countersign(&unsigned.sign_body(), 0, &sk).unwrap();
+        let mut cert =
+            OwnedObjectCertificate::aggregate(&tx, object_versions, vec![sig], 1).unwrap();
+        cert.signer_indices = vec![1];
+
+        assert_eq!(
+            cert.verify(&[sk.public_key()], 1),
+            Err(OwnedObjectCertificateError::SignerSet)
+        );
     }
 
     #[test]
@@ -533,6 +912,39 @@ mod tests {
     }
 
     #[test]
+    fn certificate_path_rejects_mixed_and_shared_transactions() {
+        let shared_tx = Transaction {
+            signer: signer(),
+            nonce: 0,
+            vm: VmKind::Evm,
+            body: TxBody::Transfer {
+                to: [8u8; 20],
+                amount: 1,
+            },
+        };
+        let mixed_tx = Transaction {
+            signer: signer(),
+            nonce: 1,
+            vm: VmKind::Native,
+            body: TxBody::Native(NativeCall::SettleBatch(SettleBatchPayload {
+                batch_id: [8u8; 32],
+                operator: signer(),
+                receipts: vec![receipt([9u8; 32])],
+                payout_entries: Vec::new(),
+                submitted_at: 123,
+                operator_sig: [0u8; 64],
+            })),
+        };
+
+        for tx in [&shared_tx, &mixed_tx] {
+            assert_eq!(
+                OwnedObjectCertificate::aggregate(tx, Vec::new(), Vec::new(), 0),
+                Err(OwnedObjectCertificateError::NotOwnedObject)
+            );
+        }
+    }
+
+    #[test]
     fn owned_object_certificate_rejects_wrong_object_version_set() {
         let tx = Transaction {
             signer: signer(),
@@ -551,6 +963,58 @@ mod tests {
                 Vec::new(),
             ),
             Err(OwnedObjectCertificateError::ObjectVersionSet)
+        );
+    }
+
+    #[test]
+    fn conflicting_certificate_evidence_verifies_and_identifies_offender() {
+        let tx_a = update_agent_tx(7, 42, "ipfs://a");
+        let tx_b = update_agent_tx(7, 42, "ipfs://b");
+        let object_versions = agent_versions(7, 42, 3);
+        let (validators, pubkeys) = validator_keys(5);
+        let cert_a =
+            aggregate_with_signers(&tx_a, object_versions.clone(), &validators, &[0, 1, 2], 3);
+        let cert_b = aggregate_with_signers(&tx_b, object_versions, &validators, &[2, 3, 4], 3);
+        let evidence = OwnedObjectConflictingCertificateEvidence {
+            certificate_a: cert_a,
+            certificate_b: cert_b,
+        };
+
+        let finding = evidence.verify(&pubkeys, 3).unwrap();
+
+        assert_eq!(finding.slashable_validator_indices, vec![2]);
+        assert!(finding
+            .conflicting_object_versions
+            .contains(&OwnedObjectVersion {
+                object_id: OwnedObjectId::AccountNonce(signer()),
+                version: 7,
+            }));
+        assert!(finding
+            .conflicting_object_versions
+            .contains(&OwnedObjectVersion {
+                object_id: OwnedObjectId::Agent(42),
+                version: 3,
+            }));
+        assert_eq!(finding.evidence_hash, evidence.evidence_hash().unwrap());
+    }
+
+    #[test]
+    fn conflicting_certificate_evidence_rejects_non_conflicting_versions() {
+        let tx_a = update_agent_tx(7, 42, "ipfs://a");
+        let tx_b = update_agent_tx(8, 43, "ipfs://b");
+        let (validators, pubkeys) = validator_keys(5);
+        let cert_a =
+            aggregate_with_signers(&tx_a, agent_versions(7, 42, 3), &validators, &[0, 1, 2], 3);
+        let cert_b =
+            aggregate_with_signers(&tx_b, agent_versions(8, 43, 3), &validators, &[2, 3, 4], 3);
+        let evidence = OwnedObjectConflictingCertificateEvidence {
+            certificate_a: cert_a,
+            certificate_b: cert_b,
+        };
+
+        assert_eq!(
+            evidence.verify(&pubkeys, 3),
+            Err(OwnedObjectCertificateEvidenceError::NoObjectVersionConflict)
         );
     }
 }

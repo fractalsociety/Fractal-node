@@ -2,7 +2,9 @@
 
 use std::collections::BTreeSet;
 
-use fractal_core::{OwnedObjectId, Transaction, TxExecutionScope};
+use fractal_core::{
+    OwnedObjectCertificate, OwnedObjectId, OwnedObjectVersion, Transaction, TxExecutionScope,
+};
 
 #[derive(Clone, Debug)]
 pub struct PooledTx {
@@ -18,6 +20,24 @@ pub struct Mempool {
     pending: Vec<PooledTx>,
 }
 
+#[derive(Clone, Debug)]
+pub struct PooledCertificate {
+    pub certificate: OwnedObjectCertificate,
+    pub max_priority_fee_per_gas: u128,
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct CertificateMempool {
+    pending: Vec<PooledCertificate>,
+    locked_object_versions: BTreeSet<OwnedObjectVersion>,
+}
+
+#[derive(Debug, thiserror::Error, PartialEq, Eq)]
+pub enum CertificateMempoolError {
+    #[error("certificate conflicts with an existing certificate for object/version {0:?}")]
+    ObjectVersionConflict(OwnedObjectVersion),
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct MempoolLaneMetrics {
     pub pending_total: usize,
@@ -25,11 +45,62 @@ pub struct MempoolLaneMetrics {
     pub pending_mixed: usize,
     pub pending_consensus: usize,
     pub pending_consensus_lane: usize,
+    pub pending_certificates: usize,
+}
+
+impl CertificateMempool {
+    pub fn len(&self) -> usize {
+        self.pending.len()
+    }
+
+    pub fn insert(&mut self, cert: PooledCertificate) -> Result<(), CertificateMempoolError> {
+        for object_version in &cert.certificate.object_versions {
+            if self.locked_object_versions.contains(object_version) {
+                return Err(CertificateMempoolError::ObjectVersionConflict(
+                    object_version.clone(),
+                ));
+            }
+        }
+        self.locked_object_versions
+            .extend(cert.certificate.object_versions.iter().cloned());
+        self.pending.push(cert);
+        Ok(())
+    }
+
+    pub fn drain_ready(&mut self, max_certs: usize) -> Vec<OwnedObjectCertificate> {
+        self.pending
+            .sort_by(|a, b| b.max_priority_fee_per_gas.cmp(&a.max_priority_fee_per_gas));
+        let drain_count = self.pending.len().min(max_certs);
+        let drained = self
+            .pending
+            .drain(..drain_count)
+            .map(|p| p.certificate)
+            .collect::<Vec<_>>();
+        self.rebuild_locks();
+        drained
+    }
+
+    fn rebuild_locks(&mut self) {
+        self.locked_object_versions.clear();
+        for pending in &self.pending {
+            self.locked_object_versions
+                .extend(pending.certificate.object_versions.iter().cloned());
+        }
+    }
 }
 
 impl Mempool {
     pub fn len(&self) -> usize {
         self.pending.len()
+    }
+
+    pub fn lane_metrics_with_certificates(
+        &self,
+        cert_pool: &CertificateMempool,
+    ) -> MempoolLaneMetrics {
+        let mut metrics = self.lane_metrics();
+        metrics.pending_certificates = cert_pool.len();
+        metrics
     }
 
     pub fn insert(&mut self, tx: PooledTx) {
@@ -209,6 +280,24 @@ mod tests {
         }
     }
 
+    fn cert_for_object(
+        object_id: OwnedObjectId,
+        version: u64,
+        tx_hash_byte: u8,
+    ) -> PooledCertificate {
+        PooledCertificate {
+            certificate: OwnedObjectCertificate {
+                tx_hash: [tx_hash_byte; 32],
+                owner: [7u8; 20],
+                signer_nonce: 0,
+                object_versions: vec![OwnedObjectVersion { object_id, version }],
+                signer_indices: Vec::new(),
+                validator_signatures: Vec::new(),
+            },
+            max_priority_fee_per_gas: u128::from(tx_hash_byte),
+        }
+    }
+
     #[test]
     fn drain_keeps_conflicting_owned_object_queued() {
         let signer = [7u8; 20];
@@ -276,7 +365,58 @@ mod tests {
                 pending_mixed: 1,
                 pending_consensus: 1,
                 pending_consensus_lane: 2,
+                pending_certificates: 0,
             }
+        );
+    }
+
+    #[test]
+    fn certificate_mempool_rejects_duplicate_object_version_conflicts() {
+        let mut cp = CertificateMempool::default();
+        cp.insert(cert_for_object(OwnedObjectId::Agent(42), 3, 1))
+            .unwrap();
+
+        assert_eq!(
+            cp.insert(cert_for_object(OwnedObjectId::Agent(42), 3, 2)),
+            Err(CertificateMempoolError::ObjectVersionConflict(
+                OwnedObjectVersion {
+                    object_id: OwnedObjectId::Agent(42),
+                    version: 3,
+                }
+            ))
+        );
+        assert_eq!(cp.len(), 1);
+    }
+
+    #[test]
+    fn certificate_mempool_drains_by_tip_and_releases_object_versions() {
+        let mut cp = CertificateMempool::default();
+        cp.insert(cert_for_object(OwnedObjectId::Agent(1), 0, 1))
+            .unwrap();
+        cp.insert(cert_for_object(OwnedObjectId::Agent(2), 0, 9))
+            .unwrap();
+
+        let drained = cp.drain_ready(1);
+
+        assert_eq!(drained.len(), 1);
+        assert_eq!(drained[0].tx_hash, [9u8; 32]);
+        assert_eq!(cp.len(), 1);
+        cp.insert(cert_for_object(OwnedObjectId::Agent(2), 0, 3))
+            .unwrap();
+    }
+
+    #[test]
+    fn lane_metrics_can_include_certificate_lane() {
+        let signer = [7u8; 20];
+        let mut mp = Mempool::default();
+        let mut cp = CertificateMempool::default();
+        mp.insert(owned_noop(signer, 0, 1));
+        cp.insert(cert_for_object(OwnedObjectId::Agent(42), 0, 1))
+            .unwrap();
+
+        assert_eq!(
+            mp.lane_metrics_with_certificates(&cp).pending_certificates,
+            1
         );
     }
 }
