@@ -58,9 +58,11 @@ impl CapabilityToken {
     }
 
     pub fn verify(&self) -> Result<(), CapabilityVerifyError> {
-        let vk = VerifyingKey::from_bytes(&self.body.issuer).map_err(|_| CapabilityVerifyError::BadIssuerKey)?;
+        let vk = VerifyingKey::from_bytes(&self.body.issuer)
+            .map_err(|_| CapabilityVerifyError::BadIssuerKey)?;
         let sig = Signature::from_bytes(&self.signature);
-        let msg = Self::signing_bytes(&self.body).map_err(|_| CapabilityVerifyError::BadSignature)?;
+        let msg =
+            Self::signing_bytes(&self.body).map_err(|_| CapabilityVerifyError::BadSignature)?;
         vk.verify(&msg, &sig)
             .map_err(|_| CapabilityVerifyError::BadSignature)
     }
@@ -162,7 +164,10 @@ mod tests {
             not_after: 500_000,
             nonce: 2,
         };
-        assert!(CapabilityToken::verify_attenuation_from_parent(&child_body, &parent.body));
+        assert!(CapabilityToken::verify_attenuation_from_parent(
+            &child_body,
+            &parent.body
+        ));
         let child = CapabilityToken::sign(child_body, &issuer).unwrap();
         child.verify().unwrap();
     }

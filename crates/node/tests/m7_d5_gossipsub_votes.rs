@@ -27,7 +27,12 @@ async fn producer_and_follower_exchange_votes_over_gossipsub() {
     let listen: Multiaddr = "/ip4/127.0.0.1/udp/0/quic-v1".parse().unwrap();
     let (tx, rx) = oneshot::channel();
     let p = producer.clone();
-    let _producer_p2p = tokio::spawn(p2p::producer_network_task(p, listen, Some(tx), Some(prod_vote_rx)));
+    let _producer_p2p = tokio::spawn(p2p::producer_network_task(
+        p,
+        listen,
+        Some(tx),
+        Some(prod_vote_rx),
+    ));
 
     let (addr, peer) = tokio::time::timeout(Duration::from_secs(15), rx)
         .await
@@ -40,7 +45,11 @@ async fn producer_and_follower_exchange_votes_over_gossipsub() {
     bootstrap.push(Protocol::P2p(peer));
 
     let f = follower.clone();
-    let _follow_p2p = tokio::spawn(p2p::follower_network_task(f, vec![bootstrap], Some(fol_vote_rx)));
+    let _follow_p2p = tokio::spawn(p2p::follower_network_task(
+        f,
+        vec![bootstrap],
+        Some(fol_vote_rx),
+    ));
 
     for _ in 0..120 {
         tokio::time::sleep(Duration::from_millis(100)).await;

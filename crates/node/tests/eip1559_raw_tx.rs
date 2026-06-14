@@ -1,4 +1,6 @@
-use k256::ecdsa::{signature::hazmat::PrehashSigner, RecoveryId, Signature, SigningKey, VerifyingKey};
+use k256::ecdsa::{
+    signature::hazmat::PrehashSigner, RecoveryId, Signature, SigningKey, VerifyingKey,
+};
 use rlp::RlpStream;
 
 use fractal_core::{TxBody, VmKind};
@@ -97,7 +99,13 @@ fn node_accepts_eip1559_raw_tx_and_recovers_sender() {
 
     let sk = SigningKey::from_bytes(&[7u8; 32].into()).unwrap();
     let from = addr_from_vk(sk.verifying_key());
-    node.state.accounts.insert(from, fractal_core::Account { nonce: 0, balance: 10_000_000 });
+    node.state.accounts.insert(
+        from,
+        fractal_core::Account {
+            nonce: 0,
+            balance: 10_000_000,
+        },
+    );
 
     let to = [0x11u8; 20];
     let raw = build_and_sign_1559(node.chain_id, 0, 1, 10, 21_000, Some(to), 123, vec![], &sk);
@@ -122,12 +130,28 @@ fn node_accepts_eip1559_contract_create() {
 
     let sk = SigningKey::from_bytes(&[9u8; 32].into()).unwrap();
     let from = addr_from_vk(sk.verifying_key());
-    node.state.accounts.insert(from, fractal_core::Account { nonce: 0, balance: 10_000_000 });
+    node.state.accounts.insert(
+        from,
+        fractal_core::Account {
+            nonce: 0,
+            balance: 10_000_000,
+        },
+    );
 
     let init_code = vec![
         0x60, 0x01, 0x60, 0x0c, 0x60, 0x00, 0x39, 0x60, 0x01, 0x60, 0x00, 0xf3, 0x00,
     ];
-    let raw = build_and_sign_1559(node.chain_id, 0, 1, 10, 1_000_000, None, 0, init_code.clone(), &sk);
+    let raw = build_and_sign_1559(
+        node.chain_id,
+        0,
+        1,
+        10,
+        1_000_000,
+        None,
+        0,
+        init_code.clone(),
+        &sk,
+    );
     node.submit_raw_tx(&raw).expect("accept raw eth create tx");
 
     let h = keccak256(&raw);
@@ -144,7 +168,13 @@ fn eip1559_signed_json_has_type2_and_signature_components() {
     let mut node = NodeInner::devnet();
     let sk = SigningKey::from_bytes(&[11u8; 32].into()).unwrap();
     let from = addr_from_vk(sk.verifying_key());
-    node.state.accounts.insert(from, fractal_core::Account { nonce: 0, balance: 10_000_000 });
+    node.state.accounts.insert(
+        from,
+        fractal_core::Account {
+            nonce: 0,
+            balance: 10_000_000,
+        },
+    );
     let to = [0x22u8; 20];
     let raw = build_and_sign_1559(node.chain_id, 0, 1, 10, 21_000, Some(to), 0, vec![], &sk);
     node.submit_raw_tx(&raw).expect("accept raw eth tx");
@@ -156,4 +186,3 @@ fn eip1559_signed_json_has_type2_and_signature_components() {
     assert!(j["s"].as_str().unwrap().starts_with("0x"));
     assert!(j.get("yParity").is_some());
 }
-

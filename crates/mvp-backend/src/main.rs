@@ -65,11 +65,7 @@ fn eth_get_balance(rpc_url: &str, who: &Address) -> Result<String, String> {
 fn send_borsh_tx(rpc_url: &str, tx: &Transaction) -> Result<String, String> {
     let raw = borsh::to_vec(tx).map_err(|e| format!("borsh: {e}"))?;
     let hex = format!("0x{}", hex::encode(raw));
-    let h = rpc(
-        rpc_url,
-        "eth_sendRawTransaction",
-        serde_json::json!([hex]),
-    )?;
+    let h = rpc(rpc_url, "eth_sendRawTransaction", serde_json::json!([hex]))?;
     h.as_str()
         .map(std::string::ToString::to_string)
         .ok_or_else(|| "tx hash not string".to_string())
@@ -89,7 +85,8 @@ fn main() {
 }
 
 fn run() -> Result<(), String> {
-    let rpc_url = std::env::var("FRACTAL_RPC_URL").unwrap_or_else(|_| "http://127.0.0.1:8545".into());
+    let rpc_url =
+        std::env::var("FRACTAL_RPC_URL").unwrap_or_else(|_| "http://127.0.0.1:8545".into());
 
     let (settle, claims, operator, claim_agent, total_payout, receipt_count, batch_hex, mode) =
         if let Ok(path) = std::env::var("MVP_RECEIPTS_JSON") {
@@ -136,14 +133,7 @@ fn run() -> Result<(), String> {
             let op_nonce = get_nonce(&rpc_url, &operator)?;
             let ag_nonce = get_nonce(&rpc_url, &agent)?;
             let (settle, claims) = fractal_sdk::m5::build_settle_then_claim_txs(
-                operator,
-                op_nonce,
-                agent,
-                ag_nonce,
-                batch_id,
-                count,
-                1,
-                ts,
+                operator, op_nonce, agent, ag_nonce, batch_id, count, 1, ts,
             );
             let total = count as u128;
             let batch_hex = format!("0x{}", hex::encode(batch_id));

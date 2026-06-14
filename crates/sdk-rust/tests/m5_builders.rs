@@ -1,6 +1,7 @@
 use fractal_sdk::m5::{
-    build_settle_batch_payload, build_settle_then_claim_txs, build_settle_then_claim_txs_from_payload,
-    default_devnet_claim_agent, default_devnet_operator, M5FromPayloadError,
+    build_settle_batch_payload, build_settle_then_claim_txs,
+    build_settle_then_claim_txs_from_payload, default_devnet_claim_agent, default_devnet_operator,
+    M5FromPayloadError,
 };
 
 #[test]
@@ -31,7 +32,10 @@ fn m5_from_payload_matches_synthetic_shape() {
     assert_eq!(settle.signer, op);
     assert_eq!(settle.nonce, 3);
     let (settle2, claims2) = build_settle_then_claim_txs(op, 3, ag, 10, batch_id, 4, 2, 99);
-    assert_eq!(borsh::to_vec(&settle).unwrap(), borsh::to_vec(&settle2).unwrap());
+    assert_eq!(
+        borsh::to_vec(&settle).unwrap(),
+        borsh::to_vec(&settle2).unwrap()
+    );
     assert_eq!(claims.len(), claims2.len());
     for (a, b) in claims.iter().zip(claims2.iter()) {
         assert_eq!(borsh::to_vec(a).unwrap(), borsh::to_vec(b).unwrap());

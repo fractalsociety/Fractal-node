@@ -20,7 +20,11 @@ pub struct BudgetAccount {
 }
 
 impl BudgetAccount {
-    pub fn new(id: BudgetAccountId, parent: Option<BudgetAccountId>, total_deposited: Amount) -> Self {
+    pub fn new(
+        id: BudgetAccountId,
+        parent: Option<BudgetAccountId>,
+        total_deposited: Amount,
+    ) -> Self {
         Self {
             id,
             parent,
@@ -33,7 +37,9 @@ impl BudgetAccount {
     }
 
     pub fn available(&self) -> Amount {
-        self.total_deposited.saturating_sub(self.reserved).saturating_sub(self.spent)
+        self.total_deposited
+            .saturating_sub(self.reserved)
+            .saturating_sub(self.spent)
     }
 
     pub fn deposit(&mut self, amount: Amount) {
@@ -75,7 +81,11 @@ impl BudgetAccount {
     }
 
     /// Partial settle: move `settle` from reserved → spent, remainder reserved → available.
-    pub fn partial_settle(&mut self, settle: Amount, reserved_total: Amount) -> Result<(), BudgetError> {
+    pub fn partial_settle(
+        &mut self,
+        settle: Amount,
+        reserved_total: Amount,
+    ) -> Result<(), BudgetError> {
         if reserved_total > self.reserved {
             return Err(BudgetError::InsufficientReserved);
         }

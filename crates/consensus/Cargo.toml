@@ -9,4 +9,6 @@ borsh.workspace = true
 fractal-core = { path = "../core" }
 fractal-evm = { path = "../evm" }
 fractal-crypto = { path = "../crypto" }
+qp-plonky2-verifier = { version = "1.5.1", features = ["std"] }
+reed-solomon-erasure.workspace = true
 thiserror.workspace = true

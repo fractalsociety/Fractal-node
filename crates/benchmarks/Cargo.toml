@@ -1,0 +1,22 @@
+[package]
+name = "fractal-bench"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "FractalWork protocol benchmark harnesses"
+
+[lib]
+name = "fractal_bench"
+path = "src/lib.rs"
+
+[[bin]]
+name = "fractal-economic-bench"
+path = "src/bin/economic.rs"
+
+[[bin]]
+name = "fractal-verifier-bench"
+path = "src/bin/verifier.rs"
+
+[dependencies]
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true

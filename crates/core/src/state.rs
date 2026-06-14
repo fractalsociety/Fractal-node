@@ -10,8 +10,8 @@ use crate::merkle::{merkle_root, verify_merkle_proof};
 use crate::native_types::{
     AgentRecord, DisputeRecord, OnChainTaskReceipt, PayoutEntry, SettleBatchPayload, StoredBatch,
 };
-use crate::EvmEngine;
 use crate::tx::{NativeCall, Transaction, TxBody, VmKind};
+use crate::EvmEngine;
 
 #[derive(BorshSerialize, BorshDeserialize, Clone, Debug, PartialEq, Eq)]
 pub struct Account {
@@ -102,7 +102,9 @@ impl State {
 
         match (&tx.vm, &tx.body) {
             (VmKind::Native, TxBody::Native(call)) => self.apply_native(signer, call),
-            (VmKind::Evm, TxBody::Transfer { to, amount }) => self.apply_transfer(signer, *to, *amount),
+            (VmKind::Evm, TxBody::Transfer { to, amount }) => {
+                self.apply_transfer(signer, *to, *amount)
+            }
             _ => Err(ExecError::InvalidShape),
         }
     }
@@ -124,7 +126,9 @@ impl State {
 
         match (&tx.vm, &tx.body) {
             (VmKind::Native, TxBody::Native(call)) => self.apply_native(signer, call),
-            (VmKind::Evm, TxBody::Transfer { to, amount }) => self.apply_transfer(signer, *to, *amount),
+            (VmKind::Evm, TxBody::Transfer { to, amount }) => {
+                self.apply_transfer(signer, *to, *amount)
+            }
             (
                 VmKind::Evm,
                 TxBody::EvmCall {
@@ -149,15 +153,19 @@ impl State {
                 self.bump_nonce(signer);
                 Ok(())
             }
-            (VmKind::Evm, TxBody::EvmCreate {
-                value,
-                init_code,
-                gas_limit,
-            }) => {
+            (
+                VmKind::Evm,
+                TxBody::EvmCreate {
+                    value,
+                    init_code,
+                    gas_limit,
+                },
+            ) => {
                 if *value != 0 {
                     return Err(ExecError::InvalidShape);
                 }
-                let outcome = evm.execute_create(self, signer, *value, init_code.clone(), *gas_limit)?;
+                let outcome =
+                    evm.execute_create(self, signer, *value, init_code.clone(), *gas_limit)?;
                 if let Ok(raw) = borsh::to_vec(tx) {
                     let h = keccak256(&raw);
                     self.evm_tx_gas_used.insert(h, outcome.gas_used);
@@ -186,7 +194,12 @@ impl State {
         Ok(())
     }
 
-    fn apply_transfer(&mut self, from: Address, to: Address, amount: u128) -> Result<(), ExecError> {
+    fn apply_transfer(
+        &mut self,
+        from: Address,
+        to: Address,
+        amount: u128,
+    ) -> Result<(), ExecError> {
         {
             let from_acc = self.accounts.get(&from).ok_or(ExecError::UnknownSigner)?;
             if from_acc.balance < amount {
@@ -199,7 +212,10 @@ impl State {
         }
         self.accounts
             .entry(to)
-            .or_insert(Account { nonce: 0, balance: 0 })
+            .or_insert(Account {
+                nonce: 0,
+                balance: 0,
+            })
             .balance += amount;
         self.bump_nonce(from);
         Ok(())
@@ -210,7 +226,11 @@ impl State {
     }
 
     /// Native syscall entrypoint for EVM precompiles. Does not bump tx nonce.
-    pub fn apply_native_syscall(&mut self, signer: Address, call: &NativeCall) -> Result<(), ExecError> {
+    pub fn apply_native_syscall(
+        &mut self,
+        signer: Address,
+        call: &NativeCall,
+    ) -> Result<(), ExecError> {
         self.apply_native_impl(signer, call, false)
     }
 
@@ -271,7 +291,10 @@ impl State {
                 }
                 Ok(())
             }
-            NativeCall::SuspendAgent { agent_id, reason: _ } => {
+            NativeCall::SuspendAgent {
+                agent_id,
+                reason: _,
+            } => {
                 self.require_governance(signer)?;
                 let ag = self.agents.get_mut(agent_id).ok_or(ExecError::NotFound)?;
                 ag.status = 1;
@@ -297,7 +320,15 @@ impl State {
                 amount,
                 leaf_index,
                 proof,
-            } => self.apply_claim_payout(signer, batch_id, *account, *amount, *leaf_index, proof, bump_nonce),
+            } => self.apply_claim_payout(
+                signer,
+                batch_id,
+                *account,
+                *amount,
+                *leaf_index,
+                proof,
+                bump_nonce,
+            ),
             NativeCall::FileDispute {
                 receipt_id,
                 reason_code,
@@ -326,7 +357,10 @@ impl State {
                 payouts_diff: _,
             } => {
                 self.require_governance(signer)?;
-                let d = self.disputes.get_mut(dispute_id).ok_or(ExecError::NotFound)?;
+                let d = self
+                    .disputes
+                    .get_mut(dispute_id)
+                    .ok_or(ExecError::NotFound)?;
                 d.status = *resolution;
                 if bump_nonce {
                     self.bump_nonce(signer);
@@ -356,7 +390,13 @@ impl State {
                     return Err(ExecError::InsufficientBalance);
                 }
                 *st -= amount;
-                self.accounts.entry(signer).or_insert(Account { nonce: 0, balance: 0 }).balance += amount;
+                self.accounts
+                    .entry(signer)
+                    .or_insert(Account {
+                        nonce: 0,
+                        balance: 0,
+                    })
+                    .balance += amount;
                 if bump_nonce {
                     self.bump_nonce(signer);
                 }
@@ -391,7 +431,13 @@ impl State {
                 Ok(())
             }
             NativeCall::WithdrawRewards { validator: _ } => {
-                self.accounts.entry(signer).or_insert(Account { nonce: 0, balance: 0 }).balance += 0;
+                self.accounts
+                    .entry(signer)
+                    .or_insert(Account {
+                        nonce: 0,
+                        balance: 0,
+                    })
+                    .balance += 0;
                 if bump_nonce {
                     self.bump_nonce(signer);
                 }
@@ -460,7 +506,10 @@ impl State {
         let payout_root = merkle_root(&p_leaves);
         let total: u128 = p.payout_entries.iter().map(|e| e.amount).sum();
         {
-            let op_acc = self.accounts.get_mut(&p.operator).ok_or(ExecError::UnknownSigner)?;
+            let op_acc = self
+                .accounts
+                .get_mut(&p.operator)
+                .ok_or(ExecError::UnknownSigner)?;
             if op_acc.balance < total {
                 return Err(ExecError::InsufficientBalance);
             }
@@ -473,7 +522,8 @@ impl State {
                 msg.extend_from_slice(&p.batch_id);
                 msg.extend_from_slice(&receipt_root);
                 msg.extend_from_slice(&payout_root);
-                verify_message(&ag.pubkey, &msg, &p.operator_sig).map_err(|_| ExecError::BadSignature)?;
+                verify_message(&ag.pubkey, &msg, &p.operator_sig)
+                    .map_err(|_| ExecError::BadSignature)?;
             }
         }
         let stored = StoredBatch {
@@ -522,7 +572,10 @@ impl State {
         self.claimed_payouts.insert(key);
         self.accounts
             .entry(account)
-            .or_insert(Account { nonce: 0, balance: 0 })
+            .or_insert(Account {
+                nonce: 0,
+                balance: 0,
+            })
             .balance += amount;
         if bump_nonce {
             self.bump_nonce(signer);

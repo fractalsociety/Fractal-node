@@ -1,7 +1,7 @@
 //! PRD M4: a contract’s runtime bytecode may `CALL` into `0xfc01…` and dispatch `NativeCall::NoOp`
 //! (same path as `AgentBountyEscrow.pingNativeNoOp`).
 
-use fractal_core::{apply_block_with_evm, Account, State, Transaction, TxBody, VmKind, Address};
+use fractal_core::{apply_block_with_evm, Account, Address, State, Transaction, TxBody, VmKind};
 
 fn addr(byte0: u8, byte1: u8) -> Address {
     let mut a = [0u8; 20];
@@ -15,8 +15,8 @@ const RUNTIME: [u8; 37] = [
     0x60, 0x0d, 0x5f, 0x53, // PUSH1 0x0d; PUSH0; MSTORE8
     0x5f, 0x5f, 0x60, 0x01, 0x5f, 0x5f, // retSize, retOff, inSize, inOff, value
     0x73, // PUSH20
-    0xfc, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-    0x62, 0x0f, 0x42, 0x40, // PUSH3 1_000_000
+    0xfc, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x62, 0x0f, 0x42, 0x40, // PUSH3 1_000_000
     0xf1, // CALL
     0x00, // STOP
 ];
@@ -56,7 +56,8 @@ fn contract_runtime_call_to_fc_precompile_succeeds() {
     };
 
     let mut evm = fractal_evm::RevmEngine::default();
-    apply_block_with_evm(&mut st, &[tx], &mut evm).expect("nested call to precompile should succeed");
+    apply_block_with_evm(&mut st, &[tx], &mut evm)
+        .expect("nested call to precompile should succeed");
 
     assert_eq!(st.accounts.get(&caller).unwrap().nonce, 1);
 }

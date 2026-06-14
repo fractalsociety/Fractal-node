@@ -60,7 +60,10 @@ async fn bft7_non_leader_does_not_produce_and_does_not_drain_mempool() {
         push_one_native_noop(&mut n);
         assert_eq!(n.mempool.len(), 1);
     }
-    assert_eq!(try_produce_one_tick(&node).await, ProduceTickOutcome::NotMyTurn);
+    assert_eq!(
+        try_produce_one_tick(&node).await,
+        ProduceTickOutcome::NotMyTurn
+    );
 
     let n = node.lock().await;
     assert_eq!(n.height, 0, "non-leader must not have produced");
@@ -85,7 +88,10 @@ async fn bft7_index_zero_produces_only_at_view_zero() {
     }
     // After producing, view advances to 1; index 0 is NOT leader for view 1..6.
     for _ in 0..6 {
-        assert_eq!(try_produce_one_tick(&node).await, ProduceTickOutcome::NotMyTurn);
+        assert_eq!(
+            try_produce_one_tick(&node).await,
+            ProduceTickOutcome::NotMyTurn
+        );
     }
     // Operator workaround for solo-binary BFT-7 stalls: hop view to 7 manually.
     {
@@ -106,7 +112,10 @@ async fn bft7_index_three_takes_over_at_view_three() {
     )));
     // Skip ticks at view 0..2 (NotMyTurn). Then jump to view 3 and produce.
     for _ in 0..3 {
-        assert_eq!(try_produce_one_tick(&node).await, ProduceTickOutcome::NotMyTurn);
+        assert_eq!(
+            try_produce_one_tick(&node).await,
+            ProduceTickOutcome::NotMyTurn
+        );
     }
     {
         let mut n = node.lock().await;

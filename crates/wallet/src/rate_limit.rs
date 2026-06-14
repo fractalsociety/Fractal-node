@@ -32,7 +32,9 @@ impl TokenBucket {
         if elapsed >= self.window_ms {
             let windows = elapsed / self.window_ms;
             self.tokens = self.capacity;
-            self.window_start_ms = self.window_start_ms.saturating_add(windows * self.window_ms);
+            self.window_start_ms = self
+                .window_start_ms
+                .saturating_add(windows * self.window_ms);
         }
     }
 

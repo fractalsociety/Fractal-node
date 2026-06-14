@@ -4,6 +4,8 @@
 mod module;
 
 pub use module::{
-    build_module, evm_log_matches_topic_filters, logs_bloom_256, logs_bloom_hex, make_rpc_log, serve_http,
-    ChainInteraction, LogsFilter, RpcLog, SharedChain, TopicMatch,
+    build_module, evm_log_matches_topic_filters, logs_bloom_256, logs_bloom_hex, make_rpc_log,
+    serve_http, ChainInteraction, LogsFilter, RpcChainConfig, RpcDaMetrics, RpcLog,
+    RpcProofMetrics, RpcProofRejectionMetric, RpcProofSubmission, RpcSettlementBlock, SharedChain,
+    TopicMatch,
 };

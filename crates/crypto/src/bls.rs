@@ -27,7 +27,9 @@ pub struct BlsSecretKey(pub [u8; 32]);
 
 impl std::fmt::Debug for BlsSecretKey {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("BlsSecretKey").field("bytes", &"<redacted>").finish()
+        f.debug_struct("BlsSecretKey")
+            .field("bytes", &"<redacted>")
+            .finish()
     }
 }
 

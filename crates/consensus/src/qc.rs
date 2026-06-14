@@ -58,7 +58,9 @@ pub fn next_parent_qc_hash_after_commit(
 }
 
 /// Expected `parent_qc_hash` for the child of `parent_header` (must match `header_hash(parent_header)`).
-pub fn expected_parent_qc_for_parent_header(parent_header: &BlockHeader) -> Result<Hash256, std::io::Error> {
+pub fn expected_parent_qc_for_parent_header(
+    parent_header: &BlockHeader,
+) -> Result<Hash256, std::io::Error> {
     let ph = crate::header_hash(parent_header)?;
     let qc = singleton_qc_certifying(ph, parent_header.height, parent_header.view);
     hash_qc(&qc)

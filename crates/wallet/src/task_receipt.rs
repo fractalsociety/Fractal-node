@@ -94,7 +94,10 @@ pub enum ToolReceiptVerifyError {
 
 impl ToolReceipt {
     /// Provider signs `borsh(ToolReceiptBody)`; `receipt_id` is derived from `intent_id` and that signature.
-    pub fn sign_new(body: ToolReceiptBody, provider_sk: &SigningKey) -> Result<Self, std::io::Error> {
+    pub fn sign_new(
+        body: ToolReceiptBody,
+        provider_sk: &SigningKey,
+    ) -> Result<Self, std::io::Error> {
         let msg = borsh::to_vec(&body)?;
         let provider_sig = provider_sk.sign(&msg).to_bytes();
         let receipt_id = derive_tool_receipt_id(&body.intent_id, &provider_sig);
@@ -110,10 +113,12 @@ impl ToolReceipt {
         if provider_id_from_public_key(provider_pk) != self.body.provider_id {
             return Err(ToolReceiptVerifyError::ProviderIdMismatch);
         }
-        let vk = VerifyingKey::from_bytes(provider_pk).map_err(|_| ToolReceiptVerifyError::BadProviderKey)?;
+        let vk = VerifyingKey::from_bytes(provider_pk)
+            .map_err(|_| ToolReceiptVerifyError::BadProviderKey)?;
         let sig = Signature::from_bytes(&self.provider_sig);
         let msg = borsh::to_vec(&self.body).map_err(|_| ToolReceiptVerifyError::Encode)?;
-        vk.verify(&msg, &sig).map_err(|_| ToolReceiptVerifyError::BadProviderSig)?;
+        vk.verify(&msg, &sig)
+            .map_err(|_| ToolReceiptVerifyError::BadProviderSig)?;
         let expected = derive_tool_receipt_id(&self.body.intent_id, &self.provider_sig);
         if expected != self.receipt_id {
             return Err(ToolReceiptVerifyError::ReceiptIdMismatch);
@@ -143,8 +148,8 @@ impl ToolReceipt {
         let Some(agent_sig) = &self.agent_ack_sig else {
             return Err(ToolReceiptVerifyError::MissingAgentAck);
         };
-        let vk =
-            VerifyingKey::from_bytes(&self.body.agent_session).map_err(|_| ToolReceiptVerifyError::BadAgentKey)?;
+        let vk = VerifyingKey::from_bytes(&self.body.agent_session)
+            .map_err(|_| ToolReceiptVerifyError::BadAgentKey)?;
         let sig = Signature::from_bytes(agent_sig);
         let ack = ToolReceiptAgentAckBody {
             receipt_id: self.receipt_id,
@@ -154,7 +159,8 @@ impl ToolReceipt {
             cost: self.body.cost,
         };
         let msg = borsh::to_vec(&ack).map_err(|_| ToolReceiptVerifyError::Encode)?;
-        vk.verify(&msg, &sig).map_err(|_| ToolReceiptVerifyError::BadAgentAckSig)?;
+        vk.verify(&msg, &sig)
+            .map_err(|_| ToolReceiptVerifyError::BadAgentAckSig)?;
         Ok(())
     }
 }
@@ -310,16 +316,8 @@ mod tests {
         let agent = SigningKey::generate(&mut rng);
         let p1 = SigningKey::generate(&mut rng);
         let p2 = SigningKey::generate(&mut rng);
-        let r1 = ToolReceipt::sign_new(
-            sample_body([0x10u8; 32], 9, &agent, &p1, 10),
-            &p1,
-        )
-        .unwrap();
-        let r2 = ToolReceipt::sign_new(
-            sample_body([0x11u8; 32], 9, &agent, &p2, 20),
-            &p2,
-        )
-        .unwrap();
+        let r1 = ToolReceipt::sign_new(sample_body([0x10u8; 32], 9, &agent, &p1, 10), &p1).unwrap();
+        let r2 = ToolReceipt::sign_new(sample_body([0x11u8; 32], 9, &agent, &p2, 20), &p2).unwrap();
         let receipts = vec![r1, r2];
         let root = tool_receipt_root(&receipts);
         let tr = build_task_receipt(

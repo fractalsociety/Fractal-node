@@ -8,9 +8,7 @@ use thiserror::Error;
 
 use crate::budget::{BudgetAccount, BudgetError};
 use crate::challenge::{AdjudicationDecision, Challenge};
-use crate::types::{
-    Amount, IntentId, PublicKey, QuoteId, TaskId, ToolClass, VerificationTier,
-};
+use crate::types::{Amount, IntentId, PublicKey, QuoteId, TaskId, ToolClass, VerificationTier};
 
 pub type ProviderId = crate::types::ProviderId;
 
@@ -57,7 +55,8 @@ impl ToolIntent {
     }
 
     pub fn verify(&self) -> Result<(), SigVerifyError> {
-        let vk = VerifyingKey::from_bytes(&self.body.agent_session).map_err(|_| SigVerifyError::BadKey)?;
+        let vk = VerifyingKey::from_bytes(&self.body.agent_session)
+            .map_err(|_| SigVerifyError::BadKey)?;
         let sig = Signature::from_bytes(&self.signature);
         let msg = borsh::to_vec(&self.body).map_err(|_| SigVerifyError::Encode)?;
         vk.verify(&msg, &sig).map_err(|_| SigVerifyError::BadSig)
@@ -260,14 +259,19 @@ impl ToolMarket {
         provider_pk: &PublicKey,
         now_ms: u64,
     ) -> Result<(), MatchError> {
-        let rec = self.intents.get_mut(&intent_id).ok_or(MatchError::NotFound)?;
+        let rec = self
+            .intents
+            .get_mut(&intent_id)
+            .ok_or(MatchError::NotFound)?;
         if !matches!(rec.state, IntentState::Proposed) {
             return Err(MatchError::BadState);
         }
         if quote.body.intent_id != intent_id {
             return Err(MatchError::IntentMismatch);
         }
-        quote.verify(provider_pk).map_err(|_| MatchError::BadState)?;
+        quote
+            .verify(provider_pk)
+            .map_err(|_| MatchError::BadState)?;
         if quote.body.price > rec.intent.body.max_price {
             return Err(MatchError::PriceTooHigh);
         }
@@ -295,7 +299,10 @@ impl ToolMarket {
         output_commitment: [u8; 32],
         now_ms: u64,
     ) -> Result<(), PostReceiptError> {
-        let rec = self.intents.get_mut(&intent_id).ok_or(PostReceiptError::NotFound)?;
+        let rec = self
+            .intents
+            .get_mut(&intent_id)
+            .ok_or(PostReceiptError::NotFound)?;
         let (quote_id, provider, reserved, stake_locked) = match &rec.state {
             IntentState::Matched {
                 quote_id,
@@ -330,7 +337,10 @@ impl ToolMarket {
         budget: &mut BudgetAccount,
         stake: &mut ProviderStake,
     ) -> Result<(), SettleError> {
-        let rec = self.intents.get_mut(&intent_id).ok_or(SettleError::NotFound)?;
+        let rec = self
+            .intents
+            .get_mut(&intent_id)
+            .ok_or(SettleError::NotFound)?;
         let info = match &rec.state {
             IntentState::Delivered(i) => i.clone(),
             _ => return Err(SettleError::BadState),
@@ -338,7 +348,9 @@ impl ToolMarket {
         if now_ms < info.challenge_deadline_ms {
             return Err(SettleError::ChallengeWindowOpen);
         }
-        budget.settle(info.reserved).map_err(|_| SettleError::Budget)?;
+        budget
+            .settle(info.reserved)
+            .map_err(|_| SettleError::Budget)?;
         stake.unlock(info.stake_locked);
         rec.state = IntentState::SettledPaid;
         Ok(())
@@ -354,7 +366,10 @@ impl ToolMarket {
         if challenge.intent_id != intent_id {
             return Err(ChallengeError::IntentMismatch);
         }
-        let rec = self.intents.get_mut(&intent_id).ok_or(ChallengeError::NotFound)?;
+        let rec = self
+            .intents
+            .get_mut(&intent_id)
+            .ok_or(ChallengeError::NotFound)?;
         let info = match &rec.state {
             IntentState::Delivered(i) => i.clone(),
             _ => return Err(ChallengeError::BadState),
@@ -362,10 +377,7 @@ impl ToolMarket {
         if now_ms >= info.challenge_deadline_ms {
             return Err(ChallengeError::WindowClosed);
         }
-        rec.state = IntentState::Disputed {
-            info,
-            challenge,
-        };
+        rec.state = IntentState::Disputed { info, challenge };
         Ok(())
     }
 
@@ -376,19 +388,26 @@ impl ToolMarket {
         budget: &mut BudgetAccount,
         stake: &mut ProviderStake,
     ) -> Result<(), ResolveError> {
-        let rec = self.intents.get_mut(&intent_id).ok_or(ResolveError::NotFound)?;
+        let rec = self
+            .intents
+            .get_mut(&intent_id)
+            .ok_or(ResolveError::NotFound)?;
         let (info, _challenge) = match &rec.state {
             IntentState::Disputed { info, challenge } => (info.clone(), challenge.clone()),
             _ => return Err(ResolveError::NotDisputed),
         };
         match decision {
             AdjudicationDecision::ProviderWins => {
-                budget.settle(info.reserved).map_err(|_| ResolveError::Budget)?;
+                budget
+                    .settle(info.reserved)
+                    .map_err(|_| ResolveError::Budget)?;
                 stake.unlock(info.stake_locked);
                 rec.state = IntentState::SettledPaid;
             }
             AdjudicationDecision::ChallengerWins => {
-                budget.refund(info.reserved).map_err(|_| ResolveError::Budget)?;
+                budget
+                    .refund(info.reserved)
+                    .map_err(|_| ResolveError::Budget)?;
                 stake.unlock(info.stake_locked);
                 rec.state = IntentState::SettledRefunded;
             }
@@ -403,7 +422,12 @@ impl ToolMarket {
         budget: &mut BudgetAccount,
         stake: &mut ProviderStake,
     ) -> Result<(), SettleError> {
-        let now_ms = match &self.intents.get(&intent_id).ok_or(SettleError::NotFound)?.state {
+        let now_ms = match &self
+            .intents
+            .get(&intent_id)
+            .ok_or(SettleError::NotFound)?
+            .state
+        {
             IntentState::Delivered(i) => i.challenge_deadline_ms,
             _ => return Err(SettleError::BadState),
         };

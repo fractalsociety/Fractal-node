@@ -5,8 +5,8 @@
 
 mod address;
 mod devnet_accounts;
-mod evm_engine;
 mod error;
+mod evm_engine;
 pub mod merkle;
 mod native_gas;
 mod native_types;
@@ -17,18 +17,24 @@ mod tx;
 pub mod wallet_anchor;
 
 pub use address::{create_contract_address, Address};
-pub use devnet_accounts::{DEVNET_FAUCET_TREASURY, HARDHAT_DEFAULT_SIGNER_0, HARDHAT_DEFAULT_SIGNER_1};
-pub use evm_engine::{EvmCallOutcome, EvmEngine};
+pub use devnet_accounts::{
+    DEVNET_FAUCET_TREASURY, HARDHAT_DEFAULT_SIGNER_0, HARDHAT_DEFAULT_SIGNER_1,
+};
 pub use error::ExecError;
+pub use evm_engine::{EvmCallOutcome, EvmEngine};
 pub use merkle::{merkle_proof, merkle_root, verify_merkle_proof};
 pub use native_gas::{
-    intrinsic_gas, is_native_precompile_address, native_opcode_from_precompile_address, tx_gas_limit, PER_BYTE,
-    EVM_CALL_BASE_GAS, TRANSFER_GAS,
+    intrinsic_gas, is_native_precompile_address, native_opcode_from_precompile_address,
+    tx_gas_limit, EVM_CALL_BASE_GAS, PER_BYTE, TRANSFER_GAS,
 };
 pub use native_types::*;
-pub use state::{Account, State};
 pub use state::EvmLog;
-pub use tx::{NativeCall, Transaction, TxBody, VmKind};
+pub use state::{Account, State};
+pub use tx::{
+    NativeCall, OwnedObjectCertificate, OwnedObjectCertificateError,
+    OwnedObjectCertificateSignBody, OwnedObjectId, OwnedObjectValidatorSignature,
+    OwnedObjectVersion, Transaction, TxBody, TxExecutionScope, VmKind,
+};
 
 use fractal_crypto::hash::{commit_borsh, keccak256};
 

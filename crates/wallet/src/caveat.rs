@@ -7,7 +7,10 @@ use crate::types::{Amount, TeeType, ToolClass};
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub enum Caveat {
     MaxTotalSpend(Amount),
-    MaxPerCallSpend { class: ToolClass, max: Amount },
+    MaxPerCallSpend {
+        class: ToolClass,
+        max: Amount,
+    },
     RateLimit {
         class: ToolClass,
         count: u32,
@@ -15,7 +18,10 @@ pub enum Caveat {
     },
     RequireApprovalAbove(Amount),
     OutputCommitmentRequired(ToolClass),
-    TeeAttestationRequired { class: ToolClass, tee: TeeType },
+    TeeAttestationRequired {
+        class: ToolClass,
+        tee: TeeType,
+    },
 }
 
 impl Caveat {

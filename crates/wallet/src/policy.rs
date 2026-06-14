@@ -312,13 +312,19 @@ pub mod builtins {
     pub fn suggested_tool_class_mask(template_id: TemplateId) -> Option<u64> {
         match template_id {
             RESEARCH_AGENT_V1_ID => Some(
-                ToolClass::Browser.bit() | ToolClass::LlmInference.bit() | ToolClass::FileStorage.bit(),
+                ToolClass::Browser.bit()
+                    | ToolClass::LlmInference.bit()
+                    | ToolClass::FileStorage.bit(),
             ),
             CODING_AGENT_V1_ID => Some(
-                ToolClass::LlmInference.bit() | ToolClass::TestRunner.bit() | ToolClass::FileStorage.bit(),
+                ToolClass::LlmInference.bit()
+                    | ToolClass::TestRunner.bit()
+                    | ToolClass::FileStorage.bit(),
             ),
             VERIFIER_AGENT_V1_ID => Some(
-                ToolClass::FileStorage.bit() | ToolClass::TestRunner.bit() | ToolClass::LlmInference.bit(),
+                ToolClass::FileStorage.bit()
+                    | ToolClass::TestRunner.bit()
+                    | ToolClass::LlmInference.bit(),
             ),
             _ => None,
         }
@@ -466,9 +472,7 @@ mod tests {
             .any(|c| matches!(c, Caveat::MaxTotalSpend(v) if *v == 3 * FRAC)));
         assert_eq!(
             suggested_tool_class_mask(RESEARCH_AGENT_V1_ID).unwrap(),
-            ToolClass::Browser.bit()
-                | ToolClass::LlmInference.bit()
-                | ToolClass::FileStorage.bit()
+            ToolClass::Browser.bit() | ToolClass::LlmInference.bit() | ToolClass::FileStorage.bit()
         );
 
         let c = reg.resolve(CODING_AGENT_V1_ID).unwrap();

@@ -1,6 +1,7 @@
 use std::net::SocketAddr;
 use std::sync::Arc;
 
+use borsh::BorshDeserialize;
 use fractal_core::Address;
 use fractal_crypto::hash::keccak256;
 use http::Method;
@@ -20,7 +21,11 @@ fn exec_error_to_rpc(e: fractal_core::ExecError) -> ErrorObjectOwned {
     match e {
         fractal_core::ExecError::EvmRevert { return_data } => {
             let data_hex = format!("0x{}", hex::encode(return_data));
-            ErrorObjectOwned::owned(3, "execution reverted", Some(serde_json::Value::String(data_hex)))
+            ErrorObjectOwned::owned(
+                3,
+                "execution reverted",
+                Some(serde_json::Value::String(data_hex)),
+            )
         }
         other => ErrorObjectOwned::owned(-32000, other.to_string(), None::<()>),
     }
@@ -67,7 +72,9 @@ fn addr_hex(a: &Address) -> String {
 fn parse_u256_hex_u128(s: &str) -> Result<u128, ErrorObjectOwned> {
     let s = s.strip_prefix("0x").unwrap_or(s);
     if s.len() > 32 {
-        return Err(err_invalid_params("value too large (max 128-bit in devnet)"));
+        return Err(err_invalid_params(
+            "value too large (max 128-bit in devnet)",
+        ));
     }
     u128::from_str_radix(if s.is_empty() { "0" } else { s }, 16)
         .map_err(|_| err_invalid_params("invalid quantity"))
@@ -93,7 +100,9 @@ struct EthCallObject {
     value: Option<String>,
 }
 
-fn parse_eth_call_params(params: Params<'static>) -> Result<(Address, Option<Address>, u128, Vec<u8>, String), ErrorObjectOwned> {
+fn parse_eth_call_params(
+    params: Params<'static>,
+) -> Result<(Address, Option<Address>, u128, Vec<u8>, String), ErrorObjectOwned> {
     let vs: Vec<serde_json::Value> = params
         .parse()
         .map_err(|_| err_invalid_params("expected [callObject] or [callObject, blockTag]"))?;
@@ -149,6 +158,12 @@ struct RpcBlock {
     transactions_root: String,
     state_root: String,
     receipts_root: String,
+    zone_namespace: String,
+    da_root: String,
+    da_bytes: String,
+    da_share_count: String,
+    da_gas_used: String,
+    da_fee_paid: String,
     miner: String,
     difficulty: String,
     total_difficulty: String,
@@ -159,8 +174,66 @@ struct RpcBlock {
     timestamp: String,
     /// Post-London field; required for ethers.js / Hardhat to pick EIP-1559 txs.
     base_fee_per_gas: String,
+    finality_status: String,
     transactions: Vec<String>,
     uncles: Vec<String>,
+}
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RpcDaMetrics {
+    pub committed_blocks: String,
+    pub committed_original_bytes: String,
+    pub committed_encoded_bytes: String,
+    pub committed_da_gas: String,
+    pub da_fee_revenue: String,
+    pub sampling_success: String,
+    pub sampling_failure: String,
+    pub reconstruction_success: String,
+    pub reconstruction_failure: String,
+}
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RpcProofRejectionMetric {
+    pub reason: String,
+    pub count: String,
+}
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RpcProofMetrics {
+    pub proofs_accepted: String,
+    pub proofs_rejected: String,
+    pub latest_proof_latency_ms: String,
+    pub average_proof_latency_ms: String,
+    pub proof_final_height: String,
+    pub latest_rejection_reason: Option<String>,
+    pub rejection_reasons: Vec<RpcProofRejectionMetric>,
+}
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RpcChainConfig {
+    pub proof_required_settlement: bool,
+    pub settlement_finality: String,
+}
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RpcProofSubmission {
+    pub block_hash: String,
+    pub finality_status: String,
+}
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RpcSettlementBlock {
+    pub block_hash: String,
+    pub block_number: String,
+    pub finality_status: String,
+    pub settlement_allowed: bool,
+    pub proof_required_settlement: bool,
 }
 
 #[derive(Clone, Serialize)]
@@ -236,7 +309,10 @@ pub enum TopicMatch {
 }
 
 /// Whether `log` satisfies `topic_filters` (same rules as Ethereum JSON-RPC `topics`).
-pub fn evm_log_matches_topic_filters(log: &fractal_core::EvmLog, topic_filters: &[Option<TopicMatch>]) -> bool {
+pub fn evm_log_matches_topic_filters(
+    log: &fractal_core::EvmLog,
+    topic_filters: &[Option<TopicMatch>],
+) -> bool {
     for (i, slot) in topic_filters.iter().enumerate() {
         let Some(tm) = slot else {
             continue;
@@ -260,7 +336,9 @@ pub fn evm_log_matches_topic_filters(log: &fractal_core::EvmLog, topic_filters: 
     true
 }
 
-fn parse_topic_filters(topics: Option<Vec<serde_json::Value>>) -> Result<Vec<Option<TopicMatch>>, ErrorObjectOwned> {
+fn parse_topic_filters(
+    topics: Option<Vec<serde_json::Value>>,
+) -> Result<Vec<Option<TopicMatch>>, ErrorObjectOwned> {
     let Some(rows) = topics else {
         return Ok(Vec::new());
     };
@@ -279,7 +357,9 @@ fn parse_topic_filters(topics: Option<Vec<serde_json::Value>>) -> Result<Vec<Opt
                 let mut hs = Vec::with_capacity(items.len());
                 for it in items {
                     let serde_json::Value::String(s) = it else {
-                        return Err(err_invalid_params("topic OR list must contain only hex strings"));
+                        return Err(err_invalid_params(
+                            "topic OR list must contain only hex strings",
+                        ));
                     };
                     hs.push(parse_hash256_hex(&s)?);
                 }
@@ -291,7 +371,9 @@ fn parse_topic_filters(topics: Option<Vec<serde_json::Value>>) -> Result<Vec<Opt
     Ok(out)
 }
 
-fn parse_filter_addresses(v: Option<serde_json::Value>) -> Result<Option<Vec<Address>>, ErrorObjectOwned> {
+fn parse_filter_addresses(
+    v: Option<serde_json::Value>,
+) -> Result<Option<Vec<Address>>, ErrorObjectOwned> {
     match v {
         None => Ok(None),
         Some(serde_json::Value::String(s)) => Ok(Some(vec![parse_address_hex(&s)?])),
@@ -299,13 +381,17 @@ fn parse_filter_addresses(v: Option<serde_json::Value>) -> Result<Option<Vec<Add
             let mut out = Vec::with_capacity(a.len());
             for x in a {
                 let serde_json::Value::String(s) = x else {
-                    return Err(err_invalid_params("address filter must be string or array of strings"));
+                    return Err(err_invalid_params(
+                        "address filter must be string or array of strings",
+                    ));
                 };
                 out.push(parse_address_hex(&s)?);
             }
             Ok(Some(out))
         }
-        _ => Err(err_invalid_params("address must be string or array of strings")),
+        _ => Err(err_invalid_params(
+            "address must be string or array of strings",
+        )),
     }
 }
 
@@ -372,6 +458,10 @@ pub trait ChainInteraction: Send {
 
     fn block_by_hash(&self, hash: &[u8; 32]) -> Option<fractal_consensus::Block>;
 
+    fn block_is_proof_final(&self, _hash: &[u8; 32]) -> bool {
+        false
+    }
+
     fn tx_by_hash(&self, hash: &[u8; 32]) -> Option<fractal_core::Transaction>;
 
     fn mined_tx_info(&self, hash: &[u8; 32]) -> Option<(u64, [u8; 32], u32)>;
@@ -418,6 +508,19 @@ pub trait ChainInteraction: Send {
 
     /// Bitwise OR of each mined tx receipt bloom in `block` (from stored execution logs).
     fn logs_bloom_for_block(&self, block: &fractal_consensus::Block) -> [u8; 256];
+
+    fn da_metrics(&self) -> RpcDaMetrics;
+
+    fn da_fee_revenue(&self) -> u128;
+
+    fn proof_metrics(&self) -> RpcProofMetrics;
+
+    fn chain_config(&self) -> RpcChainConfig;
+
+    fn submit_validity_proof(
+        &mut self,
+        proof: fractal_consensus::BlockValidityProof,
+    ) -> Result<[u8; 32], String>;
 }
 
 pub type SharedChain = Arc<Mutex<dyn ChainInteraction + Send>>;
@@ -426,15 +529,19 @@ pub fn build_module(ctx: SharedChain) -> RpcModule<SharedChain> {
     let mut module = RpcModule::new(ctx.clone());
 
     module
-        .register_async_method("eth_syncing", |_params: Params<'static>, _ctx, _| async move {
-            Ok::<bool, ErrorObjectOwned>(false)
-        })
+        .register_async_method(
+            "eth_syncing",
+            |_params: Params<'static>, _ctx, _| async move { Ok::<bool, ErrorObjectOwned>(false) },
+        )
         .expect("register eth_syncing");
 
     module
-        .register_async_method("web3_clientVersion", |_params: Params<'static>, _ctx, _| async move {
-            Ok::<String, ErrorObjectOwned>("FractalChain/v0.1.0".into())
-        })
+        .register_async_method(
+            "web3_clientVersion",
+            |_params: Params<'static>, _ctx, _| async move {
+                Ok::<String, ErrorObjectOwned>("FractalChain/v0.1.0".into())
+            },
+        )
         .expect("register web3_clientVersion");
 
     module
@@ -458,6 +565,116 @@ pub fn build_module(ctx: SharedChain) -> RpcModule<SharedChain> {
         .expect("register net_version");
 
     module
+        .register_async_method("fractal_daMetrics", |_params: Params<'static>, ctx, _| {
+            let ctx = ctx.clone();
+            async move {
+                let g = ctx.lock().await;
+                Ok::<RpcDaMetrics, ErrorObjectOwned>(g.da_metrics())
+            }
+        })
+        .expect("register fractal_daMetrics");
+
+    module
+        .register_async_method(
+            "fractal_proofMetrics",
+            |_params: Params<'static>, ctx, _| {
+                let ctx = ctx.clone();
+                async move {
+                    let g = ctx.lock().await;
+                    Ok::<RpcProofMetrics, ErrorObjectOwned>(g.proof_metrics())
+                }
+            },
+        )
+        .expect("register fractal_proofMetrics");
+
+    module
+        .register_async_method("fractal_chainConfig", |_params: Params<'static>, ctx, _| {
+            let ctx = ctx.clone();
+            async move {
+                let g = ctx.lock().await;
+                Ok::<RpcChainConfig, ErrorObjectOwned>(g.chain_config())
+            }
+        })
+        .expect("register fractal_chainConfig");
+
+    module
+        .register_async_method(
+            "fractal_submitValidityProof",
+            |params: Params<'static>, ctx, _| {
+                let ctx = ctx.clone();
+                async move {
+                    let proof_hex: String = params
+                        .one()
+                        .map_err(|_| err_invalid_params("expected borsh proof hex"))?;
+                    let proof_bytes = parse_bytes_hex(&proof_hex)?;
+                    let proof = fractal_consensus::BlockValidityProof::try_from_slice(&proof_bytes)
+                        .map_err(|_| err_invalid_params("invalid BlockValidityProof borsh"))?;
+                    let mut g = ctx.lock().await;
+                    let block_hash = g
+                        .submit_validity_proof(proof)
+                        .map_err(|e| ErrorObjectOwned::owned(-32000, e, None::<()>))?;
+                    Ok::<RpcProofSubmission, ErrorObjectOwned>(RpcProofSubmission {
+                        block_hash: hash_hex(&block_hash),
+                        finality_status: "proof".into(),
+                    })
+                }
+            },
+        )
+        .expect("register fractal_submitValidityProof");
+
+    module
+        .register_async_method(
+            "fractal_getSettlementBlock",
+            |params: Params<'static>, ctx, _| {
+                let ctx = ctx.clone();
+                async move {
+                    let hash_hex_param: String = params
+                        .one()
+                        .map_err(|_| err_invalid_params("expected block hash"))?;
+                    let hash = parse_hash256_hex(&hash_hex_param)?;
+                    let g = ctx.lock().await;
+                    let Some(block) = g.block_by_hash(&hash) else {
+                        return Err(ErrorObjectOwned::owned(
+                            -32001,
+                            "block not found",
+                            None::<()>,
+                        ));
+                    };
+                    let proof_final = g.block_is_proof_final(&hash);
+                    let cfg = g.chain_config();
+                    if cfg.proof_required_settlement && !proof_final {
+                        return Err(ErrorObjectOwned::owned(
+                            -32010,
+                            "block is not proof-final",
+                            None::<()>,
+                        ));
+                    }
+                    Ok::<RpcSettlementBlock, ErrorObjectOwned>(RpcSettlementBlock {
+                        block_hash: hash_hex(&hash),
+                        block_number: quantity_hex_u64(block.header.height),
+                        finality_status: if proof_final { "proof" } else { "soft" }.into(),
+                        settlement_allowed: !cfg.proof_required_settlement || proof_final,
+                        proof_required_settlement: cfg.proof_required_settlement,
+                    })
+                }
+            },
+        )
+        .expect("register fractal_getSettlementBlock");
+
+    module
+        .register_async_method(
+            "fractal_daFeeRevenue",
+            |_params: Params<'static>, ctx, _| {
+                let ctx = ctx.clone();
+                async move {
+                    let g = ctx.lock().await;
+                    Ok::<String, ErrorObjectOwned>(u256_quantity_hex(g.da_fee_revenue()))
+                }
+            },
+        )
+        .expect("register fractal_daFeeRevenue");
+
+    module
         .register_async_method("eth_blockNumber", |_params: Params<'static>, ctx, _| {
             let ctx = ctx.clone();
             async move {
@@ -478,18 +695,24 @@ pub fn build_module(ctx: SharedChain) -> RpcModule<SharedChain> {
                 let number = if tag == "latest" {
                     g.block_number()
                 } else if let Some(hex) = tag.strip_prefix("0x") {
-                    u64::from_str_radix(hex, 16).map_err(|_| err_invalid_params("invalid block number"))?
+                    u64::from_str_radix(hex, 16)
+                        .map_err(|_| err_invalid_params("invalid block number"))?
                 } else {
                     return Err(err_invalid_params("unsupported blockTag"));
                 };
-                let h = g.block_hash_by_number(number).ok_or_else(|| ErrorObjectOwned::owned(-32000, "block not found", None::<()>))?;
-                let b = g.block_by_hash(&h).ok_or_else(|| ErrorObjectOwned::owned(-32000, "block not found", None::<()>))?;
+                let h = g.block_hash_by_number(number).ok_or_else(|| {
+                    ErrorObjectOwned::owned(-32000, "block not found", None::<()>)
+                })?;
+                let b = g.block_by_hash(&h).ok_or_else(|| {
+                    ErrorObjectOwned::owned(-32000, "block not found", None::<()>)
+                })?;
                 let lb = g.logs_bloom_for_block(&b);
                 Ok::<RpcBlock, ErrorObjectOwned>(rpc_block_from_consensus(
                     &b,
                     Some(h),
                     lb,
                     g.base_fee_per_gas(),
+                    g.block_is_proof_final(&h),
                 ))
             }
         })
@@ -504,198 +727,228 @@ pub fn build_module(ctx: SharedChain) -> RpcModule<SharedChain> {
                     .map_err(|_| err_invalid_params("expected [blockHash, fullTxObjects]"))?;
                 let h = parse_hash256_hex(&hash_hex)?;
                 let g = ctx.lock().await;
-                let b = g.block_by_hash(&h).ok_or_else(|| ErrorObjectOwned::owned(-32000, "block not found", None::<()>))?;
+                let b = g.block_by_hash(&h).ok_or_else(|| {
+                    ErrorObjectOwned::owned(-32000, "block not found", None::<()>)
+                })?;
                 let lb = g.logs_bloom_for_block(&b);
                 Ok::<RpcBlock, ErrorObjectOwned>(rpc_block_from_consensus(
                     &b,
                     Some(h),
                     lb,
                     g.base_fee_per_gas(),
+                    g.block_is_proof_final(&h),
                 ))
             }
         })
         .expect("register eth_getBlockByHash");
 
     module
-        .register_async_method("eth_getBlockTransactionCountByNumber", |params: Params<'static>, ctx, _| {
-            let ctx = ctx.clone();
-            async move {
-                let tag: String = params.one().map_err(|_| err_invalid_params("expected blockTag"))?;
-                let g = ctx.lock().await;
-                let number = if tag == "latest" {
-                    g.block_number()
-                } else if let Some(hex) = tag.strip_prefix("0x") {
-                    u64::from_str_radix(hex, 16).map_err(|_| err_invalid_params("invalid block number"))?
-                } else {
-                    return Err(err_invalid_params("unsupported blockTag"));
-                };
-                let h = g
-                    .block_hash_by_number(number)
-                    .ok_or_else(|| ErrorObjectOwned::owned(-32000, "block not found", None::<()>))?;
-                let b = g
-                    .block_by_hash(&h)
-                    .ok_or_else(|| ErrorObjectOwned::owned(-32000, "block not found", None::<()>))?;
-                Ok::<String, ErrorObjectOwned>(quantity_hex_u64(b.transactions.len() as u64))
-            }
-        })
+        .register_async_method(
+            "eth_getBlockTransactionCountByNumber",
+            |params: Params<'static>, ctx, _| {
+                let ctx = ctx.clone();
+                async move {
+                    let tag: String = params
+                        .one()
+                        .map_err(|_| err_invalid_params("expected blockTag"))?;
+                    let g = ctx.lock().await;
+                    let number = if tag == "latest" {
+                        g.block_number()
+                    } else if let Some(hex) = tag.strip_prefix("0x") {
+                        u64::from_str_radix(hex, 16)
+                            .map_err(|_| err_invalid_params("invalid block number"))?
+                    } else {
+                        return Err(err_invalid_params("unsupported blockTag"));
+                    };
+                    let h = g.block_hash_by_number(number).ok_or_else(|| {
+                        ErrorObjectOwned::owned(-32000, "block not found", None::<()>)
+                    })?;
+                    let b = g.block_by_hash(&h).ok_or_else(|| {
+                        ErrorObjectOwned::owned(-32000, "block not found", None::<()>)
+                    })?;
+                    Ok::<String, ErrorObjectOwned>(quantity_hex_u64(b.transactions.len() as u64))
+                }
+            },
+        )
         .expect("register eth_getBlockTransactionCountByNumber");
 
     module
-        .register_async_method("eth_getBlockTransactionCountByHash", |params: Params<'static>, ctx, _| {
-            let ctx = ctx.clone();
-            async move {
-                let hash_hex: String = params.one().map_err(|_| err_invalid_params("expected block hash"))?;
-                let h = parse_hash256_hex(&hash_hex)?;
-                let g = ctx.lock().await;
-                let b = g
-                    .block_by_hash(&h)
-                    .ok_or_else(|| ErrorObjectOwned::owned(-32000, "block not found", None::<()>))?;
-                Ok::<String, ErrorObjectOwned>(quantity_hex_u64(b.transactions.len() as u64))
-            }
-        })
+        .register_async_method(
+            "eth_getBlockTransactionCountByHash",
+            |params: Params<'static>, ctx, _| {
+                let ctx = ctx.clone();
+                async move {
+                    let hash_hex: String = params
+                        .one()
+                        .map_err(|_| err_invalid_params("expected block hash"))?;
+                    let h = parse_hash256_hex(&hash_hex)?;
+                    let g = ctx.lock().await;
+                    let b = g.block_by_hash(&h).ok_or_else(|| {
+                        ErrorObjectOwned::owned(-32000, "block not found", None::<()>)
+                    })?;
+                    Ok::<String, ErrorObjectOwned>(quantity_hex_u64(b.transactions.len() as u64))
+                }
+            },
+        )
         .expect("register eth_getBlockTransactionCountByHash");
 
     module
-        .register_async_method("eth_getTransactionByBlockHashAndIndex", |params: Params<'static>, ctx, _| {
-            let ctx = ctx.clone();
-            async move {
-                let (block_hash_hex, idx_hex): (String, String) = params
-                    .parse()
-                    .map_err(|_| err_invalid_params("expected [blockHash, index]"))?;
-                let bh = parse_hash256_hex(&block_hash_hex)?;
-                let idx = if let Some(hex) = idx_hex.strip_prefix("0x") {
-                    u64::from_str_radix(hex, 16).map_err(|_| err_invalid_params("invalid index"))?
-                } else {
-                    return Err(err_invalid_params("index must be hex quantity"));
-                };
-                let g = ctx.lock().await;
-                let b = match g.block_by_hash(&bh) {
-                    Some(b) => b,
-                    None => return Ok::<Option<RpcTx>, ErrorObjectOwned>(None),
-                };
-                let tx = match b.transactions.get(idx as usize) {
-                    Some(t) => t.clone(),
-                    None => return Ok::<Option<RpcTx>, ErrorObjectOwned>(None),
-                };
-                let raw = borsh::to_vec(&tx).map_err(|_| ErrorObjectOwned::owned(-32000, "tx encode failed", None::<()>))?;
-                let th = keccak256(&raw);
-                let mined = Some((b.header.height, bh, idx as u32));
-                Ok::<Option<RpcTx>, ErrorObjectOwned>(Some(rpc_tx_from_core(&tx, &th, mined, g.base_fee_per_gas())))
-            }
-        })
+        .register_async_method(
+            "eth_getTransactionByBlockHashAndIndex",
+            |params: Params<'static>, ctx, _| {
+                let ctx = ctx.clone();
+                async move {
+                    let (block_hash_hex, idx_hex): (String, String) = params
+                        .parse()
+                        .map_err(|_| err_invalid_params("expected [blockHash, index]"))?;
+                    let bh = parse_hash256_hex(&block_hash_hex)?;
+                    let idx = if let Some(hex) = idx_hex.strip_prefix("0x") {
+                        u64::from_str_radix(hex, 16)
+                            .map_err(|_| err_invalid_params("invalid index"))?
+                    } else {
+                        return Err(err_invalid_params("index must be hex quantity"));
+                    };
+                    let g = ctx.lock().await;
+                    let b = match g.block_by_hash(&bh) {
+                        Some(b) => b,
+                        None => return Ok::<Option<RpcTx>, ErrorObjectOwned>(None),
+                    };
+                    let tx = match b.transactions.get(idx as usize) {
+                        Some(t) => t.clone(),
+                        None => return Ok::<Option<RpcTx>, ErrorObjectOwned>(None),
+                    };
+                    let raw = borsh::to_vec(&tx).map_err(|_| {
+                        ErrorObjectOwned::owned(-32000, "tx encode failed", None::<()>)
+                    })?;
+                    let th = keccak256(&raw);
+                    let mined = Some((b.header.height, bh, idx as u32));
+                    Ok::<Option<RpcTx>, ErrorObjectOwned>(Some(rpc_tx_from_core(
+                        &tx,
+                        &th,
+                        mined,
+                        g.base_fee_per_gas(),
+                    )))
+                }
+            },
+        )
         .expect("register eth_getTransactionByBlockHashAndIndex");
 
     module
-        .register_async_method("eth_getTransactionByBlockNumberAndIndex", |params: Params<'static>, ctx, _| {
-            let ctx = ctx.clone();
-            async move {
-                let (tag, idx_hex): (String, String) = params
-                    .parse()
-                    .map_err(|_| err_invalid_params("expected [blockTag, index]"))?;
-                let idx = if let Some(hex) = idx_hex.strip_prefix("0x") {
-                    u64::from_str_radix(hex, 16).map_err(|_| err_invalid_params("invalid index"))?
-                } else {
-                    return Err(err_invalid_params("index must be hex quantity"));
-                };
-                let g = ctx.lock().await;
-                let number = if tag == "latest" {
-                    g.block_number()
-                } else if let Some(hex) = tag.strip_prefix("0x") {
-                    u64::from_str_radix(hex, 16).map_err(|_| err_invalid_params("invalid block number"))?
-                } else {
-                    return Err(err_invalid_params("unsupported blockTag"));
-                };
-                let bh = match g.block_hash_by_number(number) {
-                    Some(h) => h,
-                    None => return Ok::<Option<RpcTx>, ErrorObjectOwned>(None),
-                };
-                let b = match g.block_by_hash(&bh) {
-                    Some(b) => b,
-                    None => return Ok::<Option<RpcTx>, ErrorObjectOwned>(None),
-                };
-                let tx = match b.transactions.get(idx as usize) {
-                    Some(t) => t.clone(),
-                    None => return Ok::<Option<RpcTx>, ErrorObjectOwned>(None),
-                };
-                let raw = borsh::to_vec(&tx)
-                    .map_err(|_| ErrorObjectOwned::owned(-32000, "tx encode failed", None::<()>))?;
-                let th = keccak256(&raw);
-                let mined = Some((b.header.height, bh, idx as u32));
-                Ok::<Option<RpcTx>, ErrorObjectOwned>(Some(rpc_tx_from_core(
-                    &tx,
-                    &th,
-                    mined,
-                    g.base_fee_per_gas(),
-                )))
-            }
-        })
+        .register_async_method(
+            "eth_getTransactionByBlockNumberAndIndex",
+            |params: Params<'static>, ctx, _| {
+                let ctx = ctx.clone();
+                async move {
+                    let (tag, idx_hex): (String, String) = params
+                        .parse()
+                        .map_err(|_| err_invalid_params("expected [blockTag, index]"))?;
+                    let idx = if let Some(hex) = idx_hex.strip_prefix("0x") {
+                        u64::from_str_radix(hex, 16)
+                            .map_err(|_| err_invalid_params("invalid index"))?
+                    } else {
+                        return Err(err_invalid_params("index must be hex quantity"));
+                    };
+                    let g = ctx.lock().await;
+                    let number = if tag == "latest" {
+                        g.block_number()
+                    } else if let Some(hex) = tag.strip_prefix("0x") {
+                        u64::from_str_radix(hex, 16)
+                            .map_err(|_| err_invalid_params("invalid block number"))?
+                    } else {
+                        return Err(err_invalid_params("unsupported blockTag"));
+                    };
+                    let bh = match g.block_hash_by_number(number) {
+                        Some(h) => h,
+                        None => return Ok::<Option<RpcTx>, ErrorObjectOwned>(None),
+                    };
+                    let b = match g.block_by_hash(&bh) {
+                        Some(b) => b,
+                        None => return Ok::<Option<RpcTx>, ErrorObjectOwned>(None),
+                    };
+                    let tx = match b.transactions.get(idx as usize) {
+                        Some(t) => t.clone(),
+                        None => return Ok::<Option<RpcTx>, ErrorObjectOwned>(None),
+                    };
+                    let raw = borsh::to_vec(&tx).map_err(|_| {
+                        ErrorObjectOwned::owned(-32000, "tx encode failed", None::<()>)
+                    })?;
+                    let th = keccak256(&raw);
+                    let mined = Some((b.header.height, bh, idx as u32));
+                    Ok::<Option<RpcTx>, ErrorObjectOwned>(Some(rpc_tx_from_core(
+                        &tx,
+                        &th,
+                        mined,
+                        g.base_fee_per_gas(),
+                    )))
+                }
+            },
+        )
         .expect("register eth_getTransactionByBlockNumberAndIndex");
 
     module
-        .register_async_method("eth_getTransactionByHash", |params: Params<'static>, ctx, _| {
-            let ctx = ctx.clone();
-            async move {
-                let hash_hex: String = params
-                    .one()
-                    .map_err(|_| err_invalid_params("expected tx hash"))?;
-                let h = parse_hash256_hex(&hash_hex)?;
-                let g = ctx.lock().await;
-                let tx = match g.tx_by_hash(&h) {
-                    Some(t) => t,
-                    None => return Ok(serde_json::Value::Null),
-                };
-                let mined = g.mined_tx_info(&h);
-                if let Some(raw) = g.eth_signed_raw(&h) {
-                    let v = fractal_eth_wire::eip1559_signed_tx_to_json(&raw, mined).map_err(|e| {
-                        ErrorObjectOwned::owned(-32000, format!("eth tx decode: {e}"), None::<()>)
-                    })?;
-                    return Ok(v);
+        .register_async_method(
+            "eth_getTransactionByHash",
+            |params: Params<'static>, ctx, _| {
+                let ctx = ctx.clone();
+                async move {
+                    let hash_hex: String = params
+                        .one()
+                        .map_err(|_| err_invalid_params("expected tx hash"))?;
+                    let h = parse_hash256_hex(&hash_hex)?;
+                    let g = ctx.lock().await;
+                    let tx = match g.tx_by_hash(&h) {
+                        Some(t) => t,
+                        None => return Ok(serde_json::Value::Null),
+                    };
+                    let mined = g.mined_tx_info(&h);
+                    if let Some(raw) = g.eth_signed_raw(&h) {
+                        let v = fractal_eth_wire::eip1559_signed_tx_to_json(&raw, mined).map_err(
+                            |e| {
+                                ErrorObjectOwned::owned(
+                                    -32000,
+                                    format!("eth tx decode: {e}"),
+                                    None::<()>,
+                                )
+                            },
+                        )?;
+                        return Ok(v);
+                    }
+                    serde_json::to_value(rpc_tx_from_core(&tx, &h, mined, g.base_fee_per_gas()))
+                        .map_err(|_| ErrorObjectOwned::owned(-32000, "serialize tx", None::<()>))
                 }
-                serde_json::to_value(rpc_tx_from_core(
-                    &tx,
-                    &h,
-                    mined,
-                    g.base_fee_per_gas(),
-                ))
-                .map_err(|_| ErrorObjectOwned::owned(-32000, "serialize tx", None::<()>))
-            }
-        })
+            },
+        )
         .expect("register eth_getTransactionByHash");
 
     module
-        .register_async_method("eth_getTransactionReceipt", |params: Params<'static>, ctx, _| {
-            let ctx = ctx.clone();
-            async move {
-                let hash_hex: String = params
-                    .one()
-                    .map_err(|_| err_invalid_params("expected tx hash"))?;
-                let h = parse_hash256_hex(&hash_hex)?;
-                let g = ctx.lock().await;
-                let tx = match g.tx_by_hash(&h) {
-                    Some(t) => t,
-                    None => return Ok::<Option<RpcReceipt>, ErrorObjectOwned>(None),
-                };
-                let Some((bn, bh, idx)) = g.mined_tx_info(&h) else {
-                    return Ok::<Option<RpcReceipt>, ErrorObjectOwned>(None);
-                };
-                let gas_used = g
-                    .gas_used_for_tx(&h)
-                    .unwrap_or_else(|| fractal_core::intrinsic_gas(&tx).unwrap_or(0));
-                let (logs, logs_bloom) = g.receipt_rpc_logs(&h, bn, &bh, idx);
-                let receipt_ok = g.evm_receipt_success(&h);
-                Ok::<Option<RpcReceipt>, ErrorObjectOwned>(Some(rpc_receipt_from_core(
-                    &tx,
-                    &h,
-                    bn,
-                    &bh,
-                    idx,
-                    gas_used,
-                    logs,
-                    logs_bloom,
-                    receipt_ok,
-                )))
-            }
-        })
+        .register_async_method(
+            "eth_getTransactionReceipt",
+            |params: Params<'static>, ctx, _| {
+                let ctx = ctx.clone();
+                async move {
+                    let hash_hex: String = params
+                        .one()
+                        .map_err(|_| err_invalid_params("expected tx hash"))?;
+                    let h = parse_hash256_hex(&hash_hex)?;
+                    let g = ctx.lock().await;
+                    let tx = match g.tx_by_hash(&h) {
+                        Some(t) => t,
+                        None => return Ok::<Option<RpcReceipt>, ErrorObjectOwned>(None),
+                    };
+                    let Some((bn, bh, idx)) = g.mined_tx_info(&h) else {
+                        return Ok::<Option<RpcReceipt>, ErrorObjectOwned>(None);
+                    };
+                    let gas_used = g
+                        .gas_used_for_tx(&h)
+                        .unwrap_or_else(|| fractal_core::intrinsic_gas(&tx).unwrap_or(0));
+                    let (logs, logs_bloom) = g.receipt_rpc_logs(&h, bn, &bh, idx);
+                    let receipt_ok = g.evm_receipt_success(&h);
+                    Ok::<Option<RpcReceipt>, ErrorObjectOwned>(Some(rpc_receipt_from_core(
+                        &tx, &h, bn, &bh, idx, gas_used, logs, logs_bloom, receipt_ok,
+                    )))
+                }
+            },
+        )
         .expect("register eth_getTransactionReceipt");
 
     module
@@ -717,43 +970,49 @@ pub fn build_module(ctx: SharedChain) -> RpcModule<SharedChain> {
         .register_async_method("eth_getCode", |params: Params<'static>, ctx, _| {
             let ctx = ctx.clone();
             async move {
-            let (addr_hex, _tag): (String, String) = params
-                .parse()
-                .map_err(|_| err_invalid_params("expected [address, blockTag]"))?;
-            let addr = parse_address_hex(&addr_hex)?;
-            let g = ctx.lock().await;
-            let code = g.code_at(&addr);
-            Ok::<String, ErrorObjectOwned>(format!("0x{}", hex::encode(code)))
-            }
-        })
-        .expect("register eth_getCode");
-
-    module
-        .register_async_method("eth_getStorageAt", |params: Params<'static>, _ctx, _| async move {
-            // Devnet: reads from `State.evm_storage` (slot -> value).
-            let (addr_hex, pos_hex, _tag): (String, String, String) = params
-                .parse()
-                .map_err(|_| err_invalid_params("expected [address, position, blockTag]"))?;
-            let addr = parse_address_hex(&addr_hex)?;
-            let slot = parse_hash256_hex(&pos_hex)?;
-            let v = _ctx.lock().await.storage_at(&addr, slot);
-            Ok::<String, ErrorObjectOwned>(hash_hex(&v))
-        })
-        .expect("register eth_getStorageAt");
-
-    module
-        .register_async_method("eth_getTransactionCount", |params: Params<'static>, ctx, _| {
-            let ctx = ctx.clone();
-            async move {
                 let (addr_hex, _tag): (String, String) = params
                     .parse()
                     .map_err(|_| err_invalid_params("expected [address, blockTag]"))?;
                 let addr = parse_address_hex(&addr_hex)?;
                 let g = ctx.lock().await;
-                let n = g.transaction_count(&addr);
-                Ok::<String, ErrorObjectOwned>(format!("0x{:x}", n))
+                let code = g.code_at(&addr);
+                Ok::<String, ErrorObjectOwned>(format!("0x{}", hex::encode(code)))
             }
         })
+        .expect("register eth_getCode");
+
+    module
+        .register_async_method(
+            "eth_getStorageAt",
+            |params: Params<'static>, _ctx, _| async move {
+                // Devnet: reads from `State.evm_storage` (slot -> value).
+                let (addr_hex, pos_hex, _tag): (String, String, String) = params
+                    .parse()
+                    .map_err(|_| err_invalid_params("expected [address, position, blockTag]"))?;
+                let addr = parse_address_hex(&addr_hex)?;
+                let slot = parse_hash256_hex(&pos_hex)?;
+                let v = _ctx.lock().await.storage_at(&addr, slot);
+                Ok::<String, ErrorObjectOwned>(hash_hex(&v))
+            },
+        )
+        .expect("register eth_getStorageAt");
+
+    module
+        .register_async_method(
+            "eth_getTransactionCount",
+            |params: Params<'static>, ctx, _| {
+                let ctx = ctx.clone();
+                async move {
+                    let (addr_hex, _tag): (String, String) = params
+                        .parse()
+                        .map_err(|_| err_invalid_params("expected [address, blockTag]"))?;
+                    let addr = parse_address_hex(&addr_hex)?;
+                    let g = ctx.lock().await;
+                    let n = g.transaction_count(&addr);
+                    Ok::<String, ErrorObjectOwned>(format!("0x{:x}", n))
+                }
+            },
+        )
         .expect("register eth_getTransactionCount");
 
     module
@@ -767,10 +1026,13 @@ pub fn build_module(ctx: SharedChain) -> RpcModule<SharedChain> {
         .expect("register eth_gasPrice");
 
     module
-        .register_async_method("eth_maxPriorityFeePerGas", |_params: Params<'static>, _ctx, _| async move {
-            // Devnet: fixed small tip suggestion (1 wei-equivalent).
-            Ok::<String, ErrorObjectOwned>(u256_quantity_hex(1))
-        })
+        .register_async_method(
+            "eth_maxPriorityFeePerGas",
+            |_params: Params<'static>, _ctx, _| async move {
+                // Devnet: fixed small tip suggestion (1 wei-equivalent).
+                Ok::<String, ErrorObjectOwned>(u256_quantity_hex(1))
+            },
+        )
         .expect("register eth_maxPriorityFeePerGas");
 
     module
@@ -779,11 +1041,13 @@ pub fn build_module(ctx: SharedChain) -> RpcModule<SharedChain> {
             async move {
                 // Params: (blockCount, newestBlock, rewardPercentiles?)
                 // We'll accept rewardPercentiles but ignore it (reward = null).
-                let (block_count_hex, newest_block, _reward): (String, String, Option<Vec<f64>>) = params
-                    .parse()
-                    .map_err(|_| err_invalid_params("expected [blockCount, newestBlock, rewardPercentiles?]"))?;
+                let (block_count_hex, newest_block, _reward): (String, String, Option<Vec<f64>>) =
+                    params.parse().map_err(|_| {
+                        err_invalid_params("expected [blockCount, newestBlock, rewardPercentiles?]")
+                    })?;
                 let block_count = if let Some(hex) = block_count_hex.strip_prefix("0x") {
-                    u64::from_str_radix(hex, 16).map_err(|_| err_invalid_params("invalid blockCount"))?
+                    u64::from_str_radix(hex, 16)
+                        .map_err(|_| err_invalid_params("invalid blockCount"))?
                 } else {
                     return Err(err_invalid_params("blockCount must be hex quantity"));
                 };
@@ -791,7 +1055,8 @@ pub fn build_module(ctx: SharedChain) -> RpcModule<SharedChain> {
                 let newest = if newest_block == "latest" {
                     g.block_number()
                 } else if let Some(hex) = newest_block.strip_prefix("0x") {
-                    u64::from_str_radix(hex, 16).map_err(|_| err_invalid_params("invalid newestBlock"))?
+                    u64::from_str_radix(hex, 16)
+                        .map_err(|_| err_invalid_params("invalid newestBlock"))?
                 } else {
                     return Err(err_invalid_params("unsupported newestBlock"));
                 };
@@ -814,22 +1079,25 @@ pub fn build_module(ctx: SharedChain) -> RpcModule<SharedChain> {
         .expect("register eth_feeHistory");
 
     module
-        .register_async_method("eth_sendRawTransaction", |params: Params<'static>, ctx, _| {
-            let ctx = ctx.clone();
-            async move {
-                let hex: String = params
-                    .one()
-                    .map_err(|_| err_invalid_params("expected raw tx hex"))?;
-                let bytes = hex::decode(hex.trim_start_matches("0x"))
-                    .map_err(|_| err_invalid_params("invalid tx hex"))?;
-                let mut g = ctx.lock().await;
-                g.submit_raw_tx(&bytes)
-                    .map_err(|e| ErrorObjectOwned::owned(-32000, e, None::<()>))?;
-                // Return keccak hash placeholder of raw bytes (not canonical tx hash yet).
-                let h = keccak256(&bytes);
-                Ok::<String, ErrorObjectOwned>(format!("0x{}", hex::encode(h)))
-            }
-        })
+        .register_async_method(
+            "eth_sendRawTransaction",
+            |params: Params<'static>, ctx, _| {
+                let ctx = ctx.clone();
+                async move {
+                    let hex: String = params
+                        .one()
+                        .map_err(|_| err_invalid_params("expected raw tx hex"))?;
+                    let bytes = hex::decode(hex.trim_start_matches("0x"))
+                        .map_err(|_| err_invalid_params("invalid tx hex"))?;
+                    let mut g = ctx.lock().await;
+                    g.submit_raw_tx(&bytes)
+                        .map_err(|e| ErrorObjectOwned::owned(-32000, e, None::<()>))?;
+                    // Return keccak hash placeholder of raw bytes (not canonical tx hash yet).
+                    let h = keccak256(&bytes);
+                    Ok::<String, ErrorObjectOwned>(format!("0x{}", hex::encode(h)))
+                }
+            },
+        )
         .expect("register eth_sendRawTransaction");
 
     module
@@ -873,12 +1141,16 @@ pub fn build_module(ctx: SharedChain) -> RpcModule<SharedChain> {
                     address: Option<serde_json::Value>,
                     topics: Option<Vec<serde_json::Value>>,
                 }
-                let filter: Filter = params.one().map_err(|_| err_invalid_params("expected filter object"))?;
+                let filter: Filter = params
+                    .one()
+                    .map_err(|_| err_invalid_params("expected filter object"))?;
                 let g = ctx.lock().await;
 
                 let latest = g.block_number();
 
-                if filter.block_hash.is_some() && (filter.from_block.is_some() || filter.to_block.is_some()) {
+                if filter.block_hash.is_some()
+                    && (filter.from_block.is_some() || filter.to_block.is_some())
+                {
                     return Err(err_invalid_params(
                         "blockHash is mutually exclusive with fromBlock and toBlock",
                     ));
@@ -933,6 +1205,7 @@ fn rpc_block_from_consensus(
     hash: Option<[u8; 32]>,
     logs_bloom: [u8; 256],
     base_fee_per_gas: u128,
+    proof_final: bool,
 ) -> RpcBlock {
     let h = hash.unwrap_or([0u8; 32]);
     let tx_hashes: Vec<String> = b
@@ -953,6 +1226,12 @@ fn rpc_block_from_consensus(
         transactions_root: hash_hex(&b.header.tx_root),
         state_root: hash_hex(&b.header.state_root),
         receipts_root: hash_hex(&[0u8; 32]),
+        zone_namespace: format!("0x{}", hex::encode(b.header.zone_namespace)),
+        da_root: hash_hex(&b.header.da_root),
+        da_bytes: quantity_hex_u64(b.header.da_bytes),
+        da_share_count: quantity_hex_u64(u64::from(b.header.da_share_count)),
+        da_gas_used: quantity_hex_u64(b.header.da_gas_used),
+        da_fee_paid: u256_quantity_hex(b.header.da_fee_paid),
         miner: "0x0000000000000000000000000000000000000000".into(),
         difficulty: u256_quantity_hex(0),
         total_difficulty: u256_quantity_hex(0),
@@ -962,6 +1241,7 @@ fn rpc_block_from_consensus(
         gas_used: quantity_hex_u64(b.header.gas_used),
         timestamp: quantity_hex_u64(b.header.timestamp_ms / 1000),
         base_fee_per_gas: u256_quantity_hex(base_fee_per_gas),
+        finality_status: if proof_final { "proof" } else { "soft" }.into(),
         transactions: tx_hashes,
         uncles: Vec::new(),
     }
@@ -974,15 +1254,31 @@ fn rpc_tx_from_core(
     base_fee: u128,
 ) -> RpcTx {
     let (to, value, input, gas) = match &tx.body {
-        fractal_core::TxBody::Transfer { to, amount } => (Some(addr_hex(to)), u256_quantity_hex(*amount), "0x".into(), quantity_hex_u64(fractal_core::TRANSFER_GAS)),
-        fractal_core::TxBody::Native(_c) => (None, u256_quantity_hex(0), "0x".into(), quantity_hex_u64(0)),
-        fractal_core::TxBody::EvmCall { to, value, calldata, gas_limit } => (
+        fractal_core::TxBody::Transfer { to, amount } => (
+            Some(addr_hex(to)),
+            u256_quantity_hex(*amount),
+            "0x".into(),
+            quantity_hex_u64(fractal_core::TRANSFER_GAS),
+        ),
+        fractal_core::TxBody::Native(_c) => {
+            (None, u256_quantity_hex(0), "0x".into(), quantity_hex_u64(0))
+        }
+        fractal_core::TxBody::EvmCall {
+            to,
+            value,
+            calldata,
+            gas_limit,
+        } => (
             Some(addr_hex(to)),
             u256_quantity_hex(*value),
             format!("0x{}", hex::encode(calldata)),
             quantity_hex_u64(*gas_limit),
         ),
-        fractal_core::TxBody::EvmCreate { value, init_code, gas_limit } => (
+        fractal_core::TxBody::EvmCreate {
+            value,
+            init_code,
+            gas_limit,
+        } => (
             None,
             u256_quantity_hex(*value),
             format!("0x{}", hex::encode(init_code)),
@@ -990,7 +1286,13 @@ fn rpc_tx_from_core(
         ),
     };
     let (block_number, block_hash, tx_index) = mined
-        .map(|(bn, bh, i)| (Some(quantity_hex_u64(bn)), Some(hash_hex(&bh)), Some(quantity_hex_u64(i as u64))))
+        .map(|(bn, bh, i)| {
+            (
+                Some(quantity_hex_u64(bn)),
+                Some(hash_hex(&bh)),
+                Some(quantity_hex_u64(i as u64)),
+            )
+        })
         .unwrap_or((None, None, None));
     RpcTx {
         hash: hash_hex(hash),
@@ -1017,7 +1319,11 @@ pub fn make_rpc_log(
 ) -> RpcLog {
     RpcLog {
         address: format!("0x{}", hex::encode(l.address)),
-        topics: l.topics.iter().map(|t| format!("0x{}", hex::encode(t))).collect(),
+        topics: l
+            .topics
+            .iter()
+            .map(|t| format!("0x{}", hex::encode(t)))
+            .collect(),
         data: format!("0x{}", hex::encode(&l.data)),
         block_hash: hash_hex(block_hash),
         block_number: quantity_hex_u64(block_number),
@@ -1139,7 +1445,10 @@ mod eth_get_logs_filter_tests {
     }
 }
 
-pub async fn serve_http(addr: SocketAddr, ctx: SharedChain) -> Result<(ServerHandle, SocketAddr), std::io::Error> {
+pub async fn serve_http(
+    addr: SocketAddr,
+    ctx: SharedChain,
+) -> Result<(ServerHandle, SocketAddr), std::io::Error> {
     let cors = CorsLayer::new()
         .allow_origin(Any)
         .allow_methods([Method::GET, Method::POST, Method::OPTIONS])

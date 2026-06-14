@@ -56,6 +56,10 @@ fn create_deploys_returned_runtime_via_revm() {
 
     assert!(block.header.gas_used > 0);
     let code = st.evm_code.get(&expected).expect("deployed code");
-    assert_eq!(code, &vec![0x00], "runtime should be returned init output, not full init blob");
+    assert_eq!(
+        code,
+        &vec![0x00],
+        "runtime should be returned init output, not full init blob"
+    );
     assert_eq!(st.accounts.get(&deployer).unwrap().nonce, 1);
 }

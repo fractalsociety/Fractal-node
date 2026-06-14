@@ -70,7 +70,9 @@ impl ValidatorSet {
 
     /// Phase 2 dev fixture: seven deterministic validators (`n = 7`, `f = 2` when fully wired).
     pub fn phase2_bft7_fixture() -> Self {
-        let entries = (0u8..7u8).map(|i| dev_entry_from_seed(&bft7_seed(i))).collect();
+        let entries = (0u8..7u8)
+            .map(|i| dev_entry_from_seed(&bft7_seed(i)))
+            .collect();
         Self { entries }
     }
 
@@ -216,7 +218,15 @@ mod tests {
     fn quorum_threshold_matches_prd_table() {
         // Sizes the PRD calls out explicitly + the small-set fallbacks.
         // Hand-built one-off sets so we exercise every n from 1..=7.
-        for (n, expected) in [(1usize, 1usize), (2, 1), (3, 1), (4, 3), (5, 3), (6, 3), (7, 5)] {
+        for (n, expected) in [
+            (1usize, 1usize),
+            (2, 1),
+            (3, 1),
+            (4, 3),
+            (5, 3),
+            (6, 3),
+            (7, 5),
+        ] {
             let entries = (0..n)
                 .map(|i| {
                     let mut seed = [0u8; 32];
@@ -277,7 +287,10 @@ mod tests {
             .iter()
             .map(|&idx| v.dev_bls_secret(idx).unwrap().sign(msg))
             .collect();
-        let pks: Vec<_> = signers.iter().map(|&idx| *v.bls_pubkey(idx).unwrap()).collect();
+        let pks: Vec<_> = signers
+            .iter()
+            .map(|&idx| *v.bls_pubkey(idx).unwrap())
+            .collect();
         let agg = AggregateSignature::from_signatures(&sigs).expect("aggregate");
         agg.verify(msg, &pks).expect("aggregate verify");
     }
@@ -287,7 +300,9 @@ mod tests {
         use fractal_crypto::AggregateSignature;
         let v = ValidatorSet::phase2_bft7_fixture();
         let msg = b"quorum payload";
-        let sigs: Vec<_> = (0..5).map(|i| v.dev_bls_secret(i).unwrap().sign(msg)).collect();
+        let sigs: Vec<_> = (0..5)
+            .map(|i| v.dev_bls_secret(i).unwrap().sign(msg))
+            .collect();
         let agg = AggregateSignature::from_signatures(&sigs).unwrap();
         let pks: Vec<_> = (0..4).map(|i| *v.bls_pubkey(i).unwrap()).collect(); // 4 of 5
         assert!(agg.verify(msg, &pks).is_err());

@@ -34,7 +34,12 @@ pub fn merkle_root(leaves: &[Hash256]) -> Hash256 {
 }
 
 /// Verify inclusion of `leaf` at `index` (0-based leaf order) against `root`.
-pub fn verify_merkle_proof(root: Hash256, leaf: Hash256, mut index: usize, proof: &[Hash256]) -> bool {
+pub fn verify_merkle_proof(
+    root: Hash256,
+    leaf: Hash256,
+    mut index: usize,
+    proof: &[Hash256],
+) -> bool {
     let mut node = leaf;
     for sib in proof {
         let (l, r) = if index % 2 == 0 {

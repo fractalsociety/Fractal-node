@@ -37,7 +37,10 @@ fn rpc_str(url: &str, method: &str, params: serde_json::Value) -> Result<String,
 
 fn log_json(evt: &str, extra: Value) {
     let mut m = serde_json::Map::new();
-    m.insert("evt".to_string(), serde_json::Value::String(evt.to_string()));
+    m.insert(
+        "evt".to_string(),
+        serde_json::Value::String(evt.to_string()),
+    );
     if let Value::Object(o) = extra {
         for (k, v) in o {
             m.insert(k, v);
@@ -82,10 +85,7 @@ fn main() {
                                 .and_then(|t| t.as_array())
                                 .map(|a| a.len())
                                 .unwrap_or(0);
-                            let bh = res
-                                .get("hash")
-                                .and_then(|x| x.as_str())
-                                .unwrap_or("");
+                            let bh = res.get("hash").and_then(|x| x.as_str()).unwrap_or("");
                             if json_log {
                                 log_json(
                                     "block",
@@ -96,9 +96,7 @@ fn main() {
                                     }),
                                 );
                             } else {
-                                eprintln!(
-                                    "fractal-indexer-stub: block {tag} hash={bh} txs={n_tx}"
-                                );
+                                eprintln!("fractal-indexer-stub: block {tag} hash={bh} txs={n_tx}");
                             }
                         }
                         Err(e) => eprintln!("fractal-indexer-stub: eth_getBlockByNumber: {e}"),

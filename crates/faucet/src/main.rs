@@ -42,7 +42,11 @@ fn parse_addr(s: &str) -> Result<Address, String> {
     Ok(a)
 }
 
-fn rpc_call(url: &str, method: &str, params: serde_json::Value) -> Result<serde_json::Value, String> {
+fn rpc_call(
+    url: &str,
+    method: &str,
+    params: serde_json::Value,
+) -> Result<serde_json::Value, String> {
     let body = serde_json::json!({
         "jsonrpc": "2.0",
         "id": 1u64,
@@ -78,7 +82,13 @@ fn get_nonce(rpc_url: &str, who: &Address) -> Result<u64, String> {
     u64::from_str_radix(hex, 16).map_err(|e| format!("nonce parse: {e}"))
 }
 
-fn send_transfer(rpc_url: &str, from: &Address, nonce: u64, to: Address, amount: u128) -> Result<String, String> {
+fn send_transfer(
+    rpc_url: &str,
+    from: &Address,
+    nonce: u64,
+    to: Address,
+    amount: u128,
+) -> Result<String, String> {
     let tx = Transaction {
         signer: *from,
         nonce,
@@ -87,11 +97,7 @@ fn send_transfer(rpc_url: &str, from: &Address, nonce: u64, to: Address, amount:
     };
     let raw = borsh::to_vec(&tx).map_err(|e| format!("borsh: {e}"))?;
     let hex = format!("0x{}", hex::encode(raw));
-    let h = rpc_call(
-        rpc_url,
-        "eth_sendRawTransaction",
-        serde_json::json!([hex]),
-    )?;
+    let h = rpc_call(rpc_url, "eth_sendRawTransaction", serde_json::json!([hex]))?;
     h.as_str()
         .map(std::string::ToString::to_string)
         .ok_or_else(|| "tx hash not string".to_string())
@@ -121,9 +127,7 @@ async fn fund(
     headers: axum::http::HeaderMap,
     Json(body): Json<FundBody>,
 ) -> impl IntoResponse {
-    let xfwd = headers
-        .get("x-forwarded-for")
-        .and_then(|v| v.to_str().ok());
+    let xfwd = headers.get("x-forwarded-for").and_then(|v| v.to_str().ok());
     let key = rate_key(ci.ip(), xfwd);
 
     {
@@ -196,7 +200,8 @@ async fn main() {
 }
 
 async fn run() -> Result<(), String> {
-    let rpc_url = std::env::var("FRACTAL_RPC_URL").unwrap_or_else(|_| "http://127.0.0.1:8545".into());
+    let rpc_url =
+        std::env::var("FRACTAL_RPC_URL").unwrap_or_else(|_| "http://127.0.0.1:8545".into());
     let bind: SocketAddr = std::env::var("FAUCET_BIND")
         .unwrap_or_else(|_| "127.0.0.1:8088".into())
         .parse()
@@ -240,8 +245,11 @@ async fn run() -> Result<(), String> {
         })
     );
 
-    axum::serve(listener, app.into_make_service_with_connect_info::<SocketAddr>())
-        .await
-        .map_err(|e| format!("serve: {e}"))?;
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<SocketAddr>(),
+    )
+    .await
+    .map_err(|e| format!("serve: {e}"))?;
     Ok(())
 }

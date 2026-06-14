@@ -9,10 +9,15 @@ pub enum Ed25519Error {
     VerificationFailed,
 }
 
-pub fn verify_message(public_key: &[u8; 32], message: &[u8], sig_bytes: &[u8; 64]) -> Result<(), Ed25519Error> {
+pub fn verify_message(
+    public_key: &[u8; 32],
+    message: &[u8],
+    sig_bytes: &[u8; 64],
+) -> Result<(), Ed25519Error> {
     let vk = VerifyingKey::from_bytes(public_key).map_err(|_| Ed25519Error::BadSignature)?;
     let sig = Signature::from_bytes(sig_bytes);
-    vk.verify(message, &sig).map_err(|_| Ed25519Error::VerificationFailed)
+    vk.verify(message, &sig)
+        .map_err(|_| Ed25519Error::VerificationFailed)
 }
 
 pub fn sign_message(signing_key: &SigningKey, message: &[u8]) -> [u8; 64] {

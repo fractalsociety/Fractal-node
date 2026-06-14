@@ -8,7 +8,9 @@ use crate::types::{Scope, TaskId, WorkspaceId};
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub enum EmergencyLevel {
     Global,
-    Workspace { workspace_id: WorkspaceId },
+    Workspace {
+        workspace_id: WorkspaceId,
+    },
     Project {
         workspace_id: WorkspaceId,
         project_id: u64,

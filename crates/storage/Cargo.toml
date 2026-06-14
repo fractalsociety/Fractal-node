@@ -5,3 +5,7 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+borsh.workspace = true
+fractal-consensus = { path = "../consensus" }
+fractal-crypto = { path = "../crypto" }
+thiserror.workspace = true

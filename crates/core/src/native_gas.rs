@@ -11,9 +11,8 @@ pub const EVM_CALL_BASE_GAS: u64 = 21_000;
 /// Maximum gas this transaction may consume against the block limit (EIP-style `gas` on EVM txs).
 pub fn tx_gas_limit(tx: &Transaction) -> Result<u64, ExecError> {
     match (&tx.vm, &tx.body) {
-        (VmKind::Evm, TxBody::EvmCall { gas_limit, .. }) | (VmKind::Evm, TxBody::EvmCreate { gas_limit, .. }) => {
-            Ok(*gas_limit)
-        }
+        (VmKind::Evm, TxBody::EvmCall { gas_limit, .. })
+        | (VmKind::Evm, TxBody::EvmCreate { gas_limit, .. }) => Ok(*gas_limit),
         _ => intrinsic_gas(tx),
     }
 }
@@ -45,7 +44,9 @@ fn native_base_gas(call: &NativeCall) -> u64 {
         NativeCall::UpdateAgent { .. } => 5_000,
         NativeCall::SuspendAgent { .. } => 5_000,
         NativeCall::SettleReceipt(_) => 8_000,
-        NativeCall::SettleBatch(p) => 15_000u64.saturating_add(200u64.saturating_mul(p.receipts.len() as u64)),
+        NativeCall::SettleBatch(p) => {
+            15_000u64.saturating_add(200u64.saturating_mul(p.receipts.len() as u64))
+        }
         NativeCall::ClaimPayout { .. } => 12_000,
         NativeCall::FileDispute { .. } => 10_000,
         NativeCall::ResolveDispute { .. } => 12_000,

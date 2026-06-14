@@ -84,7 +84,12 @@ pub fn merkle_proof(leaves: &[[u8; 32]], leaf: &[u8; 32]) -> Option<(usize, Vec<
     Some((idx, path))
 }
 
-pub fn verify_membership(root: &MerkleRoot, leaf: &[u8; 32], mut idx: usize, path: &[[u8; 32]]) -> bool {
+pub fn verify_membership(
+    root: &MerkleRoot,
+    leaf: &[u8; 32],
+    mut idx: usize,
+    path: &[[u8; 32]],
+) -> bool {
     if root == &EMPTY_ROOT {
         return false;
     }

@@ -54,7 +54,10 @@ fn policy_show_research_renders_known_caps() {
     // 3 FRAC = 3 * 10^18 base units
     assert_eq!(cap, "3000000000000000000");
     let caveats = v.get("caveats").and_then(Value::as_array).unwrap();
-    assert!(caveats.iter().any(|c| c.as_str().unwrap_or("").contains("MaxTotalSpend(3000000000000000000)")));
+    assert!(caveats.iter().any(|c| c
+        .as_str()
+        .unwrap_or("")
+        .contains("MaxTotalSpend(3000000000000000000)")));
 }
 
 #[test]
@@ -92,7 +95,10 @@ fn cap_mint_then_show_round_trip() {
     let scope = show.get("scope").unwrap();
     assert_eq!(scope.get("workspaceId").and_then(Value::as_u64), Some(7));
     let classes = scope.get("toolClasses").and_then(Value::as_array).unwrap();
-    assert!(classes.len() >= 2, "coding template exposes ≥2 tool classes");
+    assert!(
+        classes.len() >= 2,
+        "coding template exposes ≥2 tool classes"
+    );
 }
 
 #[test]
@@ -158,21 +164,28 @@ fn cap_attenuate_round_trip_holds_invariants() {
     ]))
     .expect("attenuate succeeds");
 
-    assert_eq!(child.get("attenuationOk").and_then(Value::as_bool), Some(true));
+    assert_eq!(
+        child.get("attenuationOk").and_then(Value::as_bool),
+        Some(true)
+    );
     let child_token = child.get("tokenHex").and_then(Value::as_str).unwrap();
 
     let show = fractal_cli::run_argv_value(&argv(&["cap", "show", child_token])).unwrap();
     assert_eq!(show.get("signatureOk").and_then(Value::as_bool), Some(true));
-    assert_eq!(show.get("notAfterMs").and_then(Value::as_u64), Some(500_000));
+    assert_eq!(
+        show.get("notAfterMs").and_then(Value::as_u64),
+        Some(500_000)
+    );
     let parent_cap_id = parent.get("capId").and_then(Value::as_str).unwrap();
     assert_eq!(
         show.get("parentCapId").and_then(Value::as_str),
         Some(parent_cap_id)
     );
     let caveats = show.get("caveats").and_then(Value::as_array).unwrap();
-    assert!(caveats
-        .iter()
-        .any(|c| c.as_str().unwrap_or("").contains("MaxTotalSpend(1000000000000000000)")));
+    assert!(caveats.iter().any(|c| c
+        .as_str()
+        .unwrap_or("")
+        .contains("MaxTotalSpend(1000000000000000000)")));
 }
 
 #[test]
@@ -236,9 +249,12 @@ fn cap_attenuate_rejects_wrong_secret() {
 /// `tools/wallet-web/builtins.json` must match `policy dump-builtins` (regenerate after policy edits).
 #[test]
 fn wallet_web_builtins_json_matches_cli_dump() {
-    let dump = fractal_cli::run_argv_value(&argv(&["policy", "dump-builtins"])).expect("dump-builtins");
-    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tools/wallet-web/builtins.json");
-    let file = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
+    let dump =
+        fractal_cli::run_argv_value(&argv(&["policy", "dump-builtins"])).expect("dump-builtins");
+    let path =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tools/wallet-web/builtins.json");
+    let file =
+        std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
     let from_file: Value = serde_json::from_str(&file).expect("parse builtins.json");
     assert_eq!(
         dump, from_file,

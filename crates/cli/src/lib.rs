@@ -69,7 +69,9 @@ fn cmd_policy_list() -> Value {
 }
 
 fn cmd_policy_show(args: &[String]) -> Result<Value, String> {
-    let id_str = args.first().ok_or_else(|| "policy show: missing <template_id>".to_string())?;
+    let id_str = args
+        .first()
+        .ok_or_else(|| "policy show: missing <template_id>".to_string())?;
     let id: TemplateId = id_str.parse().map_err(|e| format!("template_id: {e}"))?;
     let mut reg = PolicyRegistry::default();
     builtins::register_builtins(&mut reg).expect("builtins register");
@@ -185,13 +187,16 @@ fn parse_flags(args: &[String]) -> Result<CapFlags, String> {
             "--not-before-ms" => {
                 out.not_before_ms = Some(v.parse().map_err(|e| format!("--not-before-ms: {e}"))?)
             }
-            "--workspace" => out.workspace = Some(v.parse().map_err(|e| format!("--workspace: {e}"))?),
+            "--workspace" => {
+                out.workspace = Some(v.parse().map_err(|e| format!("--workspace: {e}"))?)
+            }
             "--nonce" => out.nonce = Some(v.parse().map_err(|e| format!("--nonce: {e}"))?),
             "--cap-id" => out.cap_id_hex = Some(v.clone()),
             "--parent-hex" => out.parent_hex = Some(v.clone()),
             "--issuer-secret" => out.issuer_secret_hex = Some(v.clone()),
             "--max-total-spend" => {
-                out.max_total_spend = Some(v.parse().map_err(|e| format!("--max-total-spend: {e}"))?)
+                out.max_total_spend =
+                    Some(v.parse().map_err(|e| format!("--max-total-spend: {e}"))?)
             }
             "--tool-mask" => out.tool_mask_hex = Some(v.clone()),
             other => return Err(format!("unknown flag: {other}")),
@@ -213,7 +218,9 @@ fn cmd_cap_mint(args: &[String]) -> Result<Value, String> {
 
     let mut reg = PolicyRegistry::default();
     builtins::register_builtins(&mut reg).expect("builtins register");
-    let resolved = reg.resolve(template_id).map_err(|e| format!("resolve: {e}"))?;
+    let resolved = reg
+        .resolve(template_id)
+        .map_err(|e| format!("resolve: {e}"))?;
     let tool_mask = builtins::suggested_tool_class_mask(template_id)
         .ok_or_else(|| format!("no suggested tool mask for template {template_id}"))?;
 
@@ -311,18 +318,15 @@ fn parse_u64_hex_or_dec(s: &str, label: &str) -> Result<u64, String> {
 
 fn cmd_cap_attenuate(args: &[String]) -> Result<Value, String> {
     let parsed = parse_flags(args)?;
-    let parent_hex = parsed
-        .parent_hex
-        .as_ref()
-        .ok_or("--parent-hex required")?;
+    let parent_hex = parsed.parent_hex.as_ref().ok_or("--parent-hex required")?;
     let issuer_secret_hex = parsed
         .issuer_secret_hex
         .as_ref()
         .ok_or("--issuer-secret required")?;
 
     let parent_bytes = parse_hex(parent_hex, "--parent-hex")?;
-    let parent =
-        CapabilityToken::try_from_slice(&parent_bytes).map_err(|e| format!("parent decode: {e}"))?;
+    let parent = CapabilityToken::try_from_slice(&parent_bytes)
+        .map_err(|e| format!("parent decode: {e}"))?;
     parent
         .verify()
         .map_err(|e| format!("parent signature invalid: {e:?}"))?;
@@ -459,7 +463,8 @@ fn cmd_cap_show(args: &[String]) -> Result<Value, String> {
         .ok_or_else(|| "cap show: missing <token_hex>".to_string())?;
     let h = token_hex.strip_prefix("0x").unwrap_or(token_hex);
     let bytes = hex::decode(h).map_err(|e| format!("token hex: {e}"))?;
-    let token = CapabilityToken::try_from_slice(&bytes).map_err(|e| format!("borsh decode: {e}"))?;
+    let token =
+        CapabilityToken::try_from_slice(&bytes).map_err(|e| format!("borsh decode: {e}"))?;
     let sig_ok = token.verify().is_ok();
     let mask_ok = token.verify_autonomous_tool_mask().is_ok();
 

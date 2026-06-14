@@ -1,4 +1,6 @@
-use fractal_core::{apply_block_with_evm, Account, NativeCall, State, Transaction, TxBody, VmKind, Address};
+use fractal_core::{
+    apply_block_with_evm, Account, Address, NativeCall, State, Transaction, TxBody, VmKind,
+};
 
 fn addr(byte0: u8, byte1: u8) -> Address {
     let mut a = [0u8; 20];
@@ -38,4 +40,3 @@ fn evm_call_to_fc_precompile_dispatches_native_syscall() {
 
     assert_eq!(st.accounts.get(&caller).unwrap().nonce, 1);
 }
-

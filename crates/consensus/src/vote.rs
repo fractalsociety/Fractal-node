@@ -104,7 +104,8 @@ impl Vote {
     /// in hand). For one-off checks against a [`ValidatorSet`], prefer
     /// [`verify_against_validator_set`](Self::verify_against_validator_set).
     pub fn verify(&self, pubkey: &BlsPublicKey) -> Result<(), VoteError> {
-        self.signature.verify(&self.sign_body().sign_bytes(), pubkey)?;
+        self.signature
+            .verify(&self.sign_body().sign_bytes(), pubkey)?;
         Ok(())
     }
 
@@ -210,7 +211,9 @@ impl VotePool {
     /// Number of votes currently held for `(view, header_hash)`.
     #[must_use]
     pub fn count(&self, view: u64, header_hash: Hash256) -> usize {
-        self.entries.get(&(view, header_hash)).map_or(0, BTreeMap::len)
+        self.entries
+            .get(&(view, header_hash))
+            .map_or(0, BTreeMap::len)
     }
 
     /// All votes currently held for `(view, header_hash)`, in ascending validator-index order.
@@ -301,10 +304,7 @@ impl VotePool {
 /// Used by followers in M7-d-6 to verify a QC threaded through `parent_qc_hash`.
 /// Returns `Err` on insufficient signers, missing pubkey, or aggregate verify
 /// failure.
-pub fn verify_formed_qc(
-    formed: &FormedQc,
-    validators: &ValidatorSet,
-) -> Result<(), VoteError> {
+pub fn verify_formed_qc(formed: &FormedQc, validators: &ValidatorSet) -> Result<(), VoteError> {
     let threshold = validators.quorum_threshold();
     if formed.signer_indices.len() < threshold {
         return Err(VoteError::InsufficientSigners {
@@ -581,7 +581,11 @@ mod tests {
             let _ = pool.record(sign_for(&set, idx, body(4, 4, 0xab)), &set);
         }
         let formed = pool.try_form_qc(4, 4, [0xab; 32], &set).unwrap();
-        assert_eq!(formed.signer_indices.len(), 7, "include all collected signers");
+        assert_eq!(
+            formed.signer_indices.len(),
+            7,
+            "include all collected signers"
+        );
         verify_formed_qc(&formed, &set).expect("7-of-7 verifies");
     }
 

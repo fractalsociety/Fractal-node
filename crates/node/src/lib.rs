@@ -1,7 +1,7 @@
 //! Singleton dev node: 500 ms block cadence + JSON-RPC + libp2p/QUIC sync (`docs/prd.md` §18 M2).
 
-pub mod p2p;
 mod eth_signed;
+pub mod p2p;
 
 pub use fractal_consensus::ValidatorSet;
 
@@ -11,15 +11,20 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use borsh::BorshDeserialize;
 use fractal_consensus::{
-    execute_and_build_block, expected_parent_qc_for_parent_header, genesis_parent_qc, hash_qc,
-    header_hash, next_parent_qc_hash_after_commit, ordered_tx_root, Block, FormedQc,
+    da_encoded_bytes, da_root, execute_and_build_block, expected_parent_qc_for_parent_header,
+    genesis_parent_qc, hash_qc, header_hash, next_parent_qc_hash_after_commit, ordered_tx_root,
+    reconstruct_da_payload, Block, BlockValidityProof, DaShare, FormedQc, ProofVerifyError,
     RecordVoteOutcome, Vote, VotePool,
 };
 use fractal_core::{Address, EvmEngine, State, Transaction};
 use fractal_crypto::hash::keccak256;
 use fractal_crypto::BlsSecretKey;
 use fractal_mempool::{next_base_fee, BaseFeeParams, Mempool, PooledTx};
-use fractal_rpc::{make_rpc_log, logs_bloom_256, ChainInteraction};
+use fractal_rpc::{
+    logs_bloom_256, make_rpc_log, ChainInteraction, RpcChainConfig, RpcDaMetrics, RpcProofMetrics,
+    RpcProofRejectionMetric,
+};
+use fractal_storage::{ProofFinalityStore, StoredProofFinalityRecord};
 use libp2p::multiaddr::Protocol;
 use libp2p::Multiaddr;
 use thiserror::Error;
@@ -47,10 +52,75 @@ pub enum SyncApplyError {
     GasUsedMismatch { header: u64, replay: u64 },
     #[error("synced block eth_signed_raw length does not match transactions")]
     BlockEthRawLayout,
+    #[error("synced block data availability sidecar does not match header")]
+    DataAvailability,
     #[error(transparent)]
     Exec(#[from] fractal_core::ExecError),
     #[error(transparent)]
     Io(#[from] std::io::Error),
+}
+
+#[derive(Debug, Error)]
+pub enum ProofFinalityError {
+    #[error("proved block not found")]
+    BlockNotFound,
+    #[error(transparent)]
+    Verify(#[from] ProofVerifyError),
+    #[error("proof-finality store: {0}")]
+    Store(#[from] fractal_storage::ProofFinalityStoreError),
+    #[error(transparent)]
+    Io(#[from] std::io::Error),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BlockFinality {
+    Soft,
+    Proof,
+}
+
+#[derive(Debug, Error, PartialEq, Eq)]
+pub enum SettlementAccessError {
+    #[error("block not found")]
+    BlockNotFound,
+    #[error("block is not proof-final")]
+    NotProofFinal,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct DaMetrics {
+    pub committed_blocks: u64,
+    pub committed_original_bytes: u64,
+    pub committed_encoded_bytes: u64,
+    pub committed_da_gas: u64,
+    pub da_fee_revenue: u128,
+    pub sampling_success: u64,
+    pub sampling_failure: u64,
+    pub reconstruction_success: u64,
+    pub reconstruction_failure: u64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ChainConfig {
+    pub proof_required_settlement: bool,
+}
+
+impl Default for ChainConfig {
+    fn default() -> Self {
+        Self {
+            proof_required_settlement: false,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ProofMetrics {
+    pub proofs_accepted: u64,
+    pub proofs_rejected: u64,
+    pub latest_proof_latency_ms: u64,
+    pub total_proof_latency_ms: u128,
+    pub proof_final_height: u64,
+    pub latest_rejection_reason: Option<String>,
+    pub rejection_reasons: BTreeMap<String, u64>,
 }
 
 const GENESIS_TAG: &[u8] = b"FRACTALCHAIN_GENESIS_V0";
@@ -144,6 +214,22 @@ fn devnet_validator_secret_from_env(
     validators.dev_bls_secret(validator_index)
 }
 
+fn proof_required_settlement_from_env() -> bool {
+    match std::env::var("FRACTAL_PROOF_REQUIRED_SETTLEMENT") {
+        Ok(raw) => matches!(
+            raw.trim().to_ascii_lowercase().as_str(),
+            "1" | "true" | "yes" | "on" | "proof" | "required"
+        ),
+        Err(_) => false,
+    }
+}
+
+fn proof_finality_store_from_env() -> Option<std::path::PathBuf> {
+    std::env::var_os("FRACTAL_PROOF_FINALITY_STORE")
+        .filter(|raw| !raw.is_empty())
+        .map(std::path::PathBuf::from)
+}
+
 pub struct NodeInner {
     pub chain_id: u64,
     pub height: u64,
@@ -181,6 +267,13 @@ pub struct NodeInner {
     pub eth_rpc_to_internal_tx_hash: BTreeMap<fractal_crypto::Hash256, fractal_crypto::Hash256>,
     /// Inverse of the above for log `transactionHash` fields (`eth_getLogs`).
     pub eth_internal_to_rpc_tx_hash: BTreeMap<fractal_crypto::Hash256, fractal_crypto::Hash256>,
+    /// Blocks that have passed the validity-proof gate. Committee commits are soft-final;
+    /// entries here are proof-final for settlement/bridging purposes.
+    pub proof_finalized_blocks: BTreeMap<fractal_crypto::Hash256, BlockValidityProof>,
+    pub proof_finality_store: Option<ProofFinalityStore>,
+    pub chain_config: ChainConfig,
+    pub da_metrics: DaMetrics,
+    pub proof_metrics: ProofMetrics,
 }
 
 impl NodeInner {
@@ -254,6 +347,11 @@ impl NodeInner {
             eth_signed_raw: BTreeMap::new(),
             eth_rpc_to_internal_tx_hash: BTreeMap::new(),
             eth_internal_to_rpc_tx_hash: BTreeMap::new(),
+            proof_finalized_blocks: BTreeMap::new(),
+            proof_finality_store: None,
+            chain_config: ChainConfig::default(),
+            da_metrics: DaMetrics::default(),
+            proof_metrics: ProofMetrics::default(),
         }
     }
 
@@ -261,12 +359,46 @@ impl NodeInner {
     /// In single-validator (Phase 1) setups, always `true` for `validator_index = 0`.
     #[must_use]
     pub fn is_my_turn(&self, view: u64) -> bool {
-        self.validators.is_proposer_for_view(view, self.validator_index)
+        self.validators
+            .is_proposer_for_view(view, self.validator_index)
     }
 
     /// Wire gossip vote publishing (`docs/prd.md` §18 M7-d-5). When `None`, votes stay local only.
     pub fn set_vote_sink(&mut self, sink: Option<tokio::sync::mpsc::UnboundedSender<Vec<u8>>>) {
         self.vote_sink = sink;
+    }
+
+    pub fn set_proof_required_settlement(&mut self, required: bool) {
+        self.chain_config.proof_required_settlement = required;
+    }
+
+    #[must_use]
+    pub fn settlement_requires_proof(&self) -> bool {
+        self.chain_config.proof_required_settlement
+    }
+
+    pub fn set_proof_finality_store(
+        &mut self,
+        store: ProofFinalityStore,
+    ) -> Result<(), ProofFinalityError> {
+        self.restore_proof_finality_records(&store)?;
+        self.proof_finality_store = Some(store);
+        Ok(())
+    }
+
+    fn restore_proof_finality_records(
+        &mut self,
+        store: &ProofFinalityStore,
+    ) -> Result<(), ProofFinalityError> {
+        for record in store.load_records()? {
+            self.proof_metrics.proof_final_height =
+                self.proof_metrics.proof_final_height.max(record.height);
+            self.proof_metrics.proofs_accepted =
+                self.proof_metrics.proofs_accepted.saturating_add(1);
+            self.proof_finalized_blocks
+                .insert(record.block_hash, record.proof);
+        }
+        Ok(())
     }
 
     /// Record this validator's vote for `committed` in the local pool and enqueue it for
@@ -275,11 +407,8 @@ impl NodeInner {
         let Ok(hh) = header_hash(&committed.header) else {
             return;
         };
-        let Some(vote) = self.build_self_vote(
-            committed.header.view,
-            committed.header.height,
-            hh,
-        ) else {
+        let Some(vote) = self.build_self_vote(committed.header.view, committed.header.height, hh)
+        else {
             return;
         };
         let _ = self.record_vote(vote.clone());
@@ -300,7 +429,11 @@ impl NodeInner {
         header_hash: fractal_crypto::Hash256,
     ) -> Option<Vote> {
         let sk = self.validator_secret.as_ref()?;
-        let body = fractal_consensus::VoteSignBody { view, height, header_hash };
+        let body = fractal_consensus::VoteSignBody {
+            view,
+            height,
+            header_hash,
+        };
         Some(Vote::sign(body, self.validator_index as u32, sk))
     }
 
@@ -322,6 +455,204 @@ impl NodeInner {
     ) -> Option<FormedQc> {
         self.vote_pool
             .try_form_qc(view, block_height, header_hash, &self.validators)
+    }
+
+    pub fn submit_validity_proof(
+        &mut self,
+        proof: BlockValidityProof,
+    ) -> Result<(), ProofFinalityError> {
+        let block = match self.blocks.iter().find(|b| {
+            b.header.height == proof.height && header_hash(&b.header).ok() == Some(proof.block_hash)
+        }) {
+            Some(block) => block,
+            None => {
+                self.record_proof_rejection("block_not_found");
+                return Err(ProofFinalityError::BlockNotFound);
+            }
+        };
+        let block_timestamp_ms = block.header.timestamp_ms;
+        let block_height = block.header.height;
+        if let Err(e) = fractal_consensus::verify_block_validity_proof(block, &proof) {
+            self.record_proof_rejection(&proof_rejection_reason(&e));
+            return Err(e.into());
+        }
+        let block_hash = proof.block_hash;
+        let accepted_at_ms = now_ms();
+        self.proof_finalized_blocks
+            .insert(block_hash, proof.clone());
+        if let Some(store) = &self.proof_finality_store {
+            store.put_record(StoredProofFinalityRecord {
+                block_hash,
+                height: block_height,
+                accepted_at_ms,
+                proof,
+            })?;
+        }
+        self.record_proof_acceptance(block_height, block_timestamp_ms, accepted_at_ms);
+        Ok(())
+    }
+
+    pub fn finality_for_block_hash(
+        &self,
+        block_hash: &fractal_crypto::Hash256,
+    ) -> Option<BlockFinality> {
+        if self.proof_finalized_blocks.contains_key(block_hash) {
+            return Some(BlockFinality::Proof);
+        }
+        self.blocks
+            .iter()
+            .any(|b| header_hash(&b.header).ok().as_ref() == Some(block_hash))
+            .then_some(BlockFinality::Soft)
+    }
+
+    pub fn settlement_finality_for_block_hash(
+        &self,
+        block_hash: &fractal_crypto::Hash256,
+    ) -> Result<BlockFinality, SettlementAccessError> {
+        let finality = self
+            .finality_for_block_hash(block_hash)
+            .ok_or(SettlementAccessError::BlockNotFound)?;
+        if self.settlement_requires_proof() && finality != BlockFinality::Proof {
+            return Err(SettlementAccessError::NotProofFinal);
+        }
+        Ok(finality)
+    }
+
+    pub fn da_shares_by_block_hash(
+        &self,
+        block_hash: &fractal_crypto::Hash256,
+        indexes: &[u32],
+    ) -> Option<Vec<DaShare>> {
+        let block = self
+            .blocks
+            .iter()
+            .find(|b| header_hash(&b.header).ok().as_ref() == Some(block_hash))?;
+        let mut out = Vec::with_capacity(indexes.len());
+        for index in indexes {
+            let share = block.da_sidecar.shares.get(*index as usize)?;
+            if share.index != *index {
+                return None;
+            }
+            out.push(share.clone());
+        }
+        Some(out)
+    }
+
+    pub fn da_sample_indexes_for_block(block: &Block, sample_count: usize, seed: u64) -> Vec<u32> {
+        if block.da_sidecar.shares.is_empty() || sample_count == 0 {
+            return Vec::new();
+        }
+        let mut indexes = Vec::with_capacity(sample_count);
+        let mut state = seed
+            ^ u64::from_le_bytes(block.header.da_root[..8].try_into().unwrap_or([0u8; 8]))
+            ^ block.header.height;
+        for _ in 0..sample_count {
+            state = state
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            indexes.push((state as usize % block.da_sidecar.shares.len()) as u32);
+        }
+        indexes
+    }
+
+    pub fn verify_da_sampled_shares(
+        block: &Block,
+        indexes: &[u32],
+        shares: &[DaShare],
+    ) -> Result<(), fractal_consensus::DaVerifyError> {
+        if indexes.len() != shares.len() {
+            return Err(fractal_consensus::DaVerifyError::SampleMissing);
+        }
+        if da_root(&block.da_sidecar) != block.header.da_root {
+            return Err(fractal_consensus::DaVerifyError::Root);
+        }
+        for (expected_index, share) in indexes.iter().zip(shares.iter()) {
+            if share.index != *expected_index {
+                return Err(fractal_consensus::DaVerifyError::ShareIndex);
+            }
+            let local = block
+                .da_sidecar
+                .shares
+                .get(*expected_index as usize)
+                .ok_or(fractal_consensus::DaVerifyError::SampleMissing)?;
+            if share != local {
+                return Err(fractal_consensus::DaVerifyError::ShareCommitment);
+            }
+            let expected = fractal_consensus::da_share_commitment(
+                share.namespace,
+                share.index,
+                share.is_parity,
+                &share.data,
+            );
+            if share.commitment != expected {
+                return Err(fractal_consensus::DaVerifyError::ShareCommitment);
+            }
+        }
+        Ok(())
+    }
+
+    pub fn record_da_sampling_result(&mut self, ok: bool) {
+        if ok {
+            self.da_metrics.sampling_success = self.da_metrics.sampling_success.saturating_add(1);
+        } else {
+            self.da_metrics.sampling_failure = self.da_metrics.sampling_failure.saturating_add(1);
+        }
+    }
+
+    pub fn record_da_reconstruction_result(&mut self, ok: bool) {
+        if ok {
+            self.da_metrics.reconstruction_success =
+                self.da_metrics.reconstruction_success.saturating_add(1);
+        } else {
+            self.da_metrics.reconstruction_failure =
+                self.da_metrics.reconstruction_failure.saturating_add(1);
+        }
+    }
+
+    fn record_proof_acceptance(
+        &mut self,
+        height: u64,
+        block_timestamp_ms: u64,
+        accepted_at_ms: u64,
+    ) {
+        let latency_ms = accepted_at_ms.saturating_sub(block_timestamp_ms);
+        self.proof_metrics.proofs_accepted = self.proof_metrics.proofs_accepted.saturating_add(1);
+        self.proof_metrics.latest_proof_latency_ms = latency_ms;
+        self.proof_metrics.total_proof_latency_ms = self
+            .proof_metrics
+            .total_proof_latency_ms
+            .saturating_add(latency_ms as u128);
+        self.proof_metrics.proof_final_height = self.proof_metrics.proof_final_height.max(height);
+    }
+
+    fn record_proof_rejection(&mut self, reason: &str) {
+        self.proof_metrics.proofs_rejected = self.proof_metrics.proofs_rejected.saturating_add(1);
+        self.proof_metrics.latest_rejection_reason = Some(reason.to_owned());
+        *self
+            .proof_metrics
+            .rejection_reasons
+            .entry(reason.to_owned())
+            .or_insert(0) += 1;
+    }
+
+    fn record_committed_da_metrics(&mut self, block: &Block) {
+        self.da_metrics.committed_blocks = self.da_metrics.committed_blocks.saturating_add(1);
+        self.da_metrics.committed_original_bytes = self
+            .da_metrics
+            .committed_original_bytes
+            .saturating_add(block.header.da_bytes);
+        self.da_metrics.committed_encoded_bytes = self
+            .da_metrics
+            .committed_encoded_bytes
+            .saturating_add(da_encoded_bytes(&block.da_sidecar));
+        self.da_metrics.committed_da_gas = self
+            .da_metrics
+            .committed_da_gas
+            .saturating_add(block.header.da_gas_used);
+        self.da_metrics.da_fee_revenue = self
+            .da_metrics
+            .da_fee_revenue
+            .saturating_add(block.header.da_fee_paid);
     }
 
     /// Replay txs and check roots against a received block (follower verification).
@@ -354,6 +685,18 @@ impl NodeInner {
         if block.eth_signed_raw.len() != block.transactions.len() {
             return Err(SyncApplyError::BlockEthRawLayout);
         }
+        fractal_consensus::verify_da_sidecar(&block.header, &block.da_sidecar)
+            .map_err(|_| SyncApplyError::DataAvailability)?;
+        let reconstructed_da_payload = reconstruct_da_payload(&block.da_sidecar).map_err(|_| {
+            self.record_da_reconstruction_result(false);
+            SyncApplyError::DataAvailability
+        })?;
+        let expected_da_payload = borsh::to_vec(&block.transactions)?;
+        if reconstructed_da_payload != expected_da_payload {
+            self.record_da_reconstruction_result(false);
+            return Err(SyncApplyError::DataAvailability);
+        }
+        self.record_da_reconstruction_result(true);
         let mut scratch = self.state.clone();
         let mut evm = fractal_evm::RevmEngine::default();
         let gas = fractal_core::apply_block_with_evm(&mut scratch, &block.transactions, &mut evm)?;
@@ -379,6 +722,7 @@ impl NodeInner {
         self.view = block.header.view.wrapping_add(1);
         self.base_fee = next_base_fee(self.base_fee, block.header.gas_used, &self.fee_params);
         self.blocks.push(block.clone());
+        self.record_committed_da_metrics(block);
         self.sync_rpc_index_from_block(block);
         self.forward_vote_after_commit(block);
         Ok(())
@@ -452,7 +796,11 @@ impl ChainInteraction for NodeInner {
     }
 
     fn balance_of(&self, addr: &Address) -> u128 {
-        self.state.accounts.get(addr).map(|a| a.balance).unwrap_or(0)
+        self.state
+            .accounts
+            .get(addr)
+            .map(|a| a.balance)
+            .unwrap_or(0)
     }
 
     fn transaction_count(&self, addr: &Address) -> u64 {
@@ -515,18 +863,39 @@ impl ChainInteraction for NodeInner {
                     timestamp_ms: 0,
                     state_root: [0u8; 32],
                     tx_root: [0u8; 32],
+                    zone_namespace: fractal_consensus::MASTERCHAIN_ZONE_NAMESPACE,
+                    da_root: [0u8; 32],
+                    da_bytes: 0,
+                    da_share_count: 0,
+                    da_gas_used: 0,
+                    da_fee_paid: 0,
                     gas_used: 0,
                     gas_limit: self.gas_limit,
                     extra: [0u8; 32],
                 },
                 transactions: Vec::new(),
                 eth_signed_raw: Vec::new(),
+                da_sidecar: fractal_consensus::DaSidecar {
+                    namespace: fractal_consensus::DEFAULT_DA_NAMESPACE,
+                    original_len: 0,
+                    share_size: fractal_consensus::DEFAULT_DA_SHARE_SIZE,
+                    data_share_count: 0,
+                    parity_share_count: 0,
+                    shares: Vec::new(),
+                },
             });
         }
         self.blocks
             .iter()
             .find(|b| header_hash(&b.header).ok().as_ref() == Some(hash))
             .cloned()
+    }
+
+    fn block_is_proof_final(&self, hash: &[u8; 32]) -> bool {
+        matches!(
+            self.finality_for_block_hash(hash),
+            Some(BlockFinality::Proof)
+        )
     }
 
     fn tx_by_hash(&self, hash: &[u8; 32]) -> Option<Transaction> {
@@ -617,11 +986,7 @@ impl ChainInteraction for NodeInner {
 
     fn evm_receipt_success(&self, tx_hash: &[u8; 32]) -> bool {
         let k = self.internal_tx_hash_for_state(tx_hash);
-        self.state
-            .evm_tx_success
-            .get(&k)
-            .copied()
-            .unwrap_or(true)
+        self.state.evm_tx_success.get(&k).copied().unwrap_or(true)
     }
 
     fn logs_for_filter(&self, filter: &fractal_rpc::LogsFilter) -> Vec<fractal_rpc::RpcLog> {
@@ -634,7 +999,9 @@ impl ChainInteraction for NodeInner {
                 Some(i) => i as usize,
                 None => continue,
             };
-            let Some(block) = self.blocks.get(idx) else { continue };
+            let Some(block) = self.blocks.get(idx) else {
+                continue;
+            };
             let bh = match header_hash(&block.header) {
                 Ok(h) => h,
                 Err(_) => continue,
@@ -651,7 +1018,9 @@ impl ChainInteraction for NodeInner {
                     .get(&th)
                     .copied()
                     .unwrap_or(th);
-                let Some(logs) = self.state.evm_tx_logs.get(&th) else { continue };
+                let Some(logs) = self.state.evm_tx_logs.get(&th) else {
+                    continue;
+                };
                 for l in logs {
                     if let Some(ref addrs) = filter.addresses {
                         if !addrs.contains(&l.address) {
@@ -692,7 +1061,16 @@ impl ChainInteraction for NodeInner {
         let rpc_logs = evm_logs
             .iter()
             .enumerate()
-            .map(|(i, l)| make_rpc_log(l, block_hash, block_number, tx_hash, tx_index, start + i as u64))
+            .map(|(i, l)| {
+                make_rpc_log(
+                    l,
+                    block_hash,
+                    block_number,
+                    tx_hash,
+                    tx_index,
+                    start + i as u64,
+                )
+            })
             .collect();
         (rpc_logs, bloom)
     }
@@ -714,6 +1092,68 @@ impl ChainInteraction for NodeInner {
         }
         acc
     }
+
+    fn da_metrics(&self) -> RpcDaMetrics {
+        RpcDaMetrics {
+            committed_blocks: format!("0x{:x}", self.da_metrics.committed_blocks),
+            committed_original_bytes: format!("0x{:x}", self.da_metrics.committed_original_bytes),
+            committed_encoded_bytes: format!("0x{:x}", self.da_metrics.committed_encoded_bytes),
+            committed_da_gas: format!("0x{:x}", self.da_metrics.committed_da_gas),
+            da_fee_revenue: format!("0x{:x}", self.da_metrics.da_fee_revenue),
+            sampling_success: format!("0x{:x}", self.da_metrics.sampling_success),
+            sampling_failure: format!("0x{:x}", self.da_metrics.sampling_failure),
+            reconstruction_success: format!("0x{:x}", self.da_metrics.reconstruction_success),
+            reconstruction_failure: format!("0x{:x}", self.da_metrics.reconstruction_failure),
+        }
+    }
+
+    fn da_fee_revenue(&self) -> u128 {
+        self.da_metrics.da_fee_revenue
+    }
+
+    fn proof_metrics(&self) -> RpcProofMetrics {
+        let average = if self.proof_metrics.proofs_accepted == 0 {
+            0
+        } else {
+            (self.proof_metrics.total_proof_latency_ms / self.proof_metrics.proofs_accepted as u128)
+                as u64
+        };
+        RpcProofMetrics {
+            proofs_accepted: format!("0x{:x}", self.proof_metrics.proofs_accepted),
+            proofs_rejected: format!("0x{:x}", self.proof_metrics.proofs_rejected),
+            latest_proof_latency_ms: format!("0x{:x}", self.proof_metrics.latest_proof_latency_ms),
+            average_proof_latency_ms: format!("0x{:x}", average),
+            proof_final_height: format!("0x{:x}", self.proof_metrics.proof_final_height),
+            latest_rejection_reason: self.proof_metrics.latest_rejection_reason.clone(),
+            rejection_reasons: self
+                .proof_metrics
+                .rejection_reasons
+                .iter()
+                .map(|(reason, count)| RpcProofRejectionMetric {
+                    reason: reason.clone(),
+                    count: format!("0x{count:x}"),
+                })
+                .collect(),
+        }
+    }
+
+    fn chain_config(&self) -> RpcChainConfig {
+        RpcChainConfig {
+            proof_required_settlement: self.chain_config.proof_required_settlement,
+            settlement_finality: if self.chain_config.proof_required_settlement {
+                "proof"
+            } else {
+                "soft"
+            }
+            .into(),
+        }
+    }
+
+    fn submit_validity_proof(&mut self, proof: BlockValidityProof) -> Result<[u8; 32], String> {
+        let block_hash = proof.block_hash;
+        NodeInner::submit_validity_proof(self, proof).map_err(|e| e.to_string())?;
+        Ok(block_hash)
+    }
 }
 
 fn now_ms() -> u64 {
@@ -721,6 +1161,24 @@ fn now_ms() -> u64 {
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_millis() as u64
+}
+
+fn proof_rejection_reason(err: &ProofVerifyError) -> String {
+    match err {
+        ProofVerifyError::ChainId => "chain_id",
+        ProofVerifyError::Height => "height",
+        ProofVerifyError::BlockHash => "block_hash",
+        ProofVerifyError::StateRoot => "state_root",
+        ProofVerifyError::TxRoot => "tx_root",
+        ProofVerifyError::DaRoot => "da_root",
+        ProofVerifyError::ZoneNamespace => "zone_namespace",
+        ProofVerifyError::EmptyProof => "empty_proof",
+        ProofVerifyError::Production(_) => "production_proof",
+        ProofVerifyError::BadDevDigest => "bad_dev_digest",
+        ProofVerifyError::DataAvailability => "data_availability",
+        ProofVerifyError::Io(_) => "io",
+    }
+    .to_owned()
 }
 
 /// Outcome of one produce-tick (`docs/prd.md` §7 M7-c).
@@ -779,6 +1237,7 @@ pub async fn try_produce_one_tick(node: &NodeHandle) -> ProduceTickOutcome {
             n.base_fee = next_base_fee(n.base_fee, block.header.gas_used, &n.fee_params);
             n.sync_rpc_index_from_block(&block);
             n.forward_vote_after_commit(&block);
+            n.record_committed_da_metrics(&block);
             n.blocks.push(block);
             ProduceTickOutcome::Produced(n.height)
         }
@@ -804,15 +1263,29 @@ pub async fn run_dev() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     eprintln!(
         "fractal-node: validator_set_size={} validator_index={validator_index} bls_signing={}",
         validators.len(),
-        if validator_secret.is_some() { "enabled" } else { "disabled" }
+        if validator_secret.is_some() {
+            "enabled"
+        } else {
+            "disabled"
+        }
     );
     let (vote_tx, vote_rx) = tokio::sync::mpsc::unbounded_channel();
-    let mut inner = NodeInner::devnet_with_validator_secret(
-        validators,
-        validator_index,
-        validator_secret,
-    );
+    let mut inner =
+        NodeInner::devnet_with_validator_secret(validators, validator_index, validator_secret);
+    inner.set_proof_required_settlement(proof_required_settlement_from_env());
+    if let Some(path) = proof_finality_store_from_env() {
+        inner.set_proof_finality_store(ProofFinalityStore::open(&path)?)?;
+        eprintln!("fractal-node: proof_finality_store={}", path.display());
+    }
     inner.set_vote_sink(Some(vote_tx));
+    eprintln!(
+        "fractal-node: settlement_finality={}",
+        if inner.settlement_requires_proof() {
+            "proof"
+        } else {
+            "soft"
+        }
+    );
     let node: NodeHandle = Arc::new(Mutex::new(inner));
     let addr: std::net::SocketAddr = std::env::var("FRACTAL_RPC_ADDR")
         .unwrap_or_else(|_| "127.0.0.1:8545".into())
@@ -826,8 +1299,8 @@ pub async fn run_dev() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let (tx_ready, rx_ready) = tokio::sync::oneshot::channel();
     let p2p_node = node.clone();
     tokio::spawn(async move {
-        if let Err(e) = p2p::producer_network_task(p2p_node, listen, Some(tx_ready), Some(vote_rx))
-            .await
+        if let Err(e) =
+            p2p::producer_network_task(p2p_node, listen, Some(tx_ready), Some(vote_rx)).await
         {
             eprintln!("fractal-node p2p: {e}");
         }
@@ -848,13 +1321,19 @@ pub async fn run_dev() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     Ok(())
 }
 
-/// Follower: JSON-RPC + sync from `FRACTAL_BOOTSTRAP` (comma-separated multiaddrs, same `/p2p/<PeerId>`).
+/// Follower: JSON-RPC + sync from `FRACTAL_BOOTSTRAP`; optionally sample DA from
+/// `FRACTAL_DA_BOOTSTRAP` peers.
 pub async fn run_follower() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let raw = std::env::var("FRACTAL_BOOTSTRAP")?;
     let bootstraps = crate::p2p::parse_fractal_bootstraps(&raw)?;
+    let da_bootstraps = match std::env::var("FRACTAL_DA_BOOTSTRAP") {
+        Ok(raw) if !raw.trim().is_empty() => crate::p2p::parse_fractal_da_bootstraps(&raw)?,
+        _ => Vec::new(),
+    };
     eprintln!(
-        "fractal-node follower: {} bootstrap multiaddr(s)",
-        bootstraps.len()
+        "fractal-node follower: {} sync bootstrap multiaddr(s), {} DA bootstrap multiaddr(s)",
+        bootstraps.len(),
+        da_bootstraps.len()
     );
     let validators = devnet_validator_set_from_env();
     let validator_index = devnet_validator_index_from_env(&validators);
@@ -865,19 +1344,37 @@ pub async fn run_follower() -> Result<(), Box<dyn std::error::Error + Send + Syn
         if validator_secret.is_some() { "enabled" } else { "disabled" }
     );
     let (vote_tx, vote_rx) = tokio::sync::mpsc::unbounded_channel();
-    let mut inner = NodeInner::devnet_with_validator_secret(
-        validators,
-        validator_index,
-        validator_secret,
-    );
+    let mut inner =
+        NodeInner::devnet_with_validator_secret(validators, validator_index, validator_secret);
+    inner.set_proof_required_settlement(proof_required_settlement_from_env());
+    if let Some(path) = proof_finality_store_from_env() {
+        inner.set_proof_finality_store(ProofFinalityStore::open(&path)?)?;
+        eprintln!(
+            "fractal-node follower: proof_finality_store={}",
+            path.display()
+        );
+    }
     inner.set_vote_sink(Some(vote_tx));
+    eprintln!(
+        "fractal-node follower: settlement_finality={}",
+        if inner.settlement_requires_proof() {
+            "proof"
+        } else {
+            "soft"
+        }
+    );
     let node: NodeHandle = Arc::new(Mutex::new(inner));
     let addr: std::net::SocketAddr = std::env::var("FRACTAL_RPC_ADDR")
         .unwrap_or_else(|_| "127.0.0.1:8546".into())
         .parse()?;
     let (handle, bound) = fractal_rpc::serve_http(addr, node.clone()).await?;
     eprintln!("fractal-node follower json-rpc at http://{bound}");
-    tokio::spawn(p2p::follower_network_task(node, bootstraps, Some(vote_rx)));
+    tokio::spawn(p2p::follower_network_task_with_da_peers(
+        node,
+        bootstraps,
+        da_bootstraps,
+        Some(vote_rx),
+    ));
     tokio::signal::ctrl_c().await?;
     handle.stop()?;
     Ok(())
