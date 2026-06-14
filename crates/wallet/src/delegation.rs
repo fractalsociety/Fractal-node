@@ -30,20 +30,29 @@ pub enum DelegationError {
     #[error(transparent)]
     Budget(#[from] BudgetError),
     #[error("child MaxTotalSpend ({child_max}) exceeds delegated budget amount ({delegated})")]
-    MaxSpendExceedsDelegation { child_max: Amount, delegated: Amount },
+    MaxSpendExceedsDelegation {
+        child_max: Amount,
+        delegated: Amount,
+    },
 }
 
 /// True if `parent` may mint a strictly attenuated child capability (§12.1).
 pub fn parent_allows_sub_agent_delegation(parent: &CapabilitySignBody) -> bool {
-    !parent.caveats.iter().any(|c| matches!(c, Caveat::NoRecursion))
+    !parent
+        .caveats
+        .iter()
+        .any(|c| matches!(c, Caveat::NoRecursion))
 }
 
 /// Tightest `MaxTotalSpend` bound implied by `caveats` (minimum of all such caveats), if any.
 pub fn tightest_max_total_spend(caveats: &[Caveat]) -> Option<Amount> {
-    caveats.iter().filter_map(|c| match c {
-        Caveat::MaxTotalSpend(a) => Some(*a),
-        _ => None,
-    }).min()
+    caveats
+        .iter()
+        .filter_map(|c| match c {
+            Caveat::MaxTotalSpend(a) => Some(*a),
+            _ => None,
+        })
+        .min()
 }
 
 /// Build a child [`CapabilitySignBody`] linked to `parent` and passing [`CapabilityToken::verify_attenuation_from_parent`].

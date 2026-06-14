@@ -11,15 +11,10 @@ fn monolith_uses_global_topics() {
 
 #[test]
 fn shard_scoped_topics() {
-    assert_eq!(
-        shard_votes_topic(3),
-        "/fractalchain/shard/3/votes/1.0.0"
-    );
+    assert_eq!(shard_votes_topic(3), "/fractalchain/shard/3/votes/1.0.0");
     assert_eq!(
         shard_timeouts_topic(3),
         "/fractalchain/shard/3/timeouts/1.0.0"
     );
-    assert!(shard_sync_protocol(3)
-        .as_ref()
-        .contains("/shard/3/"));
+    assert!(shard_sync_protocol(3).as_ref().contains("/shard/3/"));
 }

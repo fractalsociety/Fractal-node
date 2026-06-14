@@ -1675,6 +1675,9 @@ dependencies = [
 name = "fractal-indexer-stub"
 version = "0.1.0"
 dependencies = [
+ "borsh",
+ "fractal-wallet",
+ "hex",
  "serde_json",
  "ureq",
 ]
@@ -1742,6 +1745,7 @@ dependencies = [
  "fractal-core",
  "fractal-crypto",
  "fractal-eth-wire",
+ "fractal-shard",
  "hex",
  "http",
  "jsonrpsee",
@@ -1763,6 +1767,16 @@ dependencies = [
  "fractal-crypto",
  "fractal-wallet",
  "rand 0.8.6",
+]
+
+[[package]]
+name = "fractal-shard"
+version = "0.1.0"
+dependencies = [
+ "borsh",
+ "fractal-consensus",
+ "fractal-crypto",
+ "thiserror 1.0.69",
 ]
 
 [[package]]

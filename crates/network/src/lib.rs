@@ -54,8 +54,24 @@ pub fn sync_stream_protocol() -> StreamProtocol {
     StreamProtocol::new("/fractalchain/sync/1.0.0")
 }
 
+pub fn shard_sync_protocol(shard_id: u32) -> StreamProtocol {
+    StreamProtocol::try_from_owned(format!("/fractalchain/shard/{shard_id}/sync/1.0.0"))
+        .expect("static shard sync protocol format is valid")
+}
+
 pub fn sync_protocols() -> Vec<(StreamProtocol, ProtocolSupport)> {
     vec![(sync_stream_protocol(), ProtocolSupport::Full)]
+}
+
+pub fn sync_protocols_for_shard(
+    shard_id: u32,
+    shard_count: u32,
+) -> Vec<(StreamProtocol, ProtocolSupport)> {
+    if shard_count <= 1 {
+        sync_protocols()
+    } else {
+        vec![(shard_sync_protocol(shard_id), ProtocolSupport::Full)]
+    }
 }
 
 pub fn sync_request_response_config() -> request_response::Config {
@@ -66,6 +82,22 @@ pub fn sync_request_response_config() -> request_response::Config {
 
 /// Gossipsub topic for HotStuff-2 votes (`docs/prd.md` §18 M7-d-5).
 pub const VOTES_TOPIC_STR: &str = "/fractalchain/votes/1.0.0";
+
+pub fn shard_votes_topic(shard_id: u32) -> String {
+    format!("/fractalchain/shard/{shard_id}/votes/1.0.0")
+}
+
+pub fn shard_timeouts_topic(shard_id: u32) -> String {
+    format!("/fractalchain/shard/{shard_id}/timeouts/1.0.0")
+}
+
+pub fn votes_topic_for_shard(shard_id: u32, shard_count: u32) -> String {
+    if shard_count <= 1 {
+        VOTES_TOPIC_STR.into()
+    } else {
+        shard_votes_topic(shard_id)
+    }
+}
 
 /// Gossipsub topic where DA-serving peers advertise custody for namespaces/heights.
 pub const DA_PROVIDERS_TOPIC_STR: &str = "/fractalchain/da-providers/1.0.0";

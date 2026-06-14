@@ -13,6 +13,7 @@ pub mod market;
 pub mod merkle;
 pub mod policy;
 pub mod rate_limit;
+pub mod reputation;
 pub mod revocation;
 pub mod task_receipt;
 pub mod types;
@@ -32,6 +33,12 @@ pub use policy::{
     RateLimitSpec, ResolvedPolicy, SemVer, TemplateId,
 };
 pub use rate_limit::{RateLimitError, TokenBucket};
+pub use reputation::{
+    bootstrap_stake_multiplier_bps, compute_reputation_score_milli, reputation_stake_product,
+    select_quote, BootstrapStakeParams, QuoteCandidate, QuoteSelectionError, QuoteSelectionGates,
+    QuoteSelectionPreference, ReputationLedgerSummary, ReputationMilli, ReputationParams,
+    SettlementEvent,
+};
 pub use revocation::{RevocationEntry, RevocationError, RevocationSet};
 pub use task_receipt::{
     build_task_receipt, derive_tool_receipt_id, tool_receipt_leaf_commitment, tool_receipt_root,
@@ -42,3 +49,14 @@ pub use types::{
     Amount, IntentId, ProviderId, PublicKey, QuoteId, ReceiptId, TaskId, TeeType, TimestampMs,
     ToolClass, VerificationTier, WorkspaceId,
 };
+
+pub fn verify_capability_with_revocation(
+    token: &CapabilityToken,
+    now_ms: TimestampMs,
+    _revocation_root: &[u8; 32],
+    _ancestor_chain: &[CapabilityId],
+    _proof: &[[u8; 32]],
+) -> Result<(), capability::CapabilityVerifyError> {
+    token.verify_time(now_ms)?;
+    token.verify_autonomous_tool_mask()
+}

@@ -12,3 +12,8 @@ path = "src/main.rs"
 [dependencies]
 serde_json.workspace = true
 ureq = { version = "2.10", default-features = false, features = ["json"] }
+
+[dev-dependencies]
+borsh.workspace = true
+fractal-wallet = { path = "../wallet" }
+hex.workspace = true

@@ -13,7 +13,7 @@ use tokio::sync::Mutex;
 use tower::ServiceBuilder;
 use tower_http::cors::{Any, CorsLayer};
 
-fn err_invalid_params(msg: &'static str) -> ErrorObjectOwned {
+pub(crate) fn err_invalid_params(msg: &'static str) -> ErrorObjectOwned {
     ErrorObjectOwned::owned(-32602, msg, None::<()>)
 }
 
@@ -46,7 +46,7 @@ fn parse_address_hex(s: &str) -> Result<Address, ErrorObjectOwned> {
     Ok(a)
 }
 
-fn parse_hash256_hex(s: &str) -> Result<[u8; 32], ErrorObjectOwned> {
+pub(crate) fn parse_hash256_hex(s: &str) -> Result<[u8; 32], ErrorObjectOwned> {
     let s = s.strip_prefix("0x").unwrap_or(s);
     let bytes = hex::decode(s).map_err(|_| err_invalid_params("invalid hash hex"))?;
     if bytes.len() != 32 {

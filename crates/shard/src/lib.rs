@@ -4,7 +4,7 @@
 //! Track B: `FRACTAL_SHARD_COUNT` > 1 and each node runs one `FRACTAL_SHARD_ID`.
 
 use borsh::{BorshDeserialize, BorshSerialize};
-use fractal_crypto::hash::{Hash256, keccak256};
+use fractal_crypto::hash::{keccak256, Hash256};
 use thiserror::Error;
 
 /// Logical execution shard (0 .. shard_count-1).

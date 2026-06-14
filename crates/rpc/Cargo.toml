@@ -10,6 +10,7 @@ fractal-core = { path = "../core" }
 fractal-consensus = { path = "../consensus" }
 fractal-crypto = { path = "../crypto" }
 fractal-eth-wire = { path = "../eth-wire" }
+fractal-shard = { path = "../shard" }
 hex.workspace = true
 http.workspace = true
 jsonrpsee.workspace = true

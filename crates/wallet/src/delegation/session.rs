@@ -14,8 +14,8 @@ use crate::market::{
     MatchError, PostIntentError, ProviderCapabilityVerifyError, ToolIntent, ToolIntentBody,
     ToolMarket,
 };
-use crate::revocation::RevocationSet;
 use crate::policy::builtins::FRAC;
+use crate::revocation::RevocationSet;
 use crate::types::{Amount, IntentId, Scope, TaskId, TimestampMs, ToolClass, VerificationTier};
 
 /// Preset child profiles for common sub-agent roles.
@@ -133,7 +133,10 @@ pub fn child_params_for_role(
     }
     let mut child_caveats = parent.caveats.clone();
     apply_max_total_spend(&mut child_caveats, max_total_spend);
-    if !child_caveats.iter().any(|c| matches!(c, Caveat::NoRecursion)) {
+    if !child_caveats
+        .iter()
+        .any(|c| matches!(c, Caveat::NoRecursion))
+    {
         child_caveats.push(Caveat::NoRecursion);
     }
     Ok(DelegatedChildParams {
@@ -178,7 +181,9 @@ pub fn delegate_sub_agent_production(
     child_subject_sk: &SigningKey,
     child_cap_id: CapabilityId,
 ) -> Result<ProductionDelegationBundle, DelegationError> {
-    parent_token.verify().map_err(|_| DelegationError::NotAttenuated)?;
+    parent_token
+        .verify()
+        .map_err(|_| DelegationError::NotAttenuated)?;
     let params = child_params_for_role(
         &parent_token.body,
         &role,
@@ -195,9 +200,8 @@ pub fn delegate_sub_agent_production(
         delegate_amount,
         params,
     )?;
-    let child_token = CapabilityToken::sign(child_body, issuer_sk).map_err(|_| {
-        DelegationError::NotAttenuated
-    })?;
+    let child_token =
+        CapabilityToken::sign(child_body, issuer_sk).map_err(|_| DelegationError::NotAttenuated)?;
     let report = verify_delegation_pair(parent_token, &child_token, parent_budget, &child_budget);
     if !report.all_ok() {
         return Err(DelegationError::NotAttenuated);
@@ -221,8 +225,7 @@ pub fn verify_delegation_pair(
 ) -> DelegationVerificationReport {
     let parent_signature_ok = parent.verify().is_ok();
     let child_signature_ok = child.verify().is_ok();
-    let attenuation_ok =
-        CapabilityToken::verify_attenuation_from_parent(&child.body, &parent.body);
+    let attenuation_ok = CapabilityToken::verify_attenuation_from_parent(&child.body, &parent.body);
     let parent_allows_delegation = parent_allows_sub_agent_delegation(&parent.body);
     let budget_linked_ok =
         child_budget.parent == Some(parent_budget.id) && child_budget.id != parent_budget.id;
@@ -231,9 +234,9 @@ pub fn verify_delegation_pair(
         .caveats
         .iter()
         .any(|c| matches!(c, Caveat::NoRecursion));
-    let child_tool_mask_subset =
-        (child.body.scope.tool_class_mask & parent.body.scope.tool_class_mask)
-            == child.body.scope.tool_class_mask;
+    let child_tool_mask_subset = (child.body.scope.tool_class_mask
+        & parent.body.scope.tool_class_mask)
+        == child.body.scope.tool_class_mask;
     DelegationVerificationReport {
         parent_signature_ok,
         child_signature_ok,
@@ -413,19 +416,15 @@ mod tests {
         assert!(bundle.report.all_ok());
         assert_eq!(parent_budget.total_deposited, 8 * FRAC);
         assert_eq!(bundle.child_budget.total_deposited, 2 * FRAC);
-        assert!(capability_allows_tool(&bundle.child_token, ToolClass::TestRunner));
+        assert!(capability_allows_tool(
+            &bundle.child_token,
+            ToolClass::TestRunner
+        ));
         assert!(sessions_are_distinct(&bundle));
 
         let mut market = ToolMarket::default();
-        let outcome = run_verifier_tool_session_e2e(
-            &bundle,
-            42,
-            FRAC,
-            1000,
-            &mut market,
-            &provider,
-        )
-        .unwrap();
+        let outcome =
+            run_verifier_tool_session_e2e(&bundle, 42, FRAC, 1000, &mut market, &provider).unwrap();
         assert!(outcome.settled);
         assert_eq!(outcome.child_budget_spent, FRAC);
     }

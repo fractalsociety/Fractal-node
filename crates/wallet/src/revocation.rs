@@ -53,6 +53,20 @@ impl RevocationSet {
         merkle::merkle_proof(&keys, cap_id).map(|(_, p)| p)
     }
 
+    pub fn build_verify_proof(
+        &self,
+        cap_id: CapabilityId,
+        ancestor_chain: &[CapabilityId],
+    ) -> Result<Vec<[u8; 32]>, RevocationError> {
+        let mut proof = self.proof_for(&cap_id).unwrap_or_default();
+        for ancestor in ancestor_chain {
+            if let Some(mut ancestor_proof) = self.proof_for(ancestor) {
+                proof.append(&mut ancestor_proof);
+            }
+        }
+        Ok(proof)
+    }
+
     /// Direct revoke on `cap_id`, or cascade revoke from an ancestor on `ancestor_chain` (closest root → leaf).
     pub fn is_revoked(&self, cap_id: &CapabilityId, ancestor_chain: &[CapabilityId]) -> bool {
         if self.inner.contains_key(cap_id) {

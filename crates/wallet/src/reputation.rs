@@ -148,7 +148,10 @@ fn ilog2_u128(x: u128) -> u32 {
 
 /// §10.4 style score in **milli‑points** (≥ 0, saturating).
 #[must_use]
-pub fn compute_reputation_score_milli(summary: &ReputationLedgerSummary, p: &ReputationParams) -> ReputationMilli {
+pub fn compute_reputation_score_milli(
+    summary: &ReputationLedgerSummary,
+    p: &ReputationParams,
+) -> ReputationMilli {
     let _ = summary.tool_class;
     let mut pos: u128 = 0;
 
@@ -157,43 +160,34 @@ pub fn compute_reputation_score_milli(summary: &ReputationLedgerSummary, p: &Rep
         let w = if ev.weight == 0 { 1u128 } else { ev.weight };
         let r = recency_factor_micro(ev.settled_at_ms, summary.now_ms, p.recency_half_life_ms);
         // (sw * w * r) / 1e6 / 1e3  — sw is milli per unit weight at full recency; r is micro
-        let term = sw
-            .saturating_mul(w)
-            .saturating_mul(r)
-            / 1_000_000
-            / 1000;
+        let term = sw.saturating_mul(w).saturating_mul(r) / 1_000_000 / 1000;
         pos = pos.saturating_add(term);
     }
 
-    let days = summary
-        .now_ms
-        .saturating_sub(summary.first_seen_ms)
-        / 86_400_000;
-    pos = pos.saturating_add(
-        (p.age_bonus_per_day_milli as u128).saturating_mul(days as u128) / 1000,
-    );
+    let days = summary.now_ms.saturating_sub(summary.first_seen_ms) / 86_400_000;
+    pos =
+        pos.saturating_add((p.age_bonus_per_day_milli as u128).saturating_mul(days as u128) / 1000);
 
     let lg = ilog2_u128(summary.available_stake.saturating_add(1));
-    pos = pos.saturating_add(
-        (p.stake_log_weight_milli as u128).saturating_mul(lg as u128) / 1000,
-    );
+    pos = pos.saturating_add((p.stake_log_weight_milli as u128).saturating_mul(lg as u128) / 1000);
 
-    let dc = summary
-        .distinct_client_count
-        .min(p.max_diversity_clients) as u128;
-    pos = pos.saturating_add(
-        (p.diversity_bonus_milli as u128).saturating_mul(dc) / 1000,
-    );
+    let dc = summary.distinct_client_count.min(p.max_diversity_clients) as u128;
+    pos = pos.saturating_add((p.diversity_bonus_milli as u128).saturating_mul(dc) / 1000);
 
-    let fail_pen = (p.fail_penalty_milli as u128).saturating_mul(summary.failed_settlements as u128) / 1000;
-    let slash_pen = (p.slash_penalty_milli as u128).saturating_mul(summary.slashing_events as u128) / 1000;
+    let fail_pen =
+        (p.fail_penalty_milli as u128).saturating_mul(summary.failed_settlements as u128) / 1000;
+    let slash_pen =
+        (p.slash_penalty_milli as u128).saturating_mul(summary.slashing_events as u128) / 1000;
 
     pos.saturating_sub(fail_pen).saturating_sub(slash_pen)
 }
 
 /// Extra stake multiplier (bps) for providers with little history (§10.4 bootstrap).
 #[must_use]
-pub fn bootstrap_stake_multiplier_bps(score_milli: ReputationMilli, p: &BootstrapStakeParams) -> u64 {
+pub fn bootstrap_stake_multiplier_bps(
+    score_milli: ReputationMilli,
+    p: &BootstrapStakeParams,
+) -> u64 {
     if p.score_milli_full_trust == 0 {
         return 10_000;
     }
@@ -242,9 +236,7 @@ pub fn select_quote<'a>(
         let tie2 = u128::MAX.saturating_sub(c.estimated_latency_ms as u128);
         let better = match best {
             None => true,
-            Some((_, r0, t10, t20)) => {
-                (rank, tie1, tie2) > (r0, t10, t20)
-            }
+            Some((_, r0, t10, t20)) => (rank, tie1, tie2) > (r0, t10, t20),
         };
         if better {
             best = Some((i, rank, tie1, tie2));
@@ -357,7 +349,8 @@ mod tests {
             ..base.clone()
         };
         assert!(
-            compute_reputation_score_milli(&with_fail, &p) < compute_reputation_score_milli(&base, &p)
+            compute_reputation_score_milli(&with_fail, &p)
+                < compute_reputation_score_milli(&base, &p)
         );
         let with_slash = ReputationLedgerSummary {
             slashing_events: 1,
