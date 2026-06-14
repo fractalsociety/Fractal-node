@@ -11,9 +11,10 @@
 //! [`vote`] holds per-validator HotStuff-2 vote wire types (`docs/prd.md` §18 M7-d-3).
 
 use borsh::{BorshDeserialize, BorshSerialize};
-use fractal_core::{state_root, ExecError, State, Transaction};
+use fractal_core::{state_root, ExecError, State, Transaction, TxBody, VmKind};
 use fractal_crypto::hash::{keccak256, Hash256};
 use reed_solomon_erasure::galois_8::ReedSolomon;
+use std::collections::BTreeMap;
 use thiserror::Error;
 
 pub mod proof;
@@ -23,9 +24,21 @@ pub mod vote;
 
 pub use fractal_core::Transaction as Tx;
 pub use proof::{
-    canonical_recursive_proof_fixture_v1, stwo_execution_air_adapter_digest,
-    stwo_execution_air_adapter_v1, stwo_execution_air_id, stwo_plonky2_public_input_limbs,
-    stwo_plonky2_verifier_id, verify_stwo_plonky2_proof, CanonicalRecursiveProofFixtureV1,
+    canonical_recursive_proof_fixture_v1, evm_zkvm_proof_envelope_v1, evm_zkvm_proof_fixture_v1,
+    evm_zkvm_transition_statement_v1, mixed_intrablock_aggregate_fixture_v1,
+    mixed_intrablock_aggregate_proof_envelope_v1, native_mixed_component_statement_v1,
+    native_recursive_proof_envelope_v1, native_recursive_wrap_fixture_v1,
+    native_state_transition_air_id, native_state_transition_air_v1,
+    native_state_transition_statement_digest_v1, native_state_transition_statement_v1,
+    native_state_transition_trace_columns_v1, prove_native_state_transition_fixture_v1,
+    stwo_execution_air_adapter_digest, stwo_execution_air_adapter_v1, stwo_execution_air_id,
+    stwo_plonky2_public_input_limbs, stwo_plonky2_verifier_id, verify_native_inter_block_chain_v1,
+    verify_native_state_transition_fixture_v1, verify_stwo_plonky2_proof,
+    CanonicalRecursiveProofFixtureV1, CompressedPlonky2NativeProofFixtureV1, EvmZkVmProofFixtureV1,
+    EvmZkVmTransitionStatementV1, MixedIntraBlockAggregateFixtureV1,
+    NativeMixedComponentStatementV1, NativeRecursiveWrapFixtureV1, NativeStateTransitionAirError,
+    NativeStateTransitionAirV1, NativeStateTransitionProofFixtureV1,
+    NativeStateTransitionStatementV1, NativeStateTransitionTraceColumnRowV1,
     ProductionProofVerifyError, StwoExecutionAirAdapterV1, StwoPlonky2ProofEnvelope,
 };
 pub use qc::{
@@ -50,6 +63,30 @@ pub enum BuildBlockError {
 }
 
 #[derive(Debug, Error)]
+pub enum MixedWitnessError {
+    #[error(transparent)]
+    Io(#[from] std::io::Error),
+    #[error(transparent)]
+    Exec(#[from] ExecError),
+    #[error("witness replay gas used mismatch: header={header}, replay={replay}")]
+    GasUsedMismatch { header: u64, replay: u64 },
+    #[error("witness replay state root mismatch")]
+    StateRoot,
+    #[error("witness replay tx root mismatch")]
+    TxRoot,
+    #[error("witness replay receipt root mismatch")]
+    ReceiptRoot,
+    #[error("witness replay EVM log root mismatch")]
+    EvmLogRoot,
+    #[error("witness replay feature set mismatch")]
+    FeatureSet,
+    #[error("witness gas sum mismatch: header={header}, receipts={receipts}")]
+    GasSumMismatch { header: u64, receipts: u64 },
+    #[error("execution feature is not supported by the requested proving surface")]
+    UnsupportedFeature,
+}
+
+#[derive(Debug, Error)]
 pub enum ProofVerifyError {
     #[error("validity proof chain id does not match block")]
     ChainId,
@@ -57,14 +94,30 @@ pub enum ProofVerifyError {
     Height,
     #[error("validity proof block hash does not match block")]
     BlockHash,
+    #[error("validity proof timestamp does not match block")]
+    Timestamp,
     #[error("validity proof state root does not match block")]
     StateRoot,
+    #[error("validity proof parent state root does not match block")]
+    ParentStateRoot,
     #[error("validity proof tx root does not match block")]
     TxRoot,
+    #[error("validity proof receipt root does not match block")]
+    ReceiptRoot,
+    #[error("validity proof native event root does not match block")]
+    NativeEventRoot,
+    #[error("validity proof EVM log root does not match block")]
+    EvmLogRoot,
     #[error("validity proof DA root does not match block")]
     DaRoot,
     #[error("validity proof zone namespace does not match block")]
     ZoneNamespace,
+    #[error("validity proof feature set does not match block")]
+    FeatureSet,
+    #[error("validity proof circuit coverage manifest does not match circuit version")]
+    CoverageManifest,
+    #[error("validity proof circuit does not cover block feature set")]
+    CircuitCoverage,
     #[error("validity proof bytes are empty")]
     EmptyProof,
     #[error("production proof verification failed: {0}")]
@@ -75,6 +128,20 @@ pub enum ProofVerifyError {
     DataAvailability,
     #[error(transparent)]
     Io(#[from] std::io::Error),
+}
+
+#[derive(Debug, Error, PartialEq, Eq)]
+pub enum ProofEligibilityError {
+    #[error("block feature set is not covered by circuit version")]
+    CircuitCoverage,
+    #[error("native-only circuit cannot prove EVM transaction at index {0}")]
+    EvmTxInNativeCircuit(usize),
+    #[error("native-only circuit cannot prove EVM-to-native precompile dispatch at index {0}")]
+    PrecompileDispatchInNativeCircuit(usize),
+    #[error("EVM transaction value is unsupported by the zkVM proving surface at index {0}")]
+    UnsupportedEvmValue(usize),
+    #[error("EVM call target is outside the current zkVM proving surface at index {0}")]
+    UnsupportedEvmCallTarget(usize),
 }
 
 #[derive(Debug, Error, PartialEq, Eq)]
@@ -125,8 +192,12 @@ pub struct BlockHeader {
     pub parent_qc_hash: Hash256,
     pub proposer: [u8; 32],
     pub timestamp_ms: u64,
+    pub parent_state_root: Hash256,
     pub state_root: Hash256,
     pub tx_root: Hash256,
+    pub receipt_root: Hash256,
+    pub native_event_root: Hash256,
+    pub evm_log_root: Hash256,
     pub zone_namespace: ExecutionZoneNamespace,
     pub da_root: Hash256,
     pub da_bytes: u64,
@@ -135,6 +206,7 @@ pub struct BlockHeader {
     pub da_fee_paid: u128,
     pub gas_used: u64,
     pub gas_limit: u64,
+    pub feature_set: ExecutionFeatureSetV1,
     pub extra: [u8; 32],
 }
 
@@ -181,27 +253,419 @@ pub struct BlockValidityProof {
     pub chain_id: u64,
     pub height: u64,
     pub block_hash: Hash256,
+    pub timestamp_ms: u64,
+    pub parent_state_root: Hash256,
     pub state_root: Hash256,
     pub tx_root: Hash256,
+    pub receipt_root: Hash256,
+    pub native_event_root: Hash256,
+    pub evm_log_root: Hash256,
+    pub gas_used: u64,
     pub zone_namespace: ExecutionZoneNamespace,
     pub da_root: Hash256,
+    pub circuit_version: CircuitVersion,
+    pub coverage_manifest_digest: Hash256,
+    pub feature_set: ExecutionFeatureSetV1,
     pub proof_system: ValidityProofSystem,
     pub proof_bytes: Vec<u8>,
 }
 
-#[derive(BorshSerialize)]
-struct ValidityProofPublicInputs {
-    chain_id: u64,
-    height: u64,
-    block_hash: Hash256,
-    state_root: Hash256,
-    tx_root: Hash256,
-    zone_namespace: ExecutionZoneNamespace,
-    da_root: Hash256,
+pub const MIXED_EXECUTION_WITNESS_V1: u16 = 1;
+pub const STATE_COMMITMENT_SCHEME_V1: StateCommitmentScheme =
+    StateCommitmentScheme::FractalSnarkSmtV1;
+
+pub const FEATURE_NATIVE_TX: u64 = 1 << 0;
+pub const FEATURE_NATIVE_SHARED_STATE: u64 = 1 << 1;
+pub const FEATURE_EVM_TRANSFER: u64 = 1 << 2;
+pub const FEATURE_EVM_CALL: u64 = 1 << 3;
+pub const FEATURE_EVM_CREATE: u64 = 1 << 4;
+pub const FEATURE_EVM_TO_NATIVE_PRECOMPILE: u64 = 1 << 5;
+
+#[derive(BorshSerialize, BorshDeserialize, Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CircuitVersion {
+    /// Dev/test coverage. This is not a production settlement circuit.
+    DevMixedV1,
+    /// Native-only production path. Must prove no EVM tx/precompile row is present.
+    NativeStateTransitionV1,
+    /// Eventual heterogeneous native + EVM aggregate circuit.
+    MixedStateTransitionV1,
+}
+
+#[derive(BorshSerialize, BorshDeserialize, Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ExecutionFeatureSetV1 {
+    pub bits: u64,
+}
+
+impl ExecutionFeatureSetV1 {
+    pub const fn empty() -> Self {
+        Self { bits: 0 }
+    }
+
+    pub const fn all_known() -> Self {
+        Self {
+            bits: FEATURE_NATIVE_TX
+                | FEATURE_NATIVE_SHARED_STATE
+                | FEATURE_EVM_TRANSFER
+                | FEATURE_EVM_CALL
+                | FEATURE_EVM_CREATE
+                | FEATURE_EVM_TO_NATIVE_PRECOMPILE,
+        }
+    }
+
+    pub fn insert(&mut self, bit: u64) {
+        self.bits |= bit;
+    }
+
+    pub fn contains_only(self, coverage: Self) -> bool {
+        self.bits & !coverage.bits == 0
+    }
+}
+
+#[derive(BorshSerialize, BorshDeserialize, Clone, Debug, PartialEq, Eq)]
+pub struct CoverageManifestV1 {
+    pub version: u16,
+    pub circuit_version: CircuitVersion,
+    pub covered_features: ExecutionFeatureSetV1,
+}
+
+#[derive(BorshSerialize, BorshDeserialize, Clone, Copy, Debug, PartialEq, Eq)]
+pub enum StateCommitmentScheme {
+    /// Protocol decision for proof witnesses: SNARK-friendly sparse Merkle trees for native
+    /// subtries and internal EVM proving commitments. The host-side placeholder root is still
+    /// domain-separated keccak until the concrete Poseidon/Rescue parameters land in the AIR.
+    FractalSnarkSmtV1,
+}
+
+#[derive(BorshSerialize, BorshDeserialize, Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub enum StateCommitmentNamespace {
+    Accounts,
+    Native,
+    Evm,
+}
+
+#[derive(BorshSerialize, BorshDeserialize, Clone, Copy, Debug, PartialEq, Eq)]
+pub enum StateAccessKindV1 {
+    Read,
+    Write,
+    ReadWrite,
+}
+
+#[derive(BorshSerialize, BorshDeserialize, Clone, Debug, PartialEq, Eq)]
+pub struct StateCommitmentV1 {
+    pub scheme: StateCommitmentScheme,
+    pub native_root: Hash256,
+    pub evm_root: Hash256,
+    pub unified_root: Hash256,
+}
+
+#[derive(BorshSerialize, BorshDeserialize, Clone, Debug, PartialEq, Eq)]
+pub struct StateMerkleAccessWitnessV1 {
+    pub kind: StateAccessKindV1,
+    pub namespace: StateCommitmentNamespace,
+    pub key: Vec<u8>,
+    pub pre_value_hash: Option<Hash256>,
+    pub post_value_hash: Option<Hash256>,
+    pub pre_state_path: Vec<Hash256>,
+    pub post_state_path: Vec<Hash256>,
+}
+
+#[derive(BorshSerialize, BorshDeserialize, Clone, Copy, Debug, PartialEq, Eq)]
+pub enum NativeTraceKindV1 {
+    TopLevelNative,
+    EvmPrecompileDispatch,
+}
+
+#[derive(BorshSerialize, BorshDeserialize, Clone, Debug, PartialEq, Eq)]
+pub struct NativeExecutionTraceRowV1 {
+    pub tx_index: u32,
+    pub tx_hash: Hash256,
+    pub kind: NativeTraceKindV1,
+    pub signer: [u8; 20],
+    pub nonce: u64,
+    pub call: fractal_core::NativeCall,
+    pub gas_used: u64,
+    pub native_event_root: Hash256,
+    pub native_event_start: u32,
+    pub native_event_count: u32,
+    pub signer_pre_nonce: u64,
+    pub signer_post_nonce: u64,
+    pub signer_pre_balance: u128,
+    pub signer_post_balance: u128,
+    pub state_access_indices: Vec<u32>,
+}
+
+#[derive(BorshSerialize, BorshDeserialize, Clone, Debug, PartialEq, Eq)]
+pub struct NativePrecompileDispatchTraceRowV1 {
+    pub tx_index: u32,
+    pub tx_hash: Hash256,
+    pub caller: [u8; 20],
+    pub precompile_address: [u8; 20],
+    pub native_opcode: u8,
+    pub decoded_call: fractal_core::NativeCall,
+    pub calldata_hash: Hash256,
+    pub gas_used: u64,
+}
+
+#[derive(BorshSerialize, BorshDeserialize, Clone, Copy, Debug, PartialEq, Eq)]
+pub enum EvmTraceKindV1 {
+    Transfer,
+    Call,
+    Create,
+}
+
+#[derive(BorshSerialize, BorshDeserialize, Clone, Debug, PartialEq, Eq)]
+pub struct EvmExecutionTraceRowV1 {
+    pub tx_index: u32,
+    pub tx_hash: Hash256,
+    pub kind: EvmTraceKindV1,
+    pub caller: [u8; 20],
+    pub to: Option<[u8; 20]>,
+    pub value: u128,
+    pub input_hash: Hash256,
+    pub gas_limit: u64,
+    pub gas_used: u64,
+    pub success: bool,
+    pub log_root: Hash256,
+    pub pre_evm_root: Hash256,
+    pub post_evm_root: Hash256,
+}
+
+#[derive(BorshSerialize, BorshDeserialize, Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ZkVmChoiceV1 {
+    /// Phase F decision: prove the node's `fractal_evm::RevmEngine` transition in a RISC Zero guest.
+    RiscZeroRevmTransitionV1,
+}
+
+#[derive(BorshSerialize, BorshDeserialize, Clone, Debug, PartialEq, Eq)]
+pub struct EvmZkVmSurfaceV1 {
+    pub version: u16,
+    pub zkvm_choice: ZkVmChoiceV1,
+    pub zkvm_target: String,
+    pub revm_crate_version: String,
+    pub covered_features: ExecutionFeatureSetV1,
+    pub uncovered_features: ExecutionFeatureSetV1,
+}
+
+#[derive(BorshSerialize, BorshDeserialize, Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MixedProofBatchingModeV1 {
+    PerBlockPreferred,
+    BatchedFallback,
+}
+
+#[derive(BorshSerialize, BorshDeserialize, Clone, Debug, PartialEq, Eq)]
+pub struct EvmMixedProvingBudgetV1 {
+    pub version: u16,
+    pub zkvm_choice: ZkVmChoiceV1,
+    pub native_block_latency_target_ms: u64,
+    pub mixed_block_latency_target_ms: u64,
+    pub sustained_throughput_blocks_per_minute: u32,
+    pub max_proof_final_lag_ms: u64,
+    pub batching_mode: MixedProofBatchingModeV1,
+}
+
+#[derive(BorshSerialize, BorshDeserialize, Clone, Debug, PartialEq, Eq)]
+pub struct MixedExecutionPublicInputsV1 {
+    pub version: u16,
+    pub chain_id: u64,
+    pub height: u64,
+    pub block_hash: Hash256,
+    pub timestamp_ms: u64,
+    pub parent_state_root: Hash256,
+    pub post_state_root: Hash256,
+    pub tx_root: Hash256,
+    pub receipt_root: Hash256,
+    pub native_event_root: Hash256,
+    pub evm_log_root: Hash256,
+    pub gas_used: u64,
+    pub zone_namespace: ExecutionZoneNamespace,
+    pub da_root: Hash256,
+    pub circuit_version: CircuitVersion,
+    pub coverage_manifest_digest: Hash256,
+    pub feature_set: ExecutionFeatureSetV1,
+}
+
+#[derive(BorshSerialize, BorshDeserialize, Clone, Debug, PartialEq, Eq)]
+pub struct MixedExecutionTxReceiptV1 {
+    pub tx_hash: Hash256,
+    pub success: bool,
+    pub gas_used: u64,
+    pub evm_log_root: Hash256,
+}
+
+#[derive(BorshSerialize, BorshDeserialize, Clone, Debug, PartialEq, Eq)]
+pub struct MixedExecutionWitnessV1 {
+    pub version: u16,
+    pub public_inputs: MixedExecutionPublicInputsV1,
+    pub pre_state_commitment: StateCommitmentV1,
+    pub post_state_commitment: StateCommitmentV1,
+    pub state_accesses: Vec<StateMerkleAccessWitnessV1>,
+    pub native_trace_rows: Vec<NativeExecutionTraceRowV1>,
+    pub precompile_dispatch_rows: Vec<NativePrecompileDispatchTraceRowV1>,
+    pub evm_trace_rows: Vec<EvmExecutionTraceRowV1>,
+    pub evm_zkvm_surface: EvmZkVmSurfaceV1,
+    pub gas_sum: u64,
+    pub transactions: Vec<Transaction>,
+    pub eth_signed_raw: Vec<Option<Vec<u8>>>,
+    pub tx_receipts: Vec<MixedExecutionTxReceiptV1>,
+}
+
+#[derive(BorshSerialize, BorshDeserialize, Clone, Copy, Debug, PartialEq, Eq)]
+pub enum WitnessRetentionPolicyV1 {
+    /// Store metadata only; full witnesses can be regenerated from archival pre-state and block data.
+    MetadataOnly,
+    /// Keep full witness bytes in the proof-worker backend until the block becomes proof-final.
+    UntilProofFinal,
+    /// Keep full witness bytes for archival/reproducibility workflows.
+    Archive,
+}
+
+#[derive(BorshSerialize, BorshDeserialize, Clone, Debug, PartialEq, Eq)]
+pub struct MixedExecutionWitnessMetadataV1 {
+    pub version: u16,
+    pub block_hash: Hash256,
+    pub height: u64,
+    pub witness_digest: Hash256,
+    pub public_input_digest: Hash256,
+    pub circuit_version: CircuitVersion,
+    pub coverage_manifest_digest: Hash256,
+    pub feature_set: ExecutionFeatureSetV1,
+    pub retention_policy: WitnessRetentionPolicyV1,
 }
 
 fn tx_hash(tx: &Transaction) -> Result<Hash256, std::io::Error> {
     Ok(keccak256(&borsh::to_vec(tx)?))
+}
+
+pub fn coverage_manifest_for_circuit_version(version: CircuitVersion) -> CoverageManifestV1 {
+    let covered_features = match version {
+        CircuitVersion::DevMixedV1 | CircuitVersion::MixedStateTransitionV1 => {
+            ExecutionFeatureSetV1::all_known()
+        }
+        CircuitVersion::NativeStateTransitionV1 => ExecutionFeatureSetV1 {
+            bits: FEATURE_NATIVE_TX | FEATURE_NATIVE_SHARED_STATE,
+        },
+    };
+    CoverageManifestV1 {
+        version: 1,
+        circuit_version: version,
+        covered_features,
+    }
+}
+
+pub fn coverage_manifest_digest(manifest: &CoverageManifestV1) -> Result<Hash256, std::io::Error> {
+    Ok(keccak256(&borsh::to_vec(manifest)?))
+}
+
+pub fn tx_feature_set(tx: &Transaction) -> ExecutionFeatureSetV1 {
+    let mut features = ExecutionFeatureSetV1::empty();
+    match (&tx.vm, &tx.body) {
+        (VmKind::Native, TxBody::Native(_)) => {
+            features.insert(FEATURE_NATIVE_TX);
+            if !tx.is_owned_object_tx() {
+                features.insert(FEATURE_NATIVE_SHARED_STATE);
+            }
+        }
+        (VmKind::Evm, TxBody::Transfer { .. }) => features.insert(FEATURE_EVM_TRANSFER),
+        (VmKind::Evm, TxBody::EvmCreate { .. }) => features.insert(FEATURE_EVM_CREATE),
+        (VmKind::Evm, TxBody::EvmCall { to, .. }) => {
+            features.insert(FEATURE_EVM_CALL);
+            if fractal_core::is_native_precompile_address(to) {
+                features.insert(FEATURE_EVM_TO_NATIVE_PRECOMPILE);
+                features.insert(FEATURE_NATIVE_TX);
+            }
+        }
+        _ => {}
+    }
+    features
+}
+
+pub fn block_feature_set(txs: &[Transaction]) -> ExecutionFeatureSetV1 {
+    let mut features = ExecutionFeatureSetV1::empty();
+    for tx in txs {
+        features.bits |= tx_feature_set(tx).bits;
+    }
+    features
+}
+
+pub fn evm_zkvm_surface_v1() -> EvmZkVmSurfaceV1 {
+    EvmZkVmSurfaceV1 {
+        version: 1,
+        zkvm_choice: ZkVmChoiceV1::RiscZeroRevmTransitionV1,
+        zkvm_target: "risc0-fractal-revm-transition-v1".to_owned(),
+        revm_crate_version: "38.0.0".to_owned(),
+        covered_features: ExecutionFeatureSetV1 {
+            bits: FEATURE_EVM_TRANSFER
+                | FEATURE_EVM_CALL
+                | FEATURE_EVM_CREATE
+                | FEATURE_EVM_TO_NATIVE_PRECOMPILE,
+        },
+        uncovered_features: ExecutionFeatureSetV1::empty(),
+    }
+}
+
+pub fn evm_mixed_proving_budget_v1() -> EvmMixedProvingBudgetV1 {
+    EvmMixedProvingBudgetV1 {
+        version: 1,
+        zkvm_choice: ZkVmChoiceV1::RiscZeroRevmTransitionV1,
+        native_block_latency_target_ms: 120_000,
+        mixed_block_latency_target_ms: 900_000,
+        sustained_throughput_blocks_per_minute: 4,
+        max_proof_final_lag_ms: 1_800_000,
+        batching_mode: MixedProofBatchingModeV1::BatchedFallback,
+    }
+}
+
+pub fn verify_transactions_eligible_for_circuit(
+    txs: &[Transaction],
+    circuit_version: CircuitVersion,
+) -> Result<(), ProofEligibilityError> {
+    for (idx, tx) in txs.iter().enumerate() {
+        match (&tx.vm, &tx.body, circuit_version) {
+            (VmKind::Evm, TxBody::EvmCall { to, .. }, CircuitVersion::NativeStateTransitionV1)
+                if fractal_core::is_native_precompile_address(to) =>
+            {
+                return Err(ProofEligibilityError::PrecompileDispatchInNativeCircuit(
+                    idx,
+                ));
+            }
+            (VmKind::Evm, _, CircuitVersion::NativeStateTransitionV1) => {
+                return Err(ProofEligibilityError::EvmTxInNativeCircuit(idx));
+            }
+            (VmKind::Evm, TxBody::EvmCall { value, .. }, _) if *value != 0 => {
+                return Err(ProofEligibilityError::UnsupportedEvmValue(idx));
+            }
+            (VmKind::Evm, TxBody::EvmCreate { value, .. }, _) if *value != 0 => {
+                return Err(ProofEligibilityError::UnsupportedEvmValue(idx));
+            }
+            (VmKind::Evm, TxBody::EvmCall { to, .. }, _)
+                if to[0] == 0xfc && !fractal_core::is_native_precompile_address(to) =>
+            {
+                return Err(ProofEligibilityError::UnsupportedEvmCallTarget(idx));
+            }
+            _ => {}
+        }
+    }
+    let features = block_feature_set(txs);
+    let manifest = coverage_manifest_for_circuit_version(circuit_version);
+    if !features.contains_only(manifest.covered_features) {
+        return Err(ProofEligibilityError::CircuitCoverage);
+    }
+    Ok(())
+}
+
+pub fn verify_block_eligible_for_circuit(
+    block: &Block,
+    circuit_version: CircuitVersion,
+) -> Result<(), ProofEligibilityError> {
+    verify_transactions_eligible_for_circuit(&block.transactions, circuit_version)
+}
+
+fn evm_log_root(logs: &[fractal_core::EvmLog]) -> Result<Hash256, std::io::Error> {
+    let hashes: Vec<Hash256> = logs
+        .iter()
+        .map(|log| Ok(keccak256(&borsh::to_vec(log)?)))
+        .collect::<Result<_, std::io::Error>>()?;
+    Ok(merkle_root_from_hashes(&hashes))
 }
 
 fn hash_pair(left: &Hash256, right: &Hash256) -> Hash256 {
@@ -233,6 +697,330 @@ fn merkle_root_from_hashes(hashes: &[Hash256]) -> Hash256 {
     level[0]
 }
 
+fn merkle_path_from_hashes(hashes: &[Hash256], index: usize) -> Vec<Hash256> {
+    if hashes.is_empty() || index >= hashes.len() {
+        return Vec::new();
+    }
+    let mut path = Vec::new();
+    let mut idx = index;
+    let mut level = hashes.to_vec();
+    while level.len() > 1 {
+        let sibling = if idx % 2 == 0 {
+            if idx + 1 < level.len() {
+                level[idx + 1]
+            } else {
+                level[idx]
+            }
+        } else {
+            level[idx - 1]
+        };
+        path.push(sibling);
+
+        let mut next = Vec::with_capacity((level.len() + 1) / 2);
+        let mut i = 0;
+        while i < level.len() {
+            if i + 1 < level.len() {
+                next.push(hash_pair(&level[i], &level[i + 1]));
+                i += 2;
+            } else {
+                next.push(hash_pair(&level[i], &level[i]));
+                i += 1;
+            }
+        }
+        idx /= 2;
+        level = next;
+    }
+    path
+}
+
+#[derive(BorshSerialize, BorshDeserialize, Clone, Debug, PartialEq, Eq)]
+struct StateCommitmentLeafV1 {
+    namespace: StateCommitmentNamespace,
+    key: Vec<u8>,
+    value_hash: Hash256,
+}
+
+fn state_leaf_hash(leaf: &StateCommitmentLeafV1) -> Result<Hash256, std::io::Error> {
+    Ok(keccak256(&borsh::to_vec(leaf)?))
+}
+
+fn state_commitment_root(leaves: &[StateCommitmentLeafV1]) -> Result<Hash256, std::io::Error> {
+    let hashes: Vec<Hash256> = leaves
+        .iter()
+        .map(state_leaf_hash)
+        .collect::<Result<_, _>>()?;
+    Ok(merkle_root_from_hashes(&hashes))
+}
+
+fn state_value_hash<T: BorshSerialize>(value: &T) -> Result<Hash256, std::io::Error> {
+    Ok(keccak256(&borsh::to_vec(value)?))
+}
+
+fn state_key<T: BorshSerialize>(tag: &str, key: &T) -> Result<Vec<u8>, std::io::Error> {
+    let mut out = tag.as_bytes().to_vec();
+    out.push(0);
+    out.extend_from_slice(&borsh::to_vec(key)?);
+    Ok(out)
+}
+
+fn push_leaf<T: BorshSerialize>(
+    leaves: &mut Vec<StateCommitmentLeafV1>,
+    namespace: StateCommitmentNamespace,
+    tag: &str,
+    key: &impl BorshSerialize,
+    value: &T,
+) -> Result<(), std::io::Error> {
+    leaves.push(StateCommitmentLeafV1 {
+        namespace,
+        key: state_key(tag, key)?,
+        value_hash: state_value_hash(value)?,
+    });
+    Ok(())
+}
+
+fn state_commitment_leaves(
+    state: &State,
+    namespace_filter: Option<StateCommitmentNamespace>,
+) -> Result<Vec<StateCommitmentLeafV1>, std::io::Error> {
+    let mut leaves = Vec::new();
+    let want = |ns| match namespace_filter {
+        Some(filter) => filter == ns,
+        None => true,
+    };
+
+    if want(StateCommitmentNamespace::Accounts) {
+        for (address, account) in &state.accounts {
+            push_leaf(
+                &mut leaves,
+                StateCommitmentNamespace::Accounts,
+                "account",
+                address,
+                account,
+            )?;
+        }
+    }
+
+    if want(StateCommitmentNamespace::Native) {
+        push_leaf(
+            &mut leaves,
+            StateCommitmentNamespace::Native,
+            "governance",
+            &(),
+            &state.governance,
+        )?;
+        push_leaf(
+            &mut leaves,
+            StateCommitmentNamespace::Native,
+            "next_agent_id",
+            &(),
+            &state.next_agent_id,
+        )?;
+        for (id, record) in &state.agents {
+            push_leaf(
+                &mut leaves,
+                StateCommitmentNamespace::Native,
+                "agent",
+                id,
+                record,
+            )?;
+        }
+        for (address, agent_id) in &state.address_to_agent {
+            push_leaf(
+                &mut leaves,
+                StateCommitmentNamespace::Native,
+                "address_to_agent",
+                address,
+                agent_id,
+            )?;
+        }
+        for (receipt_id, receipt) in &state.receipts {
+            push_leaf(
+                &mut leaves,
+                StateCommitmentNamespace::Native,
+                "receipt",
+                receipt_id,
+                receipt,
+            )?;
+        }
+        for (batch_id, batch) in &state.batches {
+            push_leaf(
+                &mut leaves,
+                StateCommitmentNamespace::Native,
+                "batch",
+                batch_id,
+                batch,
+            )?;
+        }
+        for claim in &state.claimed_payouts {
+            push_leaf(
+                &mut leaves,
+                StateCommitmentNamespace::Native,
+                "claimed_payout",
+                claim,
+                &true,
+            )?;
+        }
+        push_leaf(
+            &mut leaves,
+            StateCommitmentNamespace::Native,
+            "next_dispute_id",
+            &(),
+            &state.next_dispute_id,
+        )?;
+        for (id, dispute) in &state.disputes {
+            push_leaf(
+                &mut leaves,
+                StateCommitmentNamespace::Native,
+                "dispute",
+                id,
+                dispute,
+            )?;
+        }
+        for (address, stake) in &state.stakes {
+            push_leaf(
+                &mut leaves,
+                StateCommitmentNamespace::Native,
+                "stake",
+                address,
+                stake,
+            )?;
+        }
+        for (delegation, amount) in &state.delegated {
+            push_leaf(
+                &mut leaves,
+                StateCommitmentNamespace::Native,
+                "delegated",
+                delegation,
+                amount,
+            )?;
+        }
+        for (commitment, address) in &state.wallet_task_receipt_anchors {
+            push_leaf(
+                &mut leaves,
+                StateCommitmentNamespace::Native,
+                "wallet_task_receipt_anchor",
+                commitment,
+                address,
+            )?;
+        }
+        for (object_id, version) in &state.owned_object_versions {
+            push_leaf(
+                &mut leaves,
+                StateCommitmentNamespace::Native,
+                "owned_object_version",
+                object_id,
+                version,
+            )?;
+        }
+        push_leaf(
+            &mut leaves,
+            StateCommitmentNamespace::Native,
+            "chain_economics",
+            &(),
+            &state.chain_economics,
+        )?;
+    }
+
+    if want(StateCommitmentNamespace::Evm) {
+        for (address, code) in &state.evm_code {
+            push_leaf(
+                &mut leaves,
+                StateCommitmentNamespace::Evm,
+                "evm_code",
+                address,
+                code,
+            )?;
+        }
+        for (slot, value) in &state.evm_storage {
+            push_leaf(
+                &mut leaves,
+                StateCommitmentNamespace::Evm,
+                "evm_storage",
+                slot,
+                value,
+            )?;
+        }
+    }
+
+    leaves.sort_by(|a, b| {
+        a.namespace
+            .cmp(&b.namespace)
+            .then_with(|| a.key.cmp(&b.key))
+            .then_with(|| a.value_hash.cmp(&b.value_hash))
+    });
+    Ok(leaves)
+}
+
+pub fn state_commitment_v1(state: &State) -> Result<StateCommitmentV1, std::io::Error> {
+    let native_leaves = state_commitment_leaves(state, Some(StateCommitmentNamespace::Native))?;
+    let evm_leaves = state_commitment_leaves(state, Some(StateCommitmentNamespace::Evm))?;
+    let all_leaves = state_commitment_leaves(state, None)?;
+    Ok(StateCommitmentV1 {
+        scheme: STATE_COMMITMENT_SCHEME_V1,
+        native_root: state_commitment_root(&native_leaves)?,
+        evm_root: state_commitment_root(&evm_leaves)?,
+        unified_root: state_commitment_root(&all_leaves)?,
+    })
+}
+
+pub fn state_access_witnesses_v1(
+    pre_state: &State,
+    post_state: &State,
+) -> Result<Vec<StateMerkleAccessWitnessV1>, std::io::Error> {
+    let pre_leaves = state_commitment_leaves(pre_state, None)?;
+    let post_leaves = state_commitment_leaves(post_state, None)?;
+    let pre_hashes = pre_leaves
+        .iter()
+        .map(state_leaf_hash)
+        .collect::<Result<Vec<_>, _>>()?;
+    let post_hashes = post_leaves
+        .iter()
+        .map(state_leaf_hash)
+        .collect::<Result<Vec<_>, _>>()?;
+    let mut rows =
+        BTreeMap::<(StateCommitmentNamespace, Vec<u8>), StateMerkleAccessWitnessV1>::new();
+
+    for (index, leaf) in pre_leaves.iter().enumerate() {
+        rows.insert(
+            (leaf.namespace, leaf.key.clone()),
+            StateMerkleAccessWitnessV1 {
+                kind: StateAccessKindV1::Read,
+                namespace: leaf.namespace,
+                key: leaf.key.clone(),
+                pre_value_hash: Some(leaf.value_hash),
+                post_value_hash: None,
+                pre_state_path: merkle_path_from_hashes(&pre_hashes, index),
+                post_state_path: Vec::new(),
+            },
+        );
+    }
+
+    for (index, leaf) in post_leaves.iter().enumerate() {
+        let key = (leaf.namespace, leaf.key.clone());
+        rows.entry(key)
+            .and_modify(|row| {
+                row.kind = if row.pre_value_hash == Some(leaf.value_hash) {
+                    StateAccessKindV1::Read
+                } else {
+                    StateAccessKindV1::ReadWrite
+                };
+                row.post_value_hash = Some(leaf.value_hash);
+                row.post_state_path = merkle_path_from_hashes(&post_hashes, index);
+            })
+            .or_insert_with(|| StateMerkleAccessWitnessV1 {
+                kind: StateAccessKindV1::Write,
+                namespace: leaf.namespace,
+                key: leaf.key.clone(),
+                pre_value_hash: None,
+                post_value_hash: Some(leaf.value_hash),
+                pre_state_path: Vec::new(),
+                post_state_path: merkle_path_from_hashes(&post_hashes, index),
+            });
+    }
+
+    Ok(rows.into_values().collect())
+}
+
 /// Ordered Merkle root over transaction hashes (matches canonical tx order in the block).
 pub fn ordered_tx_root(txs: &[Transaction]) -> Result<Hash256, std::io::Error> {
     if txs.is_empty() {
@@ -240,6 +1028,227 @@ pub fn ordered_tx_root(txs: &[Transaction]) -> Result<Hash256, std::io::Error> {
     }
     let hashes: Vec<Hash256> = txs.iter().map(tx_hash).collect::<Result<_, _>>()?;
     Ok(merkle_root_from_hashes(&hashes))
+}
+
+pub fn tx_receipt_root(receipts: &[MixedExecutionTxReceiptV1]) -> Result<Hash256, std::io::Error> {
+    let hashes: Vec<Hash256> = receipts
+        .iter()
+        .map(|receipt| Ok(keccak256(&borsh::to_vec(receipt)?)))
+        .collect::<Result<_, std::io::Error>>()?;
+    Ok(merkle_root_from_hashes(&hashes))
+}
+
+pub fn block_evm_log_root(state: &State, txs: &[Transaction]) -> Result<Hash256, std::io::Error> {
+    let mut hashes = Vec::new();
+    for tx in txs {
+        let h = tx_hash(tx)?;
+        if let Some(logs) = state.evm_tx_logs.get(&h) {
+            for log in logs {
+                hashes.push(keccak256(&borsh::to_vec(log)?));
+            }
+        }
+    }
+    Ok(merkle_root_from_hashes(&hashes))
+}
+
+pub fn mixed_execution_tx_receipts(
+    state: &State,
+    txs: &[Transaction],
+) -> Result<Vec<MixedExecutionTxReceiptV1>, std::io::Error> {
+    txs.iter()
+        .map(|tx| {
+            let tx_hash = tx_hash(tx)?;
+            let logs = state.evm_tx_logs.get(&tx_hash).cloned().unwrap_or_default();
+            Ok(MixedExecutionTxReceiptV1 {
+                tx_hash,
+                success: state.evm_tx_success.get(&tx_hash).copied().unwrap_or(true),
+                gas_used: fractal_core::gas_used_after_apply(state, tx)
+                    .map_err(std::io::Error::other)?,
+                evm_log_root: evm_log_root(&logs)?,
+            })
+        })
+        .collect()
+}
+
+fn account_nonce_balance(state: &State, address: &[u8; 20]) -> (u64, u128) {
+    state
+        .accounts
+        .get(address)
+        .map(|account| (account.nonce, account.balance))
+        .unwrap_or((0, 0))
+}
+
+fn state_access_indices_for_namespace(
+    accesses: &[StateMerkleAccessWitnessV1],
+    namespaces: &[StateCommitmentNamespace],
+) -> Vec<u32> {
+    accesses
+        .iter()
+        .enumerate()
+        .filter(|(_, row)| namespaces.contains(&row.namespace))
+        .filter_map(|(idx, _)| u32::try_from(idx).ok())
+        .collect()
+}
+
+pub fn native_execution_trace_rows_v1(
+    pre_state: &State,
+    post_state: &State,
+    txs: &[Transaction],
+    state_accesses: &[StateMerkleAccessWitnessV1],
+    native_event_root: Hash256,
+) -> Result<Vec<NativeExecutionTraceRowV1>, std::io::Error> {
+    let native_access_indices = state_access_indices_for_namespace(
+        state_accesses,
+        &[
+            StateCommitmentNamespace::Accounts,
+            StateCommitmentNamespace::Native,
+        ],
+    );
+    let mut rows = Vec::new();
+    for (idx, tx) in txs.iter().enumerate() {
+        if let (VmKind::Native, TxBody::Native(call)) = (&tx.vm, &tx.body) {
+            let (signer_pre_nonce, signer_pre_balance) =
+                account_nonce_balance(pre_state, &tx.signer);
+            let (signer_post_nonce, signer_post_balance) =
+                account_nonce_balance(post_state, &tx.signer);
+            rows.push(NativeExecutionTraceRowV1 {
+                tx_index: idx as u32,
+                tx_hash: tx_hash(tx)?,
+                kind: NativeTraceKindV1::TopLevelNative,
+                signer: tx.signer,
+                nonce: tx.nonce,
+                call: call.clone(),
+                gas_used: fractal_core::gas_used_after_apply(post_state, tx)
+                    .map_err(std::io::Error::other)?,
+                native_event_root,
+                native_event_start: 0,
+                native_event_count: 0,
+                signer_pre_nonce,
+                signer_post_nonce,
+                signer_pre_balance,
+                signer_post_balance,
+                state_access_indices: native_access_indices.clone(),
+            });
+        }
+    }
+    Ok(rows)
+}
+
+pub fn native_precompile_dispatch_trace_rows_v1(
+    post_state: &State,
+    txs: &[Transaction],
+) -> Result<Vec<NativePrecompileDispatchTraceRowV1>, std::io::Error> {
+    let mut rows = Vec::new();
+    for (idx, tx) in txs.iter().enumerate() {
+        let TxBody::EvmCall { to, calldata, .. } = &tx.body else {
+            continue;
+        };
+        if !fractal_core::is_native_precompile_address(to) {
+            continue;
+        }
+        let decoded_call = fractal_core::NativeCall::try_from_slice(calldata)
+            .map_err(|_| std::io::Error::other("invalid native precompile calldata"))?;
+        rows.push(NativePrecompileDispatchTraceRowV1 {
+            tx_index: idx as u32,
+            tx_hash: tx_hash(tx)?,
+            caller: tx.signer,
+            precompile_address: *to,
+            native_opcode: fractal_core::native_opcode_from_precompile_address(to).unwrap_or(0),
+            decoded_call,
+            calldata_hash: keccak256(calldata),
+            gas_used: fractal_core::gas_used_after_apply(post_state, tx)
+                .map_err(std::io::Error::other)?,
+        });
+    }
+    Ok(rows)
+}
+
+pub fn evm_execution_trace_rows_v1(
+    pre_state: &State,
+    post_state: &State,
+    txs: &[Transaction],
+) -> Result<Vec<EvmExecutionTraceRowV1>, std::io::Error> {
+    let pre_evm_root = state_commitment_v1(pre_state)?.evm_root;
+    let post_evm_root = state_commitment_v1(post_state)?.evm_root;
+    let mut rows = Vec::new();
+    for (idx, tx) in txs.iter().enumerate() {
+        let (kind, to, value, input_hash, gas_limit) = match (&tx.vm, &tx.body) {
+            (VmKind::Evm, TxBody::Transfer { to, amount }) => (
+                EvmTraceKindV1::Transfer,
+                Some(*to),
+                *amount,
+                keccak256(&[]),
+                fractal_core::TRANSFER_GAS,
+            ),
+            (
+                VmKind::Evm,
+                TxBody::EvmCall {
+                    to,
+                    value,
+                    calldata,
+                    gas_limit,
+                },
+            ) => (
+                EvmTraceKindV1::Call,
+                Some(*to),
+                *value,
+                keccak256(calldata),
+                *gas_limit,
+            ),
+            (
+                VmKind::Evm,
+                TxBody::EvmCreate {
+                    value,
+                    init_code,
+                    gas_limit,
+                },
+            ) => (
+                EvmTraceKindV1::Create,
+                None,
+                *value,
+                keccak256(init_code),
+                *gas_limit,
+            ),
+            _ => continue,
+        };
+        let tx_hash = tx_hash(tx)?;
+        let logs = post_state
+            .evm_tx_logs
+            .get(&tx_hash)
+            .cloned()
+            .unwrap_or_default();
+        rows.push(EvmExecutionTraceRowV1 {
+            tx_index: idx as u32,
+            tx_hash,
+            kind,
+            caller: tx.signer,
+            to,
+            value,
+            input_hash,
+            gas_limit,
+            gas_used: fractal_core::gas_used_after_apply(post_state, tx)
+                .map_err(std::io::Error::other)?,
+            success: post_state
+                .evm_tx_success
+                .get(&tx_hash)
+                .copied()
+                .unwrap_or(true),
+            log_root: evm_log_root(&logs)?,
+            pre_evm_root,
+            post_evm_root,
+        });
+    }
+    Ok(rows)
+}
+
+pub fn witness_gas_sum(receipts: &[MixedExecutionTxReceiptV1]) -> Result<u64, MixedWitnessError> {
+    receipts.iter().try_fold(0u64, |sum, receipt| {
+        sum.checked_add(receipt.gas_used)
+            .ok_or(MixedWitnessError::GasSumMismatch {
+                header: u64::MAX,
+                receipts: sum,
+            })
+    })
 }
 
 pub fn header_hash(header: &BlockHeader) -> Result<Hash256, std::io::Error> {
@@ -523,16 +1532,163 @@ pub fn verify_da_samples(
 pub fn validity_proof_public_input_digest(
     proof: &BlockValidityProof,
 ) -> Result<Hash256, std::io::Error> {
-    let inputs = ValidityProofPublicInputs {
+    let inputs = MixedExecutionPublicInputsV1 {
+        version: MIXED_EXECUTION_WITNESS_V1,
         chain_id: proof.chain_id,
         height: proof.height,
         block_hash: proof.block_hash,
-        state_root: proof.state_root,
+        timestamp_ms: proof.timestamp_ms,
+        parent_state_root: proof.parent_state_root,
+        post_state_root: proof.state_root,
         tx_root: proof.tx_root,
+        receipt_root: proof.receipt_root,
+        native_event_root: proof.native_event_root,
+        evm_log_root: proof.evm_log_root,
+        gas_used: proof.gas_used,
         zone_namespace: proof.zone_namespace,
         da_root: proof.da_root,
+        circuit_version: proof.circuit_version,
+        coverage_manifest_digest: proof.coverage_manifest_digest,
+        feature_set: proof.feature_set,
     };
     Ok(keccak256(&borsh::to_vec(&inputs)?))
+}
+
+pub fn mixed_execution_public_inputs_from_block(
+    block: &Block,
+) -> Result<MixedExecutionPublicInputsV1, std::io::Error> {
+    Ok(MixedExecutionPublicInputsV1 {
+        version: MIXED_EXECUTION_WITNESS_V1,
+        chain_id: block.header.chain_id,
+        height: block.header.height,
+        block_hash: header_hash(&block.header)?,
+        timestamp_ms: block.header.timestamp_ms,
+        parent_state_root: block.header.parent_state_root,
+        post_state_root: block.header.state_root,
+        tx_root: block.header.tx_root,
+        receipt_root: block.header.receipt_root,
+        native_event_root: block.header.native_event_root,
+        evm_log_root: block.header.evm_log_root,
+        gas_used: block.header.gas_used,
+        zone_namespace: block.header.zone_namespace,
+        da_root: block.header.da_root,
+        circuit_version: CircuitVersion::DevMixedV1,
+        coverage_manifest_digest: coverage_manifest_digest(
+            &coverage_manifest_for_circuit_version(CircuitVersion::DevMixedV1),
+        )?,
+        feature_set: block.header.feature_set,
+    })
+}
+
+pub fn mixed_execution_witness_from_state_transition(
+    block: &Block,
+    pre_state: &State,
+    post_state: &State,
+) -> Result<MixedExecutionWitnessV1, std::io::Error> {
+    let state_accesses = state_access_witnesses_v1(pre_state, post_state)?;
+    let tx_receipts = mixed_execution_tx_receipts(post_state, &block.transactions)?;
+    let gas_sum = tx_receipts.iter().try_fold(0u64, |sum, receipt| {
+        sum.checked_add(receipt.gas_used)
+            .ok_or_else(|| std::io::Error::other("witness gas sum overflow"))
+    })?;
+    if gas_sum != block.header.gas_used {
+        return Err(std::io::Error::other("witness gas sum mismatch"));
+    }
+    Ok(MixedExecutionWitnessV1 {
+        version: MIXED_EXECUTION_WITNESS_V1,
+        public_inputs: mixed_execution_public_inputs_from_block(block)?,
+        pre_state_commitment: state_commitment_v1(pre_state)?,
+        post_state_commitment: state_commitment_v1(post_state)?,
+        state_accesses: state_accesses.clone(),
+        native_trace_rows: native_execution_trace_rows_v1(
+            pre_state,
+            post_state,
+            &block.transactions,
+            &state_accesses,
+            block.header.native_event_root,
+        )?,
+        precompile_dispatch_rows: native_precompile_dispatch_trace_rows_v1(
+            post_state,
+            &block.transactions,
+        )?,
+        evm_trace_rows: evm_execution_trace_rows_v1(pre_state, post_state, &block.transactions)?,
+        evm_zkvm_surface: evm_zkvm_surface_v1(),
+        gas_sum,
+        transactions: block.transactions.clone(),
+        eth_signed_raw: block.eth_signed_raw.clone(),
+        tx_receipts,
+    })
+}
+
+pub fn mixed_execution_witness_digest(
+    witness: &MixedExecutionWitnessV1,
+) -> Result<Hash256, std::io::Error> {
+    Ok(keccak256(&borsh::to_vec(witness)?))
+}
+
+pub fn mixed_execution_witness_metadata(
+    witness: &MixedExecutionWitnessV1,
+    retention_policy: WitnessRetentionPolicyV1,
+) -> Result<MixedExecutionWitnessMetadataV1, std::io::Error> {
+    Ok(MixedExecutionWitnessMetadataV1 {
+        version: MIXED_EXECUTION_WITNESS_V1,
+        block_hash: witness.public_inputs.block_hash,
+        height: witness.public_inputs.height,
+        witness_digest: mixed_execution_witness_digest(witness)?,
+        public_input_digest: keccak256(&borsh::to_vec(&witness.public_inputs)?),
+        circuit_version: witness.public_inputs.circuit_version,
+        coverage_manifest_digest: witness.public_inputs.coverage_manifest_digest,
+        feature_set: witness.public_inputs.feature_set,
+        retention_policy,
+    })
+}
+
+pub fn mixed_execution_witness_from_replay(
+    block: &Block,
+    pre_state: &State,
+) -> Result<MixedExecutionWitnessV1, MixedWitnessError> {
+    let mut replayed = pre_state.clone();
+    let mut evm = fractal_evm::RevmEngine::default();
+    let gas_used =
+        fractal_core::apply_block_with_evm(&mut replayed, &block.transactions, &mut evm)?;
+    if gas_used != block.header.gas_used {
+        return Err(MixedWitnessError::GasUsedMismatch {
+            header: block.header.gas_used,
+            replay: gas_used,
+        });
+    }
+    if state_root(&replayed)? != block.header.state_root {
+        return Err(MixedWitnessError::StateRoot);
+    }
+    if ordered_tx_root(&block.transactions)? != block.header.tx_root {
+        return Err(MixedWitnessError::TxRoot);
+    }
+    let receipts = mixed_execution_tx_receipts(&replayed, &block.transactions)?;
+    let receipt_gas_sum = witness_gas_sum(&receipts)?;
+    if receipt_gas_sum != block.header.gas_used {
+        return Err(MixedWitnessError::GasSumMismatch {
+            header: block.header.gas_used,
+            receipts: receipt_gas_sum,
+        });
+    }
+    if tx_receipt_root(&receipts)? != block.header.receipt_root {
+        return Err(MixedWitnessError::ReceiptRoot);
+    }
+    if block_evm_log_root(&replayed, &block.transactions)? != block.header.evm_log_root {
+        return Err(MixedWitnessError::EvmLogRoot);
+    }
+    if block_feature_set(&block.transactions) != block.header.feature_set {
+        return Err(MixedWitnessError::FeatureSet);
+    }
+    mixed_execution_witness_from_state_transition(block, pre_state, &replayed)
+        .map_err(MixedWitnessError::Io)
+}
+
+pub fn mixed_execution_witness_from_executed_block(
+    block: &Block,
+    executed_state: &State,
+) -> Result<MixedExecutionWitnessV1, std::io::Error> {
+    mixed_execution_witness_from_state_transition(block, executed_state, executed_state)
 }
 
 pub fn verify_block_validity_proof(
@@ -548,17 +1704,42 @@ pub fn verify_block_validity_proof(
     if proof.block_hash != header_hash(&block.header)? {
         return Err(ProofVerifyError::BlockHash);
     }
+    if proof.timestamp_ms != block.header.timestamp_ms {
+        return Err(ProofVerifyError::Timestamp);
+    }
+    if proof.parent_state_root != block.header.parent_state_root {
+        return Err(ProofVerifyError::ParentStateRoot);
+    }
     if proof.state_root != block.header.state_root {
         return Err(ProofVerifyError::StateRoot);
     }
     if proof.tx_root != block.header.tx_root {
         return Err(ProofVerifyError::TxRoot);
     }
+    if proof.receipt_root != block.header.receipt_root {
+        return Err(ProofVerifyError::ReceiptRoot);
+    }
+    if proof.native_event_root != block.header.native_event_root {
+        return Err(ProofVerifyError::NativeEventRoot);
+    }
+    if proof.evm_log_root != block.header.evm_log_root {
+        return Err(ProofVerifyError::EvmLogRoot);
+    }
     if proof.zone_namespace != block.header.zone_namespace {
         return Err(ProofVerifyError::ZoneNamespace);
     }
     if proof.da_root != block.header.da_root {
         return Err(ProofVerifyError::DaRoot);
+    }
+    if proof.feature_set != block.header.feature_set {
+        return Err(ProofVerifyError::FeatureSet);
+    }
+    let manifest = coverage_manifest_for_circuit_version(proof.circuit_version);
+    if proof.coverage_manifest_digest != coverage_manifest_digest(&manifest)? {
+        return Err(ProofVerifyError::CoverageManifest);
+    }
+    if !proof.feature_set.contains_only(manifest.covered_features) {
+        return Err(ProofVerifyError::CircuitCoverage);
     }
     verify_da_sidecar(&block.header, &block.da_sidecar)
         .map_err(|_| ProofVerifyError::DataAvailability)?;
@@ -574,6 +1755,18 @@ pub fn verify_block_validity_proof(
             Ok(())
         }
         ValidityProofSystem::StwoPlonky2 => {
+            if let Ok(envelope) = StwoPlonky2ProofEnvelope::try_from_slice(&proof.proof_bytes) {
+                if matches!(
+                    envelope,
+                    StwoPlonky2ProofEnvelope::EvmZkVmFixtureV1 { .. }
+                        | StwoPlonky2ProofEnvelope::MixedIntraBlockAggregateFixtureV1 { .. }
+                ) && proof.circuit_version != CircuitVersion::MixedStateTransitionV1
+                {
+                    return Err(ProofVerifyError::Production(
+                        ProductionProofVerifyError::MixedCircuitVersion,
+                    ));
+                }
+            }
             let public_input_digest = validity_proof_public_input_digest(proof)?;
             verify_stwo_plonky2_proof(&proof.proof_bytes, public_input_digest)?;
             Ok(())
@@ -647,11 +1840,17 @@ pub fn execute_and_build_zone_block(
     if budget_sum > gas_limit {
         return Err(ExecError::GasLimitExceeded.into());
     }
+    let parent_state_root = state_root(state)?;
     let mut evm = fractal_evm::RevmEngine::default();
     let gas_used = fractal_core::apply_block_with_evm(state, &txs, &mut evm)?;
     debug_assert!(gas_used <= budget_sum);
     let sr = state_root(state)?;
     let tx_root = ordered_tx_root(&txs)?;
+    let feature_set = block_feature_set(&txs);
+    let tx_receipts = mixed_execution_tx_receipts(state, &txs)?;
+    let receipt_root = tx_receipt_root(&tx_receipts)?;
+    let native_event_root = [0u8; 32];
+    let evm_log_root = block_evm_log_root(state, &txs)?;
     let da_payload = borsh::to_vec(&txs)?;
     let da_sidecar = build_da_sidecar(&da_payload, zone_namespace, DEFAULT_DA_SHARE_SIZE);
     let da_root = da_root(&da_sidecar);
@@ -666,8 +1865,12 @@ pub fn execute_and_build_zone_block(
         parent_qc_hash,
         proposer,
         timestamp_ms,
+        parent_state_root,
         state_root: sr,
         tx_root,
+        receipt_root,
+        native_event_root,
+        evm_log_root,
         zone_namespace,
         da_root,
         da_bytes: da_sidecar.original_len,
@@ -676,6 +1879,7 @@ pub fn execute_and_build_zone_block(
         da_fee_paid,
         gas_used,
         gas_limit,
+        feature_set,
         extra: [0u8; 32],
     };
     Ok(Block {
@@ -707,7 +1911,17 @@ impl SampleRng {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use fractal_core::{Account, NativeCall, State, Transaction, TxBody, VmKind};
+    use fractal_core::{
+        Account, NativeCall, OnChainTaskReceipt, PayoutEntry, SettleBatchPayload, State,
+        Transaction, TxBody, VmKind,
+    };
+
+    fn addr(byte0: u8, byte1: u8) -> [u8; 20] {
+        let mut out = [0u8; 20];
+        out[0] = byte0;
+        out[1] = byte1;
+        out
+    }
 
     #[test]
     fn tx_root_deterministic() {
@@ -793,16 +2007,1167 @@ mod tests {
             chain_id: block.header.chain_id,
             height: block.header.height,
             block_hash: header_hash(&block.header).unwrap(),
+            timestamp_ms: block.header.timestamp_ms,
+            parent_state_root: block.header.parent_state_root,
             state_root: block.header.state_root,
             tx_root: block.header.tx_root,
+            receipt_root: block.header.receipt_root,
+            native_event_root: block.header.native_event_root,
+            evm_log_root: block.header.evm_log_root,
+            gas_used: block.header.gas_used,
             zone_namespace: block.header.zone_namespace,
             da_root: block.header.da_root,
+            circuit_version: CircuitVersion::DevMixedV1,
+            coverage_manifest_digest: coverage_manifest_digest(
+                &coverage_manifest_for_circuit_version(CircuitVersion::DevMixedV1),
+            )
+            .unwrap(),
+            feature_set: block.header.feature_set,
             proof_system: ValidityProofSystem::DevDigest,
             proof_bytes: Vec::new(),
         };
         proof.proof_bytes = validity_proof_public_input_digest(&proof).unwrap().to_vec();
 
         verify_block_validity_proof(&block, &proof).expect("proof verifies");
+    }
+
+    #[test]
+    fn mixed_execution_witness_binds_header_public_inputs_and_receipts() {
+        let mut st = State::default();
+        let native_signer = [9u8; 20];
+        let evm_signer = [8u8; 20];
+        st.accounts.insert(
+            native_signer,
+            Account {
+                nonce: 0,
+                balance: 1_000_000,
+            },
+        );
+        st.accounts.insert(
+            evm_signer,
+            Account {
+                nonce: 0,
+                balance: 1_000_000,
+            },
+        );
+        let txs = vec![
+            Transaction {
+                signer: native_signer,
+                nonce: 0,
+                vm: VmKind::Native,
+                body: TxBody::Native(NativeCall::NoOp),
+            },
+            Transaction {
+                signer: evm_signer,
+                nonce: 0,
+                vm: VmKind::Evm,
+                body: TxBody::Transfer {
+                    to: [7u8; 20],
+                    amount: 10,
+                },
+            },
+        ];
+        let pre_state = st.clone();
+        let block = execute_and_build_block(
+            41,
+            1,
+            0,
+            [7u8; 32],
+            [0u8; 32],
+            [0u8; 32],
+            1_000,
+            60_000_000,
+            &mut st,
+            txs,
+            eth_signed_raws_for_txs(2),
+        )
+        .unwrap();
+
+        let witness =
+            mixed_execution_witness_from_state_transition(&block, &pre_state, &st).unwrap();
+        assert_eq!(witness.version, MIXED_EXECUTION_WITNESS_V1);
+        assert_eq!(
+            witness.public_inputs,
+            mixed_execution_public_inputs_from_block(&block).unwrap()
+        );
+        assert_eq!(
+            witness.pre_state_commitment.scheme,
+            STATE_COMMITMENT_SCHEME_V1
+        );
+        assert_eq!(
+            witness.post_state_commitment.scheme,
+            STATE_COMMITMENT_SCHEME_V1
+        );
+        assert_ne!(
+            witness.pre_state_commitment.unified_root,
+            witness.post_state_commitment.unified_root
+        );
+        assert!(witness.state_accesses.iter().any(|row| matches!(
+            row.kind,
+            StateAccessKindV1::ReadWrite | StateAccessKindV1::Write
+        )));
+        assert_eq!(witness.tx_receipts.len(), 2);
+        assert_eq!(
+            tx_receipt_root(&witness.tx_receipts).unwrap(),
+            block.header.receipt_root
+        );
+        assert_eq!(witness.gas_sum, block.header.gas_used);
+        assert_eq!(witness.native_trace_rows.len(), 1);
+        assert_eq!(witness.native_trace_rows[0].tx_index, 0);
+        assert_eq!(
+            witness.native_trace_rows[0].gas_used,
+            witness.tx_receipts[0].gas_used
+        );
+        assert_eq!(witness.native_trace_rows[0].signer_pre_nonce, 0);
+        assert_eq!(witness.native_trace_rows[0].signer_post_nonce, 1);
+        assert_eq!(
+            witness.native_trace_rows[0].native_event_root,
+            block.header.native_event_root
+        );
+        assert!(!witness.native_trace_rows[0].state_access_indices.is_empty());
+        assert_eq!(witness.evm_trace_rows.len(), 1);
+        assert_eq!(witness.evm_trace_rows[0].tx_index, 1);
+        assert_eq!(witness.evm_trace_rows[0].kind, EvmTraceKindV1::Transfer);
+        assert_eq!(
+            witness.evm_trace_rows[0].gas_used,
+            witness.tx_receipts[1].gas_used
+        );
+        assert_eq!(
+            witness.evm_trace_rows[0].post_evm_root,
+            witness.post_state_commitment.evm_root
+        );
+        assert_eq!(
+            witness.evm_zkvm_surface.covered_features.bits
+                & (FEATURE_EVM_TRANSFER | FEATURE_EVM_CALL | FEATURE_EVM_CREATE),
+            FEATURE_EVM_TRANSFER | FEATURE_EVM_CALL | FEATURE_EVM_CREATE
+        );
+        assert_eq!(
+            keccak256(&borsh::to_vec(&witness).unwrap()),
+            keccak256(&borsh::to_vec(&witness).unwrap())
+        );
+    }
+
+    #[test]
+    fn witness_records_evm_to_native_precompile_dispatch_rows() {
+        let signer = addr(0x11, 0x22);
+        let to_precompile = addr(0xfc, 0x01);
+        let tx = Transaction {
+            signer,
+            nonce: 0,
+            vm: VmKind::Evm,
+            body: TxBody::EvmCall {
+                to: to_precompile,
+                value: 0,
+                calldata: borsh::to_vec(&NativeCall::NoOp).unwrap(),
+                gas_limit: 1_000_000,
+            },
+        };
+
+        let (block, witness) = build_replay_witness_for_txs(vec![tx], &[signer]);
+        assert!(block.header.feature_set.bits & FEATURE_EVM_TO_NATIVE_PRECOMPILE != 0);
+        assert_eq!(witness.precompile_dispatch_rows.len(), 1);
+        let row = &witness.precompile_dispatch_rows[0];
+        assert_eq!(row.tx_index, 0);
+        assert_eq!(row.caller, signer);
+        assert_eq!(row.precompile_address, to_precompile);
+        assert_eq!(row.native_opcode, 0x01);
+        assert_eq!(row.decoded_call, NativeCall::NoOp);
+        assert_eq!(
+            row.calldata_hash,
+            keccak256(&borsh::to_vec(&NativeCall::NoOp).unwrap())
+        );
+        assert_eq!(witness.evm_trace_rows.len(), 1);
+        assert_eq!(witness.gas_sum, block.header.gas_used);
+    }
+
+    #[test]
+    fn proof_eligibility_rejects_uncovered_and_unsupported_features() {
+        let evm_transfer = Transaction {
+            signer: [8u8; 20],
+            nonce: 0,
+            vm: VmKind::Evm,
+            body: TxBody::Transfer {
+                to: [7u8; 20],
+                amount: 10,
+            },
+        };
+        assert_eq!(
+            verify_transactions_eligible_for_circuit(
+                std::slice::from_ref(&evm_transfer),
+                CircuitVersion::NativeStateTransitionV1
+            ),
+            Err(ProofEligibilityError::EvmTxInNativeCircuit(0))
+        );
+
+        let precompile_dispatch = Transaction {
+            signer: [8u8; 20],
+            nonce: 0,
+            vm: VmKind::Evm,
+            body: TxBody::EvmCall {
+                to: addr(0xfc, 0x01),
+                value: 0,
+                calldata: borsh::to_vec(&NativeCall::NoOp).unwrap(),
+                gas_limit: 1_000_000,
+            },
+        };
+        assert_eq!(
+            verify_transactions_eligible_for_circuit(
+                std::slice::from_ref(&precompile_dispatch),
+                CircuitVersion::NativeStateTransitionV1
+            ),
+            Err(ProofEligibilityError::PrecompileDispatchInNativeCircuit(0))
+        );
+
+        let value_call = Transaction {
+            signer: [8u8; 20],
+            nonce: 0,
+            vm: VmKind::Evm,
+            body: TxBody::EvmCall {
+                to: [6u8; 20],
+                value: 1,
+                calldata: Vec::new(),
+                gas_limit: 1_000_000,
+            },
+        };
+        assert_eq!(
+            verify_transactions_eligible_for_circuit(
+                std::slice::from_ref(&value_call),
+                CircuitVersion::MixedStateTransitionV1
+            ),
+            Err(ProofEligibilityError::UnsupportedEvmValue(0))
+        );
+
+        let reserved_call = Transaction {
+            signer: [8u8; 20],
+            nonce: 0,
+            vm: VmKind::Evm,
+            body: TxBody::EvmCall {
+                to: addr(0xfc, 0xff),
+                value: 0,
+                calldata: Vec::new(),
+                gas_limit: 1_000_000,
+            },
+        };
+        assert_eq!(
+            verify_transactions_eligible_for_circuit(
+                std::slice::from_ref(&reserved_call),
+                CircuitVersion::MixedStateTransitionV1
+            ),
+            Err(ProofEligibilityError::UnsupportedEvmCallTarget(0))
+        );
+    }
+
+    fn native_transition_witness(mut witness: MixedExecutionWitnessV1) -> MixedExecutionWitnessV1 {
+        witness.public_inputs.circuit_version = CircuitVersion::NativeStateTransitionV1;
+        witness.public_inputs.coverage_manifest_digest = coverage_manifest_digest(
+            &coverage_manifest_for_circuit_version(CircuitVersion::NativeStateTransitionV1),
+        )
+        .unwrap();
+        witness
+    }
+
+    fn native_recursive_block_proof(
+        block: &Block,
+        witness: &MixedExecutionWitnessV1,
+    ) -> BlockValidityProof {
+        let mut proof = BlockValidityProof {
+            chain_id: block.header.chain_id,
+            height: block.header.height,
+            block_hash: header_hash(&block.header).unwrap(),
+            timestamp_ms: block.header.timestamp_ms,
+            parent_state_root: block.header.parent_state_root,
+            state_root: block.header.state_root,
+            tx_root: block.header.tx_root,
+            receipt_root: block.header.receipt_root,
+            native_event_root: block.header.native_event_root,
+            evm_log_root: block.header.evm_log_root,
+            gas_used: block.header.gas_used,
+            zone_namespace: block.header.zone_namespace,
+            da_root: block.header.da_root,
+            circuit_version: CircuitVersion::NativeStateTransitionV1,
+            coverage_manifest_digest: coverage_manifest_digest(
+                &coverage_manifest_for_circuit_version(CircuitVersion::NativeStateTransitionV1),
+            )
+            .unwrap(),
+            feature_set: block.header.feature_set,
+            proof_system: ValidityProofSystem::StwoPlonky2,
+            proof_bytes: Vec::new(),
+        };
+        let statement = native_state_transition_statement_v1(witness).unwrap();
+        proof.proof_bytes = borsh::to_vec(
+            &native_recursive_proof_envelope_v1(statement, &proof, [0x44; 32]).unwrap(),
+        )
+        .unwrap();
+        proof
+    }
+
+    fn mixed_transition_witness(mut witness: MixedExecutionWitnessV1) -> MixedExecutionWitnessV1 {
+        witness.public_inputs.circuit_version = CircuitVersion::MixedStateTransitionV1;
+        witness.public_inputs.coverage_manifest_digest = coverage_manifest_digest(
+            &coverage_manifest_for_circuit_version(CircuitVersion::MixedStateTransitionV1),
+        )
+        .unwrap();
+        witness
+    }
+
+    fn mixed_evm_zkvm_block_proof(
+        block: &Block,
+        witness: &MixedExecutionWitnessV1,
+    ) -> BlockValidityProof {
+        let mut proof = BlockValidityProof {
+            chain_id: block.header.chain_id,
+            height: block.header.height,
+            block_hash: header_hash(&block.header).unwrap(),
+            timestamp_ms: block.header.timestamp_ms,
+            parent_state_root: block.header.parent_state_root,
+            state_root: block.header.state_root,
+            tx_root: block.header.tx_root,
+            receipt_root: block.header.receipt_root,
+            native_event_root: block.header.native_event_root,
+            evm_log_root: block.header.evm_log_root,
+            gas_used: block.header.gas_used,
+            zone_namespace: block.header.zone_namespace,
+            da_root: block.header.da_root,
+            circuit_version: CircuitVersion::MixedStateTransitionV1,
+            coverage_manifest_digest: coverage_manifest_digest(
+                &coverage_manifest_for_circuit_version(CircuitVersion::MixedStateTransitionV1),
+            )
+            .unwrap(),
+            feature_set: block.header.feature_set,
+            proof_system: ValidityProofSystem::StwoPlonky2,
+            proof_bytes: Vec::new(),
+        };
+        proof.proof_bytes = borsh::to_vec(&evm_zkvm_proof_envelope_v1(witness).unwrap()).unwrap();
+        proof
+    }
+
+    fn mixed_aggregate_block_proof(
+        block: &Block,
+        witness: &MixedExecutionWitnessV1,
+    ) -> BlockValidityProof {
+        let mut proof = BlockValidityProof {
+            chain_id: block.header.chain_id,
+            height: block.header.height,
+            block_hash: header_hash(&block.header).unwrap(),
+            timestamp_ms: block.header.timestamp_ms,
+            parent_state_root: block.header.parent_state_root,
+            state_root: block.header.state_root,
+            tx_root: block.header.tx_root,
+            receipt_root: block.header.receipt_root,
+            native_event_root: block.header.native_event_root,
+            evm_log_root: block.header.evm_log_root,
+            gas_used: block.header.gas_used,
+            zone_namespace: block.header.zone_namespace,
+            da_root: block.header.da_root,
+            circuit_version: CircuitVersion::MixedStateTransitionV1,
+            coverage_manifest_digest: coverage_manifest_digest(
+                &coverage_manifest_for_circuit_version(CircuitVersion::MixedStateTransitionV1),
+            )
+            .unwrap(),
+            feature_set: block.header.feature_set,
+            proof_system: ValidityProofSystem::StwoPlonky2,
+            proof_bytes: Vec::new(),
+        };
+        proof.proof_bytes =
+            borsh::to_vec(&mixed_intrablock_aggregate_proof_envelope_v1(witness).unwrap()).unwrap();
+        proof
+    }
+
+    #[test]
+    fn phase_f_selects_risc_zero_revm_surface_and_budget() {
+        let surface = evm_zkvm_surface_v1();
+        assert_eq!(surface.zkvm_choice, ZkVmChoiceV1::RiscZeroRevmTransitionV1);
+        assert_eq!(surface.zkvm_target, "risc0-fractal-revm-transition-v1");
+        assert_eq!(surface.revm_crate_version, "38.0.0");
+        assert!(surface.covered_features.bits & FEATURE_EVM_TRANSFER != 0);
+        assert!(surface.covered_features.bits & FEATURE_EVM_CALL != 0);
+        assert!(surface.covered_features.bits & FEATURE_EVM_CREATE != 0);
+        assert!(surface.covered_features.bits & FEATURE_EVM_TO_NATIVE_PRECOMPILE != 0);
+        assert_eq!(surface.uncovered_features, ExecutionFeatureSetV1::empty());
+
+        let budget = evm_mixed_proving_budget_v1();
+        assert_eq!(budget.zkvm_choice, ZkVmChoiceV1::RiscZeroRevmTransitionV1);
+        assert_eq!(
+            budget.batching_mode,
+            MixedProofBatchingModeV1::BatchedFallback
+        );
+        assert!(budget.mixed_block_latency_target_ms > budget.native_block_latency_target_ms);
+        assert!(budget.max_proof_final_lag_ms >= budget.mixed_block_latency_target_ms);
+    }
+
+    #[test]
+    fn evm_zkvm_fixture_proves_revm_transition_surface() {
+        let signer = addr(0x81, 0x82);
+        let tx = Transaction {
+            signer,
+            nonce: 0,
+            vm: VmKind::Evm,
+            body: TxBody::Transfer {
+                to: [7u8; 20],
+                amount: 10,
+            },
+        };
+        let (block, witness) = build_replay_witness_for_txs(vec![tx], &[signer]);
+        let witness = mixed_transition_witness(witness);
+        let statement = evm_zkvm_transition_statement_v1(&witness).unwrap();
+        assert_eq!(
+            statement.zkvm_choice,
+            ZkVmChoiceV1::RiscZeroRevmTransitionV1
+        );
+        assert_eq!(
+            statement.public_input_digest,
+            keccak256(&borsh::to_vec(&witness.public_inputs).unwrap())
+        );
+        assert_eq!(
+            statement.witness_digest,
+            mixed_execution_witness_digest(&witness).unwrap()
+        );
+        assert_eq!(statement.unified_post_state_root, block.header.state_root);
+        assert_eq!(statement.evm_log_root, block.header.evm_log_root);
+        assert_eq!(statement.evm_trace_rows, 1);
+
+        let proof = mixed_evm_zkvm_block_proof(&block, &witness);
+        verify_block_validity_proof(&block, &proof).expect("mixed EVM zkVM fixture verifies");
+    }
+
+    #[test]
+    fn evm_zkvm_fixture_rejects_tampering_and_wrong_circuit() {
+        let signer = addr(0x83, 0x84);
+        let tx = Transaction {
+            signer,
+            nonce: 0,
+            vm: VmKind::Evm,
+            body: TxBody::Transfer {
+                to: [7u8; 20],
+                amount: 10,
+            },
+        };
+        let (block, witness) = build_replay_witness_for_txs(vec![tx], &[signer]);
+        let witness = mixed_transition_witness(witness);
+        let proof = mixed_evm_zkvm_block_proof(&block, &witness);
+
+        let mut envelope = StwoPlonky2ProofEnvelope::try_from_slice(&proof.proof_bytes).unwrap();
+        let StwoPlonky2ProofEnvelope::EvmZkVmFixtureV1 { fixture } = &mut envelope else {
+            panic!("evm zkvm fixture envelope");
+        };
+        fixture.statement.evm_log_root[0] ^= 0x01;
+        let mut tampered = proof.clone();
+        tampered.proof_bytes = borsh::to_vec(&envelope).unwrap();
+        assert!(matches!(
+            verify_block_validity_proof(&block, &tampered),
+            Err(ProofVerifyError::Production(
+                ProductionProofVerifyError::EvmZkVmFixture
+            ))
+        ));
+
+        let mut wrong_circuit = proof.clone();
+        wrong_circuit.circuit_version = CircuitVersion::DevMixedV1;
+        wrong_circuit.coverage_manifest_digest = coverage_manifest_digest(
+            &coverage_manifest_for_circuit_version(CircuitVersion::DevMixedV1),
+        )
+        .unwrap();
+        assert!(matches!(
+            verify_block_validity_proof(&block, &wrong_circuit),
+            Err(ProofVerifyError::Production(
+                ProductionProofVerifyError::MixedCircuitVersion
+            ))
+        ));
+    }
+
+    #[test]
+    fn mixed_aggregate_fixture_proves_native_and_evm_block() {
+        let native_signer = addr(0x85, 0x86);
+        let evm_signer = addr(0x87, 0x88);
+        let native_tx = Transaction {
+            signer: native_signer,
+            nonce: 0,
+            vm: VmKind::Native,
+            body: TxBody::Native(NativeCall::NoOp),
+        };
+        let evm_tx = Transaction {
+            signer: evm_signer,
+            nonce: 0,
+            vm: VmKind::Evm,
+            body: TxBody::Transfer {
+                to: [7u8; 20],
+                amount: 10,
+            },
+        };
+        let (block, witness) =
+            build_replay_witness_for_txs(vec![native_tx, evm_tx], &[native_signer, evm_signer]);
+        let witness = mixed_transition_witness(witness);
+        let fixture = mixed_intrablock_aggregate_fixture_v1(&witness).unwrap();
+        assert_eq!(
+            fixture.circuit_version,
+            CircuitVersion::MixedStateTransitionV1
+        );
+        assert_eq!(fixture.native_component_statement.native_trace_rows, 1);
+        assert_eq!(fixture.evm_zkvm_fixture.statement.evm_trace_rows, 1);
+        assert_eq!(
+            fixture.witness_digest,
+            mixed_execution_witness_digest(&witness).unwrap()
+        );
+
+        let proof = mixed_aggregate_block_proof(&block, &witness);
+        verify_block_validity_proof(&block, &proof).expect("mixed aggregate fixture verifies");
+    }
+
+    #[test]
+    fn mixed_aggregate_fixture_reflects_evm_to_native_precompile_dispatch() {
+        let signer = addr(0x89, 0x8a);
+        let tx = Transaction {
+            signer,
+            nonce: 0,
+            vm: VmKind::Evm,
+            body: TxBody::EvmCall {
+                to: addr(0xfc, 0x01),
+                value: 0,
+                calldata: borsh::to_vec(&NativeCall::NoOp).unwrap(),
+                gas_limit: 1_000_000,
+            },
+        };
+        let (block, witness) = build_replay_witness_for_txs(vec![tx], &[signer]);
+        let witness = mixed_transition_witness(witness);
+        let fixture = mixed_intrablock_aggregate_fixture_v1(&witness).unwrap();
+        assert_eq!(fixture.native_component_statement.native_trace_rows, 0);
+        assert_eq!(
+            fixture.native_component_statement.precompile_dispatch_rows,
+            1
+        );
+        assert_eq!(fixture.evm_zkvm_fixture.statement.evm_trace_rows, 1);
+        assert!(
+            fixture.native_component_statement.feature_set.bits & FEATURE_EVM_TO_NATIVE_PRECOMPILE
+                != 0
+        );
+        assert_eq!(
+            fixture.native_component_statement.public_input_digest,
+            fixture.evm_zkvm_fixture.statement.public_input_digest
+        );
+        assert_eq!(
+            fixture.native_component_statement.witness_digest,
+            fixture.evm_zkvm_fixture.statement.witness_digest
+        );
+
+        let proof = mixed_aggregate_block_proof(&block, &witness);
+        verify_block_validity_proof(&block, &proof)
+            .expect("mixed aggregate precompile fixture verifies");
+    }
+
+    #[test]
+    fn mixed_aggregate_fixture_rejects_component_tampering() {
+        let native_signer = addr(0x8b, 0x8c);
+        let evm_signer = addr(0x8d, 0x8e);
+        let native_tx = Transaction {
+            signer: native_signer,
+            nonce: 0,
+            vm: VmKind::Native,
+            body: TxBody::Native(NativeCall::NoOp),
+        };
+        let evm_tx = Transaction {
+            signer: evm_signer,
+            nonce: 0,
+            vm: VmKind::Evm,
+            body: TxBody::Transfer {
+                to: [7u8; 20],
+                amount: 10,
+            },
+        };
+        let (block, witness) =
+            build_replay_witness_for_txs(vec![native_tx, evm_tx], &[native_signer, evm_signer]);
+        let witness = mixed_transition_witness(witness);
+        let proof = mixed_aggregate_block_proof(&block, &witness);
+        let mut envelope = StwoPlonky2ProofEnvelope::try_from_slice(&proof.proof_bytes).unwrap();
+        let StwoPlonky2ProofEnvelope::MixedIntraBlockAggregateFixtureV1 { fixture } = &mut envelope
+        else {
+            panic!("mixed aggregate fixture envelope");
+        };
+        fixture.native_component_statement.native_trace_root[0] ^= 0x01;
+        let mut tampered = proof.clone();
+        tampered.proof_bytes = borsh::to_vec(&envelope).unwrap();
+        assert!(matches!(
+            verify_block_validity_proof(&block, &tampered),
+            Err(ProofVerifyError::Production(
+                ProductionProofVerifyError::MixedAggregateFixture
+            ))
+        ));
+    }
+
+    fn science_receipt(id: u8, requester: [u8; 20]) -> OnChainTaskReceipt {
+        OnChainTaskReceipt {
+            receipt_id: [id; 32],
+            job_id: [id.saturating_add(1); 32],
+            requester,
+            worker: 1,
+            verifier: 2,
+            artifact_root: [id.saturating_add(2); 32],
+            output_hash: [id.saturating_add(3); 32],
+            score: 97,
+            payout_amount: 250,
+            verifier_fee: 5,
+            protocol_fee: 2,
+            final_status: 1,
+            finalized_at: 1_000,
+            schema_version: 1,
+        }
+    }
+
+    #[test]
+    fn native_state_transition_air_fixture_proves_native_science_work_block() {
+        let signer = addr(0x33, 0x44);
+        let receipt = science_receipt(0x51, signer);
+        let payout = PayoutEntry {
+            index: 0,
+            account: signer,
+            amount: 250,
+        };
+        let batch = SettleBatchPayload {
+            batch_id: [0x71; 32],
+            operator: signer,
+            receipts: vec![receipt.clone()],
+            payout_entries: vec![payout.clone()],
+            submitted_at: 1_001,
+            operator_sig: [0u8; 64],
+        };
+        let txs = vec![
+            Transaction {
+                signer,
+                nonce: 0,
+                vm: VmKind::Native,
+                body: TxBody::Native(NativeCall::RegisterAgent {
+                    operator: signer,
+                    pubkey: [0x11; 32],
+                    kind: 1,
+                    metadata_uri: "science://dataset/register".to_owned(),
+                }),
+            },
+            Transaction {
+                signer,
+                nonce: 1,
+                vm: VmKind::Native,
+                body: TxBody::Native(NativeCall::WalletTaskReceiptAnchorV1 {
+                    commitment: [0x61; 32],
+                    receipt_witness: Vec::new(),
+                }),
+            },
+            Transaction {
+                signer,
+                nonce: 2,
+                vm: VmKind::Native,
+                body: TxBody::Native(NativeCall::SettleBatch(batch)),
+            },
+            Transaction {
+                signer,
+                nonce: 3,
+                vm: VmKind::Native,
+                body: TxBody::Native(NativeCall::ClaimPayout {
+                    batch_id: [0x71; 32],
+                    account: signer,
+                    amount: payout.amount,
+                    leaf_index: payout.index,
+                    proof: Vec::new(),
+                }),
+            },
+        ];
+        let (block, witness) = build_replay_witness_for_txs(txs, &[signer]);
+        let witness = native_transition_witness(witness);
+
+        assert!(block.header.feature_set.contains_only(
+            coverage_manifest_for_circuit_version(CircuitVersion::NativeStateTransitionV1)
+                .covered_features
+        ));
+        let columns = native_state_transition_trace_columns_v1(&witness).unwrap();
+        assert_eq!(columns.len(), 4);
+        assert_eq!(columns[0].columns[1], 0x01);
+        assert_eq!(columns[1].columns[1], 0x0e);
+        assert_eq!(columns[2].columns[1], 0x05);
+        assert_eq!(columns[3].columns[1], 0x06);
+
+        let statement = native_state_transition_statement_v1(&witness).unwrap();
+        assert_eq!(statement.trace_rows, 4);
+        assert_eq!(statement.gas_used, block.header.gas_used);
+        assert_eq!(statement.receipt_root, block.header.receipt_root);
+        assert_eq!(statement.native_event_root, block.header.native_event_root);
+        assert_eq!(
+            statement.witness_digest,
+            mixed_execution_witness_digest(&witness).unwrap()
+        );
+        assert_ne!(statement.fiat_shamir_transcript_digest, [0u8; 32]);
+        assert_ne!(statement.native_subtrie_access_digest, [0u8; 32]);
+
+        let fixture = prove_native_state_transition_fixture_v1(&witness).unwrap();
+        verify_native_state_transition_fixture_v1(&fixture, &witness).unwrap();
+    }
+
+    #[test]
+    fn native_state_transition_air_rejects_evm_execution_and_dispatch_rows() {
+        let signer = addr(0x55, 0x66);
+        let evm_tx = Transaction {
+            signer,
+            nonce: 0,
+            vm: VmKind::Evm,
+            body: TxBody::Transfer {
+                to: [7u8; 20],
+                amount: 10,
+            },
+        };
+        let (_, witness) = build_replay_witness_for_txs(vec![evm_tx], &[signer]);
+        let witness = native_transition_witness(witness);
+        assert!(matches!(
+            native_state_transition_statement_v1(&witness),
+            Err(NativeStateTransitionAirError::EvmExecutionPresent)
+        ));
+
+        let precompile_tx = Transaction {
+            signer,
+            nonce: 0,
+            vm: VmKind::Evm,
+            body: TxBody::EvmCall {
+                to: addr(0xfc, 0x01),
+                value: 0,
+                calldata: borsh::to_vec(&NativeCall::NoOp).unwrap(),
+                gas_limit: 1_000_000,
+            },
+        };
+        let (_, witness) = build_replay_witness_for_txs(vec![precompile_tx], &[signer]);
+        let witness = native_transition_witness(witness);
+        assert!(matches!(
+            native_state_transition_statement_v1(&witness),
+            Err(NativeStateTransitionAirError::EvmExecutionPresent)
+                | Err(NativeStateTransitionAirError::PrecompileDispatchPresent)
+        ));
+    }
+
+    #[test]
+    fn native_recursive_fixture_verifies_and_rejects_mismatches() {
+        let signer = addr(0x71, 0x72);
+        let tx = Transaction {
+            signer,
+            nonce: 0,
+            vm: VmKind::Native,
+            body: TxBody::Native(NativeCall::NoOp),
+        };
+        let (block, witness) = build_replay_witness_for_txs(vec![tx], &[signer]);
+        let witness = native_transition_witness(witness);
+        let proof = native_recursive_block_proof(&block, &witness);
+
+        verify_block_validity_proof(&block, &proof).expect("native recursive fixture verifies");
+
+        let mut envelope = StwoPlonky2ProofEnvelope::try_from_slice(&proof.proof_bytes).unwrap();
+        let StwoPlonky2ProofEnvelope::NativeRecursiveFixtureV1 { statement, .. } = &mut envelope
+        else {
+            panic!("native recursive fixture envelope");
+        };
+        statement.public_input_digest[0] ^= 0x01;
+        let mut tampered = proof.clone();
+        tampered.proof_bytes = borsh::to_vec(&envelope).unwrap();
+        assert!(matches!(
+            verify_block_validity_proof(&block, &tampered),
+            Err(ProofVerifyError::Production(
+                ProductionProofVerifyError::NativeRecursiveFixture
+            ))
+        ));
+
+        let mut stale = proof.clone();
+        stale.circuit_version = CircuitVersion::DevMixedV1;
+        stale.coverage_manifest_digest = coverage_manifest_digest(
+            &coverage_manifest_for_circuit_version(CircuitVersion::DevMixedV1),
+        )
+        .unwrap();
+        let statement = native_state_transition_statement_v1(&witness).unwrap();
+        stale.proof_bytes = borsh::to_vec(
+            &native_recursive_proof_envelope_v1(statement, &stale, [0x44; 32]).unwrap(),
+        )
+        .unwrap();
+        assert!(matches!(
+            verify_block_validity_proof(&block, &stale),
+            Err(ProofVerifyError::Production(
+                ProductionProofVerifyError::NativeRecursiveFixture
+            ))
+        ));
+    }
+
+    #[test]
+    fn native_recursive_fixture_rejects_evm_containing_block_under_native_coverage() {
+        let signer = addr(0x73, 0x74);
+        let tx = Transaction {
+            signer,
+            nonce: 0,
+            vm: VmKind::Evm,
+            body: TxBody::Transfer {
+                to: [7u8; 20],
+                amount: 10,
+            },
+        };
+        let (block, _) = build_replay_witness_for_txs(vec![tx], &[signer]);
+        let proof = BlockValidityProof {
+            chain_id: block.header.chain_id,
+            height: block.header.height,
+            block_hash: header_hash(&block.header).unwrap(),
+            timestamp_ms: block.header.timestamp_ms,
+            parent_state_root: block.header.parent_state_root,
+            state_root: block.header.state_root,
+            tx_root: block.header.tx_root,
+            receipt_root: block.header.receipt_root,
+            native_event_root: block.header.native_event_root,
+            evm_log_root: block.header.evm_log_root,
+            gas_used: block.header.gas_used,
+            zone_namespace: block.header.zone_namespace,
+            da_root: block.header.da_root,
+            circuit_version: CircuitVersion::NativeStateTransitionV1,
+            coverage_manifest_digest: coverage_manifest_digest(
+                &coverage_manifest_for_circuit_version(CircuitVersion::NativeStateTransitionV1),
+            )
+            .unwrap(),
+            feature_set: block.header.feature_set,
+            proof_system: ValidityProofSystem::StwoPlonky2,
+            proof_bytes: vec![1],
+        };
+        assert!(matches!(
+            verify_block_validity_proof(&block, &proof),
+            Err(ProofVerifyError::CircuitCoverage)
+        ));
+    }
+
+    #[test]
+    fn native_inter_block_chain_enforces_post_to_parent_state_root() {
+        let signer = addr(0x75, 0x76);
+        let mut pre_state = state_with_accounts(&[signer]);
+        let block1_pre = pre_state.clone();
+        let tx1 = Transaction {
+            signer,
+            nonce: 0,
+            vm: VmKind::Native,
+            body: TxBody::Native(NativeCall::NoOp),
+        };
+        let block1 = execute_and_build_block(
+            41,
+            1,
+            0,
+            [7u8; 32],
+            [0u8; 32],
+            [0u8; 32],
+            1_000,
+            60_000_000,
+            &mut pre_state,
+            vec![tx1],
+            eth_signed_raws_for_txs(1),
+        )
+        .unwrap();
+        let block2_pre = pre_state.clone();
+        let tx2 = Transaction {
+            signer,
+            nonce: 1,
+            vm: VmKind::Native,
+            body: TxBody::Native(NativeCall::NoOp),
+        };
+        let block2 = execute_and_build_block(
+            41,
+            2,
+            0,
+            header_hash(&block1.header).unwrap(),
+            [0u8; 32],
+            [0u8; 32],
+            2_000,
+            60_000_000,
+            &mut pre_state,
+            vec![tx2],
+            eth_signed_raws_for_txs(1),
+        )
+        .unwrap();
+        let witness1 = native_transition_witness(
+            mixed_execution_witness_from_replay(&block1, &block1_pre).unwrap(),
+        );
+        let witness2 = native_transition_witness(
+            mixed_execution_witness_from_replay(&block2, &block2_pre).unwrap(),
+        );
+        let proof1 = native_recursive_block_proof(&block1, &witness1);
+        let proof2 = native_recursive_block_proof(&block2, &witness2);
+
+        verify_native_inter_block_chain_v1(&proof1, &proof2).expect("linked native proofs");
+        let mut broken = proof2.clone();
+        broken.parent_state_root = [9u8; 32];
+        assert!(matches!(
+            verify_native_inter_block_chain_v1(&proof1, &broken),
+            Err(ProductionProofVerifyError::NativeInterBlockChain)
+        ));
+    }
+
+    fn state_with_accounts(addresses: &[[u8; 20]]) -> State {
+        let mut st = State::default();
+        for address in addresses {
+            st.accounts.insert(
+                *address,
+                Account {
+                    nonce: 0,
+                    balance: 1_000_000,
+                },
+            );
+        }
+        st
+    }
+
+    fn build_replay_witness_for_txs(
+        txs: Vec<Transaction>,
+        signers: &[[u8; 20]],
+    ) -> (Block, MixedExecutionWitnessV1) {
+        let pre_state = state_with_accounts(signers);
+        let mut execution_state = pre_state.clone();
+        let tx_count = txs.len();
+        let block = execute_and_build_block(
+            41,
+            1,
+            0,
+            [7u8; 32],
+            [0u8; 32],
+            [0u8; 32],
+            1_000,
+            60_000_000,
+            &mut execution_state,
+            txs,
+            eth_signed_raws_for_txs(tx_count),
+        )
+        .unwrap();
+        let witness = mixed_execution_witness_from_replay(&block, &pre_state).unwrap();
+        (block, witness)
+    }
+
+    #[test]
+    fn replaying_same_block_produces_identical_witness_digest() {
+        let signer = [9u8; 20];
+        let tx = Transaction {
+            signer,
+            nonce: 0,
+            vm: VmKind::Native,
+            body: TxBody::Native(NativeCall::NoOp),
+        };
+        let pre_state = state_with_accounts(&[signer]);
+        let mut execution_state = pre_state.clone();
+        let block = execute_and_build_block(
+            41,
+            1,
+            0,
+            [7u8; 32],
+            [0u8; 32],
+            [0u8; 32],
+            1_000,
+            60_000_000,
+            &mut execution_state,
+            vec![tx],
+            eth_signed_raws_for_txs(1),
+        )
+        .unwrap();
+
+        let a = mixed_execution_witness_from_replay(&block, &pre_state).unwrap();
+        let b = mixed_execution_witness_from_replay(&block, &pre_state).unwrap();
+        assert_eq!(borsh::to_vec(&a).unwrap(), borsh::to_vec(&b).unwrap());
+        assert_eq!(
+            mixed_execution_witness_digest(&a).unwrap(),
+            mixed_execution_witness_digest(&b).unwrap()
+        );
+    }
+
+    #[test]
+    fn transaction_reordering_changes_witness_digest() {
+        let native_signer = [9u8; 20];
+        let evm_signer = [8u8; 20];
+        let native_tx = Transaction {
+            signer: native_signer,
+            nonce: 0,
+            vm: VmKind::Native,
+            body: TxBody::Native(NativeCall::NoOp),
+        };
+        let evm_tx = Transaction {
+            signer: evm_signer,
+            nonce: 0,
+            vm: VmKind::Evm,
+            body: TxBody::Transfer {
+                to: [7u8; 20],
+                amount: 10,
+            },
+        };
+        let signers = [native_signer, evm_signer];
+        let (_, ordered) =
+            build_replay_witness_for_txs(vec![native_tx.clone(), evm_tx.clone()], &signers);
+        let (_, reordered) = build_replay_witness_for_txs(vec![evm_tx, native_tx], &signers);
+
+        assert_ne!(
+            mixed_execution_witness_digest(&ordered).unwrap(),
+            mixed_execution_witness_digest(&reordered).unwrap()
+        );
+    }
+
+    #[test]
+    fn native_evm_and_mixed_blocks_produce_valid_witness_shapes() {
+        let native_signer = [9u8; 20];
+        let evm_signer = [8u8; 20];
+        let native_tx = Transaction {
+            signer: native_signer,
+            nonce: 0,
+            vm: VmKind::Native,
+            body: TxBody::Native(NativeCall::NoOp),
+        };
+        let evm_tx = Transaction {
+            signer: evm_signer,
+            nonce: 0,
+            vm: VmKind::Evm,
+            body: TxBody::Transfer {
+                to: [7u8; 20],
+                amount: 10,
+            },
+        };
+
+        let (native_block, native_witness) =
+            build_replay_witness_for_txs(vec![native_tx.clone()], &[native_signer]);
+        assert!(native_block.header.feature_set.contains_only(
+            coverage_manifest_for_circuit_version(CircuitVersion::NativeStateTransitionV1)
+                .covered_features
+        ));
+        assert_eq!(native_witness.transactions.len(), 1);
+        assert_eq!(native_witness.tx_receipts.len(), 1);
+        assert_eq!(
+            native_witness.public_inputs.feature_set,
+            native_block.header.feature_set
+        );
+
+        let (evm_block, evm_witness) =
+            build_replay_witness_for_txs(vec![evm_tx.clone()], &[evm_signer]);
+        assert!(evm_block.header.feature_set.bits & FEATURE_EVM_TRANSFER != 0);
+        assert_eq!(evm_witness.transactions.len(), 1);
+        assert_eq!(evm_witness.tx_receipts.len(), 1);
+
+        let (mixed_block, mixed_witness) =
+            build_replay_witness_for_txs(vec![native_tx, evm_tx], &[native_signer, evm_signer]);
+        assert!(mixed_block.header.feature_set.bits & FEATURE_NATIVE_TX != 0);
+        assert!(mixed_block.header.feature_set.bits & FEATURE_EVM_TRANSFER != 0);
+        assert_eq!(mixed_witness.transactions.len(), 2);
+        assert_eq!(mixed_witness.tx_receipts.len(), 2);
+        assert_eq!(
+            mixed_execution_witness_metadata(
+                &mixed_witness,
+                WitnessRetentionPolicyV1::MetadataOnly
+            )
+            .unwrap()
+            .witness_digest,
+            mixed_execution_witness_digest(&mixed_witness).unwrap()
+        );
+    }
+
+    #[test]
+    fn dev_digest_proof_rejects_timestamp_mismatch() {
+        let mut st = State::default();
+        let block = execute_and_build_block(
+            41,
+            1,
+            0,
+            [7u8; 32],
+            [0u8; 32],
+            [0u8; 32],
+            1_000,
+            60_000_000,
+            &mut st,
+            Vec::new(),
+            eth_signed_raws_for_txs(0),
+        )
+        .unwrap();
+        let mut proof = BlockValidityProof {
+            chain_id: block.header.chain_id,
+            height: block.header.height,
+            block_hash: header_hash(&block.header).unwrap(),
+            timestamp_ms: block.header.timestamp_ms + 1,
+            parent_state_root: block.header.parent_state_root,
+            state_root: block.header.state_root,
+            tx_root: block.header.tx_root,
+            receipt_root: block.header.receipt_root,
+            native_event_root: block.header.native_event_root,
+            evm_log_root: block.header.evm_log_root,
+            gas_used: block.header.gas_used,
+            zone_namespace: block.header.zone_namespace,
+            da_root: block.header.da_root,
+            circuit_version: CircuitVersion::DevMixedV1,
+            coverage_manifest_digest: coverage_manifest_digest(
+                &coverage_manifest_for_circuit_version(CircuitVersion::DevMixedV1),
+            )
+            .unwrap(),
+            feature_set: block.header.feature_set,
+            proof_system: ValidityProofSystem::DevDigest,
+            proof_bytes: Vec::new(),
+        };
+        proof.proof_bytes = validity_proof_public_input_digest(&proof).unwrap().to_vec();
+
+        assert!(matches!(
+            verify_block_validity_proof(&block, &proof),
+            Err(ProofVerifyError::Timestamp)
+        ));
+    }
+
+    #[test]
+    fn native_circuit_coverage_rejects_evm_feature_set() {
+        let mut st = State::default();
+        let signer = [8u8; 20];
+        st.accounts.insert(
+            signer,
+            Account {
+                nonce: 0,
+                balance: 1_000_000,
+            },
+        );
+        let tx = Transaction {
+            signer,
+            nonce: 0,
+            vm: VmKind::Evm,
+            body: TxBody::Transfer {
+                to: [7u8; 20],
+                amount: 10,
+            },
+        };
+        let block = execute_and_build_block(
+            41,
+            1,
+            0,
+            [7u8; 32],
+            [0u8; 32],
+            [0u8; 32],
+            1_000,
+            60_000_000,
+            &mut st,
+            vec![tx],
+            eth_signed_raws_for_txs(1),
+        )
+        .unwrap();
+        assert!(!block.header.feature_set.contains_only(
+            coverage_manifest_for_circuit_version(CircuitVersion::NativeStateTransitionV1)
+                .covered_features
+        ));
+
+        let mut proof = BlockValidityProof {
+            chain_id: block.header.chain_id,
+            height: block.header.height,
+            block_hash: header_hash(&block.header).unwrap(),
+            timestamp_ms: block.header.timestamp_ms,
+            parent_state_root: block.header.parent_state_root,
+            state_root: block.header.state_root,
+            tx_root: block.header.tx_root,
+            receipt_root: block.header.receipt_root,
+            native_event_root: block.header.native_event_root,
+            evm_log_root: block.header.evm_log_root,
+            gas_used: block.header.gas_used,
+            zone_namespace: block.header.zone_namespace,
+            da_root: block.header.da_root,
+            circuit_version: CircuitVersion::NativeStateTransitionV1,
+            coverage_manifest_digest: coverage_manifest_digest(
+                &coverage_manifest_for_circuit_version(CircuitVersion::NativeStateTransitionV1),
+            )
+            .unwrap(),
+            feature_set: block.header.feature_set,
+            proof_system: ValidityProofSystem::DevDigest,
+            proof_bytes: Vec::new(),
+        };
+        proof.proof_bytes = validity_proof_public_input_digest(&proof).unwrap().to_vec();
+
+        assert!(matches!(
+            verify_block_validity_proof(&block, &proof),
+            Err(ProofVerifyError::CircuitCoverage)
+        ));
     }
 
     #[test]
@@ -826,10 +3191,22 @@ mod tests {
             chain_id: block.header.chain_id,
             height: block.header.height,
             block_hash: header_hash(&block.header).unwrap(),
+            timestamp_ms: block.header.timestamp_ms,
+            parent_state_root: block.header.parent_state_root,
             state_root: block.header.state_root,
             tx_root: block.header.tx_root,
+            receipt_root: block.header.receipt_root,
+            native_event_root: block.header.native_event_root,
+            evm_log_root: block.header.evm_log_root,
+            gas_used: block.header.gas_used,
             zone_namespace: block.header.zone_namespace,
             da_root: block.header.da_root,
+            circuit_version: CircuitVersion::DevMixedV1,
+            coverage_manifest_digest: coverage_manifest_digest(
+                &coverage_manifest_for_circuit_version(CircuitVersion::DevMixedV1),
+            )
+            .unwrap(),
+            feature_set: block.header.feature_set,
             proof_system: ValidityProofSystem::StwoPlonky2,
             proof_bytes: vec![1, 2, 3],
         };
@@ -863,10 +3240,22 @@ mod tests {
             chain_id: block.header.chain_id,
             height: block.header.height,
             block_hash: header_hash(&block.header).unwrap(),
+            timestamp_ms: block.header.timestamp_ms,
+            parent_state_root: block.header.parent_state_root,
             state_root: block.header.state_root,
             tx_root: block.header.tx_root,
+            receipt_root: block.header.receipt_root,
+            native_event_root: block.header.native_event_root,
+            evm_log_root: block.header.evm_log_root,
+            gas_used: block.header.gas_used,
             zone_namespace: block.header.zone_namespace,
             da_root: block.header.da_root,
+            circuit_version: CircuitVersion::DevMixedV1,
+            coverage_manifest_digest: coverage_manifest_digest(
+                &coverage_manifest_for_circuit_version(CircuitVersion::DevMixedV1),
+            )
+            .unwrap(),
+            feature_set: block.header.feature_set,
             proof_system: ValidityProofSystem::StwoPlonky2,
             proof_bytes: borsh::to_vec(&StwoPlonky2ProofEnvelope::Plonky2PoseidonGoldilocksV1 {
                 verifier_circuit_data: vec![9, 9, 9],
@@ -905,10 +3294,22 @@ mod tests {
             chain_id: block.header.chain_id,
             height: block.header.height,
             block_hash: header_hash(&block.header).unwrap(),
+            timestamp_ms: block.header.timestamp_ms,
+            parent_state_root: block.header.parent_state_root,
             state_root: block.header.state_root,
             tx_root: block.header.tx_root,
+            receipt_root: block.header.receipt_root,
+            native_event_root: block.header.native_event_root,
+            evm_log_root: block.header.evm_log_root,
+            gas_used: block.header.gas_used,
             zone_namespace: block.header.zone_namespace,
             da_root: block.header.da_root,
+            circuit_version: CircuitVersion::DevMixedV1,
+            coverage_manifest_digest: coverage_manifest_digest(
+                &coverage_manifest_for_circuit_version(CircuitVersion::DevMixedV1),
+            )
+            .unwrap(),
+            feature_set: block.header.feature_set,
             proof_system: ValidityProofSystem::StwoPlonky2,
             proof_bytes: vec![1],
         };
@@ -950,10 +3351,22 @@ mod tests {
             chain_id: block.header.chain_id,
             height: block.header.height,
             block_hash: header_hash(&block.header).unwrap(),
+            timestamp_ms: block.header.timestamp_ms,
+            parent_state_root: block.header.parent_state_root,
             state_root: block.header.state_root,
             tx_root: block.header.tx_root,
+            receipt_root: block.header.receipt_root,
+            native_event_root: block.header.native_event_root,
+            evm_log_root: block.header.evm_log_root,
+            gas_used: block.header.gas_used,
             zone_namespace: block.header.zone_namespace,
             da_root: block.header.da_root,
+            circuit_version: CircuitVersion::DevMixedV1,
+            coverage_manifest_digest: coverage_manifest_digest(
+                &coverage_manifest_for_circuit_version(CircuitVersion::DevMixedV1),
+            )
+            .unwrap(),
+            feature_set: block.header.feature_set,
             proof_system: ValidityProofSystem::StwoPlonky2,
             proof_bytes: Vec::new(),
         };
@@ -995,10 +3408,22 @@ mod tests {
             chain_id: block.header.chain_id,
             height: block.header.height,
             block_hash: header_hash(&block.header).unwrap(),
+            timestamp_ms: block.header.timestamp_ms,
+            parent_state_root: block.header.parent_state_root,
             state_root: block.header.state_root,
             tx_root: block.header.tx_root,
+            receipt_root: block.header.receipt_root,
+            native_event_root: block.header.native_event_root,
+            evm_log_root: block.header.evm_log_root,
+            gas_used: block.header.gas_used,
             zone_namespace: block.header.zone_namespace,
             da_root: block.header.da_root,
+            circuit_version: CircuitVersion::DevMixedV1,
+            coverage_manifest_digest: coverage_manifest_digest(
+                &coverage_manifest_for_circuit_version(CircuitVersion::DevMixedV1),
+            )
+            .unwrap(),
+            feature_set: block.header.feature_set,
             proof_system: ValidityProofSystem::StwoPlonky2,
             proof_bytes: Vec::new(),
         };
@@ -1049,10 +3474,22 @@ mod tests {
             chain_id: block.header.chain_id,
             height: block.header.height,
             block_hash: header_hash(&block.header).unwrap(),
+            timestamp_ms: block.header.timestamp_ms,
+            parent_state_root: block.header.parent_state_root,
             state_root: [9u8; 32],
             tx_root: block.header.tx_root,
+            receipt_root: block.header.receipt_root,
+            native_event_root: block.header.native_event_root,
+            evm_log_root: block.header.evm_log_root,
+            gas_used: block.header.gas_used,
             zone_namespace: block.header.zone_namespace,
             da_root: block.header.da_root,
+            circuit_version: CircuitVersion::DevMixedV1,
+            coverage_manifest_digest: coverage_manifest_digest(
+                &coverage_manifest_for_circuit_version(CircuitVersion::DevMixedV1),
+            )
+            .unwrap(),
+            feature_set: block.header.feature_set,
             proof_system: ValidityProofSystem::DevDigest,
             proof_bytes: vec![1],
         };
@@ -1318,10 +3755,22 @@ mod tests {
             chain_id: block.header.chain_id,
             height: block.header.height,
             block_hash: header_hash(&block.header).unwrap(),
+            timestamp_ms: block.header.timestamp_ms,
+            parent_state_root: block.header.parent_state_root,
             state_root: block.header.state_root,
             tx_root: block.header.tx_root,
+            receipt_root: block.header.receipt_root,
+            native_event_root: block.header.native_event_root,
+            evm_log_root: block.header.evm_log_root,
+            gas_used: block.header.gas_used,
             zone_namespace: block.header.zone_namespace,
             da_root: [9u8; 32],
+            circuit_version: CircuitVersion::DevMixedV1,
+            coverage_manifest_digest: coverage_manifest_digest(
+                &coverage_manifest_for_circuit_version(CircuitVersion::DevMixedV1),
+            )
+            .unwrap(),
+            feature_set: block.header.feature_set,
             proof_system: ValidityProofSystem::DevDigest,
             proof_bytes: vec![1],
         };
@@ -1354,10 +3803,22 @@ mod tests {
             chain_id: block.header.chain_id,
             height: block.header.height,
             block_hash: header_hash(&block.header).unwrap(),
+            timestamp_ms: block.header.timestamp_ms,
+            parent_state_root: block.header.parent_state_root,
             state_root: block.header.state_root,
             tx_root: block.header.tx_root,
+            receipt_root: block.header.receipt_root,
+            native_event_root: block.header.native_event_root,
+            evm_log_root: block.header.evm_log_root,
+            gas_used: block.header.gas_used,
             zone_namespace: *b"zone0002",
             da_root: block.header.da_root,
+            circuit_version: CircuitVersion::DevMixedV1,
+            coverage_manifest_digest: coverage_manifest_digest(
+                &coverage_manifest_for_circuit_version(CircuitVersion::DevMixedV1),
+            )
+            .unwrap(),
+            feature_set: block.header.feature_set,
             proof_system: ValidityProofSystem::DevDigest,
             proof_bytes: vec![1],
         };

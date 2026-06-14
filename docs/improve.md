@@ -335,12 +335,12 @@ owned-object transition.
 - [x] Define zone registry state.
 - [x] Add zone creation transaction.
 - [x] Add zone metadata: proof system, DA namespace, sequencer policy, forced-inclusion policy.
-- [ ] Define zone block/header commitment.
+- [x] Define zone block/header commitment.
 - [x] Define zone state root and message root.
 - [x] Add zone proof submission.
-- [ ] Add zone proof verification against the masterchain.
+- [x] Add zone proof verification against the masterchain.
 - [x] Add async message envelope.
-- [ ] Add cross-zone message inclusion proof format.
+- [x] Add cross-zone message inclusion proof format.
 - [x] Add forced-inclusion queue.
 - [x] Add forced-inclusion timeout/SLA rule.
 - [x] Add tests for zone creation and proof-final zone updates.
@@ -349,16 +349,16 @@ owned-object transition.
 
 ### Phase F: Production Hardening and Rollout
 
-- [ ] Add operator documentation for soft finality versus proof finality.
-- [ ] Update explorer UI/API to show finality status clearly.
-- [ ] Update SDKs to expose finality status.
-- [ ] Add wallet warning for high-value actions that are only soft-final.
-- [ ] Add benchmark for proof latency and prover cost.
-- [ ] Add benchmark for owned-object certificate throughput.
-- [ ] Add benchmark for DA sampling bandwidth.
-- [ ] Add economics model for prover rewards.
-- [ ] Add economics model for sequencer rewards and forced-inclusion penalties.
-- [ ] Add governance/config parameters for enabling each phase.
+- [x] Add operator documentation for soft finality versus proof finality.
+- [x] Update explorer UI/API to show finality status clearly.
+- [x] Update SDKs to expose finality status.
+- [x] Add wallet warning for high-value actions that are only soft-final.
+- [x] Add benchmark for proof latency and prover cost.
+- [x] Add benchmark for owned-object certificate throughput.
+- [x] Add benchmark for DA sampling bandwidth.
+- [x] Add economics model for prover rewards.
+- [x] Add economics model for sequencer rewards and forced-inclusion penalties.
+- [x] Add governance/config parameters for enabling each phase.
 
 ## Expected Impact
 
@@ -399,4 +399,7 @@ Liveness and censorship resistance still require careful sequencer/forced-inclus
 - What stake/slash ratio is required for conflicting owned-object certificates?
 - Which DA construction will be used for the first sampled prototype?
 - What is the minimum forced-inclusion SLA per zone?
-- Which state transition circuits are proved first: native-only, EVM-only, or mixed?
+- Mixed native+EVM state transition proving is the product path. See
+  `docs/mixed-state-transition-prd.md` for the implementation checklist. A
+  native-only circuit may be used as a development fixture, but it must not grant
+  production settlement finality for blocks that can include EVM execution.

@@ -16,6 +16,7 @@ async fn indexer_status_query() {
         hash: "0xb".into(),
         timestamp_ms: 0,
         tx_count: 0,
+        finality_status: "unknown".into(),
     })
     .unwrap();
     db.insert_tx(

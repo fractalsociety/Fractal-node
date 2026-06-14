@@ -17,6 +17,7 @@ async fn explorer_api_blocks_and_search() {
         hash: "0xblock12".into(),
         timestamp_ms: 1_700_000_000_000,
         tx_count: 1,
+        finality_status: "soft".into(),
     })
     .unwrap();
     db.insert_tx(
@@ -52,6 +53,11 @@ async fn explorer_api_blocks_and_search() {
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let blocks: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(blocks[0]["finality_status"], "soft");
 
     let resp = app
         .clone()

@@ -20,6 +20,12 @@
       --link-hover: #1e40af;
       --err: #b91c1c;
       --pre-bg: #f1f5f9;
+      --proof-bg: #dcfce7;
+      --proof-fg: #166534;
+      --soft-bg: #fef3c7;
+      --soft-fg: #92400e;
+      --unknown-bg: #e2e8f0;
+      --unknown-fg: #334155;
     }
     @media (prefers-color-scheme: dark) {
       :root {
@@ -36,6 +42,12 @@
         --link-hover: #bfdbfe;
         --err: #f87171;
         --pre-bg: #1e293b;
+        --proof-bg: #14532d;
+        --proof-fg: #bbf7d0;
+        --soft-bg: #78350f;
+        --soft-fg: #fde68a;
+        --unknown-bg: #334155;
+        --unknown-fg: #cbd5e1;
       }
     }
     body {
@@ -129,6 +141,27 @@
       font-size: 0.8rem;
       border: 1px solid var(--border);
     }
+    .finality-badge {
+      display: inline-block;
+      padding: 0.12rem 0.45rem;
+      border-radius: 999px;
+      font-size: 0.76rem;
+      font-weight: 700;
+      white-space: nowrap;
+      border: 1px solid var(--border);
+    }
+    .finality-proof {
+      background: var(--proof-bg);
+      color: var(--proof-fg);
+    }
+    .finality-soft {
+      background: var(--soft-bg);
+      color: var(--soft-fg);
+    }
+    .finality-unknown {
+      background: var(--unknown-bg);
+      color: var(--unknown-fg);
+    }
     tr.block-row { cursor: pointer; }
     tr.block-row:hover { background: var(--row-hover); }
     tr.block-row:hover td { color: var(--fg); }
@@ -204,7 +237,7 @@
   <div id="summary"></div>
 
   <h2>Recent blocks</h2>
-  <p class="muted">Up to 10 blocks ending at head — <strong>click a row</strong> to list transaction hashes in that block.</p>
+  <p class="muted">Up to 10 blocks ending at head — finality is <strong>Soft-final</strong> until the settlement proof is accepted, then <strong>Proof-final</strong>. Click a row to list transaction hashes.</p>
   <div id="blocks"></div>
   <div id="blockDetail"></div>
 

@@ -33,6 +33,7 @@ pub struct ExplorerBlockJson {
     pub hash: String,
     pub timestamp_ms: u64,
     pub tx_count: u32,
+    pub finality_status: String,
 }
 
 #[derive(Serialize)]
@@ -81,6 +82,7 @@ fn block_json(b: BlockRow) -> ExplorerBlockJson {
         hash: b.hash,
         timestamp_ms: b.timestamp_ms,
         tx_count: b.tx_count,
+        finality_status: b.finality_status,
     }
 }
 
@@ -102,7 +104,10 @@ fn tx_json(r: &TxRow) -> ExplorerTxJson {
 pub async fn explorer_status(
     State(st): State<ExplorerApiState>,
 ) -> Result<Json<ExplorerStatusJson>, StatusCode> {
-    let s = st.db.status().map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let s = st
+        .db
+        .status()
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     Ok(Json(ExplorerStatusJson {
         last_indexed_block: s.last_indexed_block,
         tx_count: s.tx_count,

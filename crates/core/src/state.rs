@@ -5,6 +5,7 @@ use fractal_crypto::hash::keccak256;
 use fractal_crypto::verify_message;
 
 use crate::address::Address;
+use crate::chain_economics::ChainEconomicsParams;
 use crate::error::ExecError;
 use crate::merkle::{merkle_root, verify_merkle_proof};
 use crate::native_types::{
@@ -61,6 +62,7 @@ pub struct State {
     pub wallet_task_receipt_anchors: BTreeMap<fractal_crypto::Hash256, Address>,
     /// Monotonic versions for owned objects whose version is not already the account nonce.
     pub owned_object_versions: BTreeMap<OwnedObjectId, u64>,
+    pub chain_economics: ChainEconomicsParams,
 }
 
 impl Default for State {
@@ -85,6 +87,7 @@ impl Default for State {
             evm_tx_success: BTreeMap::new(),
             wallet_task_receipt_anchors: BTreeMap::new(),
             owned_object_versions: BTreeMap::new(),
+            chain_economics: ChainEconomicsParams::default(),
         }
     }
 }
@@ -623,6 +626,14 @@ impl State {
                 }
                 Ok(())
             }
+            NativeCall::SetChainEconomics { params } => {
+                self.require_governance(signer)?;
+                self.chain_economics = params.clone();
+                if bump_nonce {
+                    self.bump_nonce(signer);
+                }
+                Ok(())
+            }
         }
     }
 
@@ -1025,5 +1036,52 @@ mod tests {
             state.owned_object_version(&OwnedObjectId::Receipt(receipt_id)),
             1
         );
+    }
+
+    #[test]
+    fn governance_updates_chain_economics_phase_and_reward_params() {
+        let governance = [9u8; 20];
+        let mut state = funded_state();
+        state.governance = governance;
+        state.accounts.insert(
+            governance,
+            Account {
+                nonce: 0,
+                balance: 1_000,
+            },
+        );
+        let params = crate::ChainEconomicsParams::mainnet();
+        let tx = Transaction {
+            signer: governance,
+            nonce: 0,
+            vm: VmKind::Native,
+            body: TxBody::Native(NativeCall::SetChainEconomics {
+                params: params.clone(),
+            }),
+        };
+
+        state.apply_transaction(&tx).unwrap();
+
+        assert_eq!(state.chain_economics, params);
+        assert_eq!(state.accounts[&governance].nonce, 1);
+        assert!(state.chain_economics.phase_config.proof_final_settlement);
+        assert!(state.chain_economics.prover_rewards.enabled);
+        assert!(state.chain_economics.sequencer_rewards.enabled);
+    }
+
+    #[test]
+    fn non_governance_cannot_update_chain_economics() {
+        let mut state = funded_state();
+        state.governance = [9u8; 20];
+        let tx = Transaction {
+            signer: signer(),
+            nonce: 0,
+            vm: VmKind::Native,
+            body: TxBody::Native(NativeCall::SetChainEconomics {
+                params: crate::ChainEconomicsParams::mainnet(),
+            }),
+        };
+
+        assert_eq!(state.apply_transaction(&tx), Err(ExecError::NotAuthorized));
     }
 }

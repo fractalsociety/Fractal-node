@@ -11,12 +11,14 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use borsh::BorshDeserialize;
 use fractal_consensus::{
-    da_encoded_bytes, da_root, execute_and_build_block, expected_parent_qc_for_parent_header,
-    genesis_parent_qc, hash_qc, header_hash, next_parent_qc_hash_after_commit, ordered_tx_root,
-    reconstruct_da_payload, Block, BlockValidityProof, DaShare, FormedQc, ProofVerifyError,
-    RecordVoteOutcome, Vote, VotePool,
+    coverage_manifest_for_circuit_version, da_encoded_bytes, da_root, execute_and_build_block,
+    expected_parent_qc_for_parent_header, genesis_parent_qc, hash_qc, header_hash,
+    next_parent_qc_hash_after_commit, ordered_tx_root, reconstruct_da_payload,
+    validity_proof_public_input_digest, Block, BlockValidityProof, CircuitVersion, DaShare,
+    ExecutionFeatureSetV1, FormedQc, MixedExecutionWitnessMetadataV1, ProofVerifyError,
+    RecordVoteOutcome, StwoPlonky2ProofEnvelope, Vote, VotePool,
 };
-use fractal_core::{Address, EvmEngine, State, Transaction};
+use fractal_core::{Address, EvmEngine, ProtocolPhaseConfig, State, Transaction};
 use fractal_crypto::hash::keccak256;
 use fractal_crypto::BlsSecretKey;
 use fractal_mempool::{next_base_fee, BaseFeeParams, Mempool, PooledTx};
@@ -64,6 +66,12 @@ pub enum SyncApplyError {
 pub enum ProofFinalityError {
     #[error("proved block not found")]
     BlockNotFound,
+    #[error("native transition proofs are disabled")]
+    NativeTransitionProofsDisabled,
+    #[error("proof circuit coverage does not cover block feature set")]
+    CircuitCoverage,
+    #[error("proof witness digest does not match stored witness metadata")]
+    WitnessDigestMismatch,
     #[error(transparent)]
     Verify(#[from] ProofVerifyError),
     #[error("proof-finality store: {0}")]
@@ -84,6 +92,10 @@ pub enum SettlementAccessError {
     BlockNotFound,
     #[error("block is not proof-final")]
     NotProofFinal,
+    #[error("block proof circuit does not cover requested settlement features")]
+    UncoveredCircuit,
+    #[error("block data availability is unavailable")]
+    UnavailableDa,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -99,15 +111,21 @@ pub struct DaMetrics {
     pub reconstruction_failure: u64,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ChainConfig {
     pub proof_required_settlement: bool,
+    pub native_transition_proofs_enabled: bool,
+    pub proofs_required_for_settlement: ExecutionFeatureSetV1,
+    pub phase_config: ProtocolPhaseConfig,
 }
 
 impl Default for ChainConfig {
     fn default() -> Self {
         Self {
             proof_required_settlement: false,
+            native_transition_proofs_enabled: false,
+            proofs_required_for_settlement: ExecutionFeatureSetV1::empty(),
+            phase_config: ProtocolPhaseConfig::testnet(),
         }
     }
 }
@@ -116,9 +134,12 @@ impl Default for ChainConfig {
 pub struct ProofMetrics {
     pub proofs_accepted: u64,
     pub proofs_rejected: u64,
+    pub witness_gen_latency_ms: u64,
+    pub latest_proof_final_lag_ms: u64,
     pub latest_proof_latency_ms: u64,
     pub total_proof_latency_ms: u128,
     pub proof_final_height: u64,
+    pub unsupported_feature_rejections: u64,
     pub latest_rejection_reason: Option<String>,
     pub rejection_reasons: BTreeMap<String, u64>,
 }
@@ -224,6 +245,57 @@ fn proof_required_settlement_from_env() -> bool {
     }
 }
 
+fn native_transition_proofs_enabled_from_env() -> bool {
+    env_flag("FRACTAL_NATIVE_TRANSITION_PROOFS_ENABLED", false)
+}
+
+fn env_flag(name: &str, default: bool) -> bool {
+    match std::env::var(name) {
+        Ok(raw) => matches!(
+            raw.trim().to_ascii_lowercase().as_str(),
+            "1" | "true" | "yes" | "on" | "enabled"
+        ),
+        Err(_) => default,
+    }
+}
+
+fn protocol_phase_config_from_env() -> ProtocolPhaseConfig {
+    let mut cfg = ProtocolPhaseConfig::testnet();
+    cfg.owned_object_certificates = env_flag(
+        "FRACTAL_PHASE_OWNED_OBJECT_CERTIFICATES",
+        cfg.owned_object_certificates,
+    );
+    cfg.da_sampling = env_flag("FRACTAL_PHASE_DA_SAMPLING", cfg.da_sampling);
+    cfg.proof_final_settlement = env_flag(
+        "FRACTAL_PHASE_PROOF_FINAL_SETTLEMENT",
+        proof_required_settlement_from_env(),
+    );
+    cfg.execution_zones = env_flag("FRACTAL_PHASE_EXECUTION_ZONES", cfg.execution_zones);
+    cfg.forced_inclusion = env_flag("FRACTAL_PHASE_FORCED_INCLUSION", cfg.forced_inclusion);
+    cfg.prover_rewards = env_flag("FRACTAL_PHASE_PROVER_REWARDS", cfg.prover_rewards);
+    cfg.sequencer_rewards = env_flag("FRACTAL_PHASE_SEQUENCER_REWARDS", cfg.sequencer_rewards);
+    cfg
+}
+
+fn proof_required_feature_mask_from_env(global_required: bool) -> ExecutionFeatureSetV1 {
+    let mut mask = if global_required {
+        ExecutionFeatureSetV1::all_known()
+    } else {
+        ExecutionFeatureSetV1::empty()
+    };
+    if env_flag("FRACTAL_PROOF_REQUIRED_NATIVE", false) {
+        mask.insert(fractal_consensus::FEATURE_NATIVE_TX);
+        mask.insert(fractal_consensus::FEATURE_NATIVE_SHARED_STATE);
+    }
+    if env_flag("FRACTAL_PROOF_REQUIRED_EVM", false) {
+        mask.insert(fractal_consensus::FEATURE_EVM_TRANSFER);
+        mask.insert(fractal_consensus::FEATURE_EVM_CALL);
+        mask.insert(fractal_consensus::FEATURE_EVM_CREATE);
+        mask.insert(fractal_consensus::FEATURE_EVM_TO_NATIVE_PRECOMPILE);
+    }
+    mask
+}
+
 fn proof_finality_store_from_env() -> Option<std::path::PathBuf> {
     std::env::var_os("FRACTAL_PROOF_FINALITY_STORE")
         .filter(|raw| !raw.is_empty())
@@ -271,6 +343,7 @@ pub struct NodeInner {
     /// entries here are proof-final for settlement/bridging purposes.
     pub proof_finalized_blocks: BTreeMap<fractal_crypto::Hash256, BlockValidityProof>,
     pub proof_finality_store: Option<ProofFinalityStore>,
+    pub witness_metadata: BTreeMap<fractal_crypto::Hash256, MixedExecutionWitnessMetadataV1>,
     pub chain_config: ChainConfig,
     pub da_metrics: DaMetrics,
     pub proof_metrics: ProofMetrics,
@@ -349,6 +422,7 @@ impl NodeInner {
             eth_internal_to_rpc_tx_hash: BTreeMap::new(),
             proof_finalized_blocks: BTreeMap::new(),
             proof_finality_store: None,
+            witness_metadata: BTreeMap::new(),
             chain_config: ChainConfig::default(),
             da_metrics: DaMetrics::default(),
             proof_metrics: ProofMetrics::default(),
@@ -370,11 +444,49 @@ impl NodeInner {
 
     pub fn set_proof_required_settlement(&mut self, required: bool) {
         self.chain_config.proof_required_settlement = required;
+        self.chain_config.proofs_required_for_settlement = if required {
+            ExecutionFeatureSetV1::all_known()
+        } else {
+            ExecutionFeatureSetV1::empty()
+        };
+        self.chain_config.phase_config.proof_final_settlement = required;
+    }
+
+    pub fn set_native_transition_proofs_enabled(&mut self, enabled: bool) {
+        self.chain_config.native_transition_proofs_enabled = enabled;
+    }
+
+    pub fn set_proofs_required_for_settlement(&mut self, required: ExecutionFeatureSetV1) {
+        self.chain_config.proofs_required_for_settlement = required;
+        self.chain_config.proof_required_settlement = required.bits != 0;
+        self.chain_config.phase_config.proof_final_settlement = required.bits != 0;
     }
 
     #[must_use]
     pub fn settlement_requires_proof(&self) -> bool {
         self.chain_config.proof_required_settlement
+    }
+
+    #[must_use]
+    pub fn settlement_requires_proof_for_features(&self, features: ExecutionFeatureSetV1) -> bool {
+        self.chain_config.proof_required_settlement
+            || (features.bits & self.chain_config.proofs_required_for_settlement.bits) != 0
+    }
+
+    pub fn set_protocol_phase_config(&mut self, config: ProtocolPhaseConfig) {
+        self.chain_config.proof_required_settlement = config.proof_final_settlement;
+        self.chain_config.proofs_required_for_settlement = if config.proof_final_settlement {
+            ExecutionFeatureSetV1::all_known()
+        } else {
+            ExecutionFeatureSetV1::empty()
+        };
+        self.chain_config.phase_config = config;
+    }
+
+    pub fn record_witness_metadata(&mut self, metadata: MixedExecutionWitnessMetadataV1) {
+        let started = now_ms();
+        self.witness_metadata.insert(metadata.block_hash, metadata);
+        self.proof_metrics.witness_gen_latency_ms = now_ms().saturating_sub(started);
     }
 
     pub fn set_proof_finality_store(
@@ -464,7 +576,7 @@ impl NodeInner {
         let block = match self.blocks.iter().find(|b| {
             b.header.height == proof.height && header_hash(&b.header).ok() == Some(proof.block_hash)
         }) {
-            Some(block) => block,
+            Some(block) => block.clone(),
             None => {
                 self.record_proof_rejection("block_not_found");
                 return Err(ProofFinalityError::BlockNotFound);
@@ -472,12 +584,31 @@ impl NodeInner {
         };
         let block_timestamp_ms = block.header.timestamp_ms;
         let block_height = block.header.height;
-        if let Err(e) = fractal_consensus::verify_block_validity_proof(block, &proof) {
+        let block_feature_set = block.header.feature_set;
+        if proof.circuit_version == CircuitVersion::NativeStateTransitionV1
+            && !self.chain_config.native_transition_proofs_enabled
+        {
+            self.record_proof_rejection("native_transition_proofs_disabled");
+            return Err(ProofFinalityError::NativeTransitionProofsDisabled);
+        }
+        let manifest = coverage_manifest_for_circuit_version(proof.circuit_version);
+        if !block_feature_set.contains_only(manifest.covered_features) {
+            self.record_proof_rejection("circuit_coverage");
+            return Err(ProofFinalityError::CircuitCoverage);
+        }
+        if let Some(metadata) = self.witness_metadata.get(&proof.block_hash) {
+            if proof_witness_digest(&proof)? != Some(metadata.witness_digest) {
+                self.record_proof_rejection("witness_digest");
+                return Err(ProofFinalityError::WitnessDigestMismatch);
+            }
+        }
+        if let Err(e) = fractal_consensus::verify_block_validity_proof(&block, &proof) {
             self.record_proof_rejection(&proof_rejection_reason(&e));
             return Err(e.into());
         }
         let block_hash = proof.block_hash;
         let accepted_at_ms = now_ms();
+        let public_input_digest = validity_proof_public_input_digest(&proof)?;
         self.proof_finalized_blocks
             .insert(block_hash, proof.clone());
         if let Some(store) = &self.proof_finality_store {
@@ -485,6 +616,9 @@ impl NodeInner {
                 block_hash,
                 height: block_height,
                 accepted_at_ms,
+                circuit_version: proof.circuit_version,
+                coverage_manifest_digest: proof.coverage_manifest_digest,
+                public_input_digest,
                 proof,
             })?;
         }
@@ -512,8 +646,32 @@ impl NodeInner {
         let finality = self
             .finality_for_block_hash(block_hash)
             .ok_or(SettlementAccessError::BlockNotFound)?;
-        if self.settlement_requires_proof() && finality != BlockFinality::Proof {
+        let block = self
+            .blocks
+            .iter()
+            .find(|b| header_hash(&b.header).ok().as_ref() == Some(block_hash));
+        let requires = block
+            .map(|b| self.settlement_requires_proof_for_features(b.header.feature_set))
+            .unwrap_or_else(|| self.settlement_requires_proof());
+        if requires && finality != BlockFinality::Proof {
             return Err(SettlementAccessError::NotProofFinal);
+        }
+        if let Some(block) = block {
+            if fractal_consensus::verify_da_sidecar(&block.header, &block.da_sidecar).is_err() {
+                return Err(SettlementAccessError::UnavailableDa);
+            }
+            if let Some(proof) = self.proof_finalized_blocks.get(block_hash) {
+                let manifest = coverage_manifest_for_circuit_version(proof.circuit_version);
+                if !block
+                    .header
+                    .feature_set
+                    .contains_only(manifest.covered_features)
+                {
+                    return Err(SettlementAccessError::UncoveredCircuit);
+                }
+            } else if requires {
+                return Err(SettlementAccessError::NotProofFinal);
+            }
         }
         Ok(finality)
     }
@@ -618,6 +776,7 @@ impl NodeInner {
         let latency_ms = accepted_at_ms.saturating_sub(block_timestamp_ms);
         self.proof_metrics.proofs_accepted = self.proof_metrics.proofs_accepted.saturating_add(1);
         self.proof_metrics.latest_proof_latency_ms = latency_ms;
+        self.proof_metrics.latest_proof_final_lag_ms = latency_ms;
         self.proof_metrics.total_proof_latency_ms = self
             .proof_metrics
             .total_proof_latency_ms
@@ -627,6 +786,15 @@ impl NodeInner {
 
     fn record_proof_rejection(&mut self, reason: &str) {
         self.proof_metrics.proofs_rejected = self.proof_metrics.proofs_rejected.saturating_add(1);
+        if matches!(
+            reason,
+            "circuit_coverage" | "coverage_manifest" | "unsupported_feature"
+        ) {
+            self.proof_metrics.unsupported_feature_rejections = self
+                .proof_metrics
+                .unsupported_feature_rejections
+                .saturating_add(1);
+        }
         self.proof_metrics.latest_rejection_reason = Some(reason.to_owned());
         *self
             .proof_metrics
@@ -861,8 +1029,12 @@ impl ChainInteraction for NodeInner {
                     parent_qc_hash: [0u8; 32],
                     proposer: [0u8; 32],
                     timestamp_ms: 0,
+                    parent_state_root: [0u8; 32],
                     state_root: [0u8; 32],
                     tx_root: [0u8; 32],
+                    receipt_root: [0u8; 32],
+                    native_event_root: [0u8; 32],
+                    evm_log_root: [0u8; 32],
                     zone_namespace: fractal_consensus::MASTERCHAIN_ZONE_NAMESPACE,
                     da_root: [0u8; 32],
                     da_bytes: 0,
@@ -871,6 +1043,7 @@ impl ChainInteraction for NodeInner {
                     da_fee_paid: 0,
                     gas_used: 0,
                     gas_limit: self.gas_limit,
+                    feature_set: fractal_consensus::ExecutionFeatureSetV1::empty(),
                     extra: [0u8; 32],
                 },
                 transactions: Vec::new(),
@@ -896,6 +1069,20 @@ impl ChainInteraction for NodeInner {
             self.finality_for_block_hash(hash),
             Some(BlockFinality::Proof)
         )
+    }
+
+    fn proof_for_block(&self, hash: &[u8; 32]) -> Option<BlockValidityProof> {
+        self.proof_finalized_blocks.get(hash).cloned()
+    }
+
+    fn settlement_requires_proof_for_features(&self, features: ExecutionFeatureSetV1) -> bool {
+        NodeInner::settlement_requires_proof_for_features(self, features)
+    }
+
+    fn settlement_finality_for_block_hash(&self, hash: &[u8; 32]) -> Result<(), String> {
+        NodeInner::settlement_finality_for_block_hash(self, hash)
+            .map(|_| ())
+            .map_err(|e| e.to_string())
     }
 
     fn tx_by_hash(&self, hash: &[u8; 32]) -> Option<Transaction> {
@@ -1121,9 +1308,18 @@ impl ChainInteraction for NodeInner {
         RpcProofMetrics {
             proofs_accepted: format!("0x{:x}", self.proof_metrics.proofs_accepted),
             proofs_rejected: format!("0x{:x}", self.proof_metrics.proofs_rejected),
+            witness_gen_latency_ms: format!("0x{:x}", self.proof_metrics.witness_gen_latency_ms),
             latest_proof_latency_ms: format!("0x{:x}", self.proof_metrics.latest_proof_latency_ms),
+            latest_proof_final_lag_ms: format!(
+                "0x{:x}",
+                self.proof_metrics.latest_proof_final_lag_ms
+            ),
             average_proof_latency_ms: format!("0x{:x}", average),
             proof_final_height: format!("0x{:x}", self.proof_metrics.proof_final_height),
+            unsupported_feature_rejections: format!(
+                "0x{:x}",
+                self.proof_metrics.unsupported_feature_rejections
+            ),
             latest_rejection_reason: self.proof_metrics.latest_rejection_reason.clone(),
             rejection_reasons: self
                 .proof_metrics
@@ -1151,6 +1347,18 @@ impl ChainInteraction for NodeInner {
     fn chain_config(&self) -> RpcChainConfig {
         RpcChainConfig {
             proof_required_settlement: self.chain_config.proof_required_settlement,
+            native_transition_proofs_enabled: self.chain_config.native_transition_proofs_enabled,
+            proofs_required_for_settlement: format!(
+                "0x{:x}",
+                self.chain_config.proofs_required_for_settlement.bits
+            ),
+            owned_object_certificates: self.chain_config.phase_config.owned_object_certificates,
+            da_sampling: self.chain_config.phase_config.da_sampling,
+            proof_final_settlement: self.chain_config.phase_config.proof_final_settlement,
+            execution_zones: self.chain_config.phase_config.execution_zones,
+            forced_inclusion: self.chain_config.phase_config.forced_inclusion,
+            prover_rewards: self.chain_config.phase_config.prover_rewards,
+            sequencer_rewards: self.chain_config.phase_config.sequencer_rewards,
             settlement_finality: if self.chain_config.proof_required_settlement {
                 "proof"
             } else {
@@ -1179,10 +1387,18 @@ fn proof_rejection_reason(err: &ProofVerifyError) -> String {
         ProofVerifyError::ChainId => "chain_id",
         ProofVerifyError::Height => "height",
         ProofVerifyError::BlockHash => "block_hash",
+        ProofVerifyError::Timestamp => "timestamp",
+        ProofVerifyError::ParentStateRoot => "parent_state_root",
         ProofVerifyError::StateRoot => "state_root",
         ProofVerifyError::TxRoot => "tx_root",
+        ProofVerifyError::ReceiptRoot => "receipt_root",
+        ProofVerifyError::NativeEventRoot => "native_event_root",
+        ProofVerifyError::EvmLogRoot => "evm_log_root",
         ProofVerifyError::DaRoot => "da_root",
         ProofVerifyError::ZoneNamespace => "zone_namespace",
+        ProofVerifyError::FeatureSet => "feature_set",
+        ProofVerifyError::CoverageManifest => "coverage_manifest",
+        ProofVerifyError::CircuitCoverage => "circuit_coverage",
         ProofVerifyError::EmptyProof => "empty_proof",
         ProofVerifyError::Production(_) => "production_proof",
         ProofVerifyError::BadDevDigest => "bad_dev_digest",
@@ -1190,6 +1406,29 @@ fn proof_rejection_reason(err: &ProofVerifyError) -> String {
         ProofVerifyError::Io(_) => "io",
     }
     .to_owned()
+}
+
+fn proof_witness_digest(
+    proof: &BlockValidityProof,
+) -> Result<Option<fractal_crypto::Hash256>, ProofFinalityError> {
+    if proof.proof_system != fractal_consensus::ValidityProofSystem::StwoPlonky2 {
+        return Ok(None);
+    }
+    let Ok(envelope) = StwoPlonky2ProofEnvelope::try_from_slice(&proof.proof_bytes) else {
+        return Ok(None);
+    };
+    Ok(match envelope {
+        StwoPlonky2ProofEnvelope::NativeRecursiveFixtureV1 { statement, .. } => {
+            Some(statement.witness_digest)
+        }
+        StwoPlonky2ProofEnvelope::EvmZkVmFixtureV1 { fixture } => {
+            Some(fixture.statement.witness_digest)
+        }
+        StwoPlonky2ProofEnvelope::MixedIntraBlockAggregateFixtureV1 { fixture } => {
+            Some(fixture.witness_digest)
+        }
+        _ => None,
+    })
 }
 
 /// Outcome of one produce-tick (`docs/prd.md` §7 M7-c).
@@ -1283,7 +1522,10 @@ pub async fn run_dev() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let (vote_tx, vote_rx) = tokio::sync::mpsc::unbounded_channel();
     let mut inner =
         NodeInner::devnet_with_validator_secret(validators, validator_index, validator_secret);
-    inner.set_proof_required_settlement(proof_required_settlement_from_env());
+    let proof_required = proof_required_settlement_from_env();
+    inner.set_protocol_phase_config(protocol_phase_config_from_env());
+    inner.set_native_transition_proofs_enabled(native_transition_proofs_enabled_from_env());
+    inner.set_proofs_required_for_settlement(proof_required_feature_mask_from_env(proof_required));
     if let Some(path) = proof_finality_store_from_env() {
         inner.set_proof_finality_store(ProofFinalityStore::open(&path)?)?;
         eprintln!("fractal-node: proof_finality_store={}", path.display());
@@ -1357,7 +1599,10 @@ pub async fn run_follower() -> Result<(), Box<dyn std::error::Error + Send + Syn
     let (vote_tx, vote_rx) = tokio::sync::mpsc::unbounded_channel();
     let mut inner =
         NodeInner::devnet_with_validator_secret(validators, validator_index, validator_secret);
-    inner.set_proof_required_settlement(proof_required_settlement_from_env());
+    let proof_required = proof_required_settlement_from_env();
+    inner.set_protocol_phase_config(protocol_phase_config_from_env());
+    inner.set_native_transition_proofs_enabled(native_transition_proofs_enabled_from_env());
+    inner.set_proofs_required_for_settlement(proof_required_feature_mask_from_env(proof_required));
     if let Some(path) = proof_finality_store_from_env() {
         inner.set_proof_finality_store(ProofFinalityStore::open(&path)?)?;
         eprintln!(

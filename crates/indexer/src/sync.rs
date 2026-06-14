@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use fractal_core::{TxBody, Transaction};
+use fractal_core::{Transaction, TxBody};
 use serde_json::Value;
 
 use crate::db::{BlockRow, IndexerDb, TxRow};
@@ -40,11 +40,7 @@ pub fn sync_to_head(db: &Arc<IndexerDb>, cfg: &SyncConfig) -> Result<u64, String
 pub fn sync_block(db: &IndexerDb, cfg: &SyncConfig, block_number: u64) -> Result<(), String> {
     let url = &cfg.rpc_url;
     let tag = format!("0x{:x}", block_number);
-    let bv = rpc_post(
-        url,
-        "eth_getBlockByNumber",
-        serde_json::json!([tag, false]),
-    )?;
+    let bv = rpc_post(url, "eth_getBlockByNumber", serde_json::json!([tag, false]))?;
     let res = bv.get("result").cloned().unwrap_or(Value::Null);
     let hash = res
         .get("hash")
@@ -57,11 +53,18 @@ pub fn sync_block(db: &IndexerDb, cfg: &SyncConfig, block_number: u64) -> Result
         .and_then(|t| t.as_array())
         .cloned()
         .unwrap_or_default();
+    let finality_status = res
+        .get("finalityStatus")
+        .and_then(|x| x.as_str())
+        .filter(|s| matches!(*s, "soft" | "proof"))
+        .unwrap_or("unknown")
+        .to_string();
     db.insert_block(&BlockRow {
         number: block_number,
         hash,
         timestamp_ms: ts_ms,
         tx_count: txs.len() as u32,
+        finality_status,
     })?;
     for (i, txh) in txs.iter().enumerate() {
         let Some(hash_str) = txh.as_str() else {
@@ -134,15 +137,7 @@ fn ingest_tx(
         },
         is_wallet,
     )?;
-    process_tx_for_reputation(
-        db,
-        block_number,
-        block_ts_ms,
-        tx_index,
-        hash,
-        tx,
-        rep_cfg,
-    )?;
+    process_tx_for_reputation(db, block_number, block_ts_ms, tx_index, hash, tx, rep_cfg)?;
     Ok(())
 }
 

@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
+use std::time::Instant;
 
 pub type MicroFrac = i128;
 
@@ -171,6 +172,74 @@ pub struct VerifierBenchReport {
     pub judgment_count: usize,
     pub by_verifier: BTreeMap<String, VerifierSummary>,
     pub evaluations: Vec<VerifierEvaluation>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OwnedObjectCertificateThroughputReport {
+    pub certificate_count: usize,
+    pub validator_count: usize,
+    pub quorum_threshold: usize,
+    pub signatures_per_certificate: usize,
+    pub total_signatures: usize,
+    pub elapsed_nanos: u128,
+    pub certificates_per_second: f64,
+    pub signatures_per_second: f64,
+    pub verified_certificates: usize,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DaSamplingBandwidthReport {
+    pub payload_bytes: usize,
+    pub encoded_bytes: u64,
+    pub share_size: u32,
+    pub share_count: usize,
+    pub sample_count_per_round: usize,
+    pub rounds: usize,
+    pub sampled_bytes: u64,
+    pub elapsed_nanos: u128,
+    pub sampled_bytes_per_second: f64,
+    pub sampled_mib_per_second: f64,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProofLatencyCostReport {
+    pub proof_count: usize,
+    pub covered_blocks_per_proof: u64,
+    pub proof_bytes: usize,
+    pub elapsed_nanos: u128,
+    pub avg_verify_latency_micros: f64,
+    pub proofs_per_second: f64,
+    pub verified_proofs: usize,
+    pub prover_cost_micro_frac_per_block: MicroFrac,
+    pub estimated_cost_per_proof_micro_frac: MicroFrac,
+    pub estimated_total_prover_cost_micro_frac: MicroFrac,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MixedProofSloBenchReport {
+    pub iterations: usize,
+    pub tx_count: usize,
+    pub proof_bytes: usize,
+    pub witness_gen_latency_nanos: u128,
+    pub native_component_latency_nanos: u128,
+    pub evm_zkvm_fixture_latency_nanos: u128,
+    pub aggregation_latency_nanos: u128,
+    pub verification_latency_nanos: u128,
+    pub avg_total_latency_micros: f64,
+    pub verified_proofs: usize,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProtocolBenchReport {
+    pub owned_object_certificates: OwnedObjectCertificateThroughputReport,
+    pub da_sampling: DaSamplingBandwidthReport,
+    pub proof_latency_cost: ProofLatencyCostReport,
+    pub mixed_proof_slo: MixedProofSloBenchReport,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -460,6 +529,386 @@ pub fn run_verifier_bench(
         judgment_count: judgments.len(),
         by_verifier,
         evaluations,
+    }
+}
+
+pub fn run_owned_object_certificate_throughput_bench(
+    certificate_count: usize,
+    validator_count: usize,
+    quorum_threshold: usize,
+) -> OwnedObjectCertificateThroughputReport {
+    use fractal_core::{
+        NativeCall, OwnedObjectCertificate, OwnedObjectId, OwnedObjectVersion, Transaction, TxBody,
+        VmKind,
+    };
+    use fractal_crypto::BlsSecretKey;
+
+    let validator_count = validator_count.max(1);
+    let quorum_threshold = quorum_threshold.clamp(1, validator_count);
+    let validators = (0..validator_count)
+        .map(|i| BlsSecretKey::from_ikm(&[(i as u8).wrapping_add(1); 32]).unwrap())
+        .collect::<Vec<_>>();
+    let pubkeys = validators
+        .iter()
+        .map(BlsSecretKey::public_key)
+        .collect::<Vec<_>>();
+    let owner = [0xA7; 20];
+    let started = Instant::now();
+    let mut verified_certificates = 0usize;
+    for i in 0..certificate_count {
+        let tx = Transaction {
+            signer: owner,
+            nonce: i as u64,
+            vm: VmKind::Native,
+            body: TxBody::Native(NativeCall::UpdateAgent {
+                agent_id: i as u64,
+                new_metadata_uri: format!("bench://agent/{i}"),
+                new_pubkey: None,
+            }),
+        };
+        let object_versions = vec![
+            OwnedObjectVersion {
+                object_id: OwnedObjectId::AccountNonce(owner),
+                version: i as u64,
+            },
+            OwnedObjectVersion {
+                object_id: OwnedObjectId::Agent(i as u64),
+                version: 0,
+            },
+        ];
+        let unsigned = OwnedObjectCertificate::from_owned_transaction(
+            &tx,
+            object_versions.clone(),
+            Vec::new(),
+        )
+        .unwrap();
+        let sign_body = unsigned.sign_body();
+        let signatures = validators
+            .iter()
+            .take(quorum_threshold)
+            .enumerate()
+            .map(|(idx, sk)| {
+                OwnedObjectCertificate::countersign(&sign_body, idx as u32, sk).unwrap()
+            })
+            .collect::<Vec<_>>();
+        let cert =
+            OwnedObjectCertificate::aggregate(&tx, object_versions, signatures, quorum_threshold)
+                .unwrap();
+        cert.verify(&pubkeys, quorum_threshold).unwrap();
+        verified_certificates += 1;
+    }
+    let elapsed_nanos = started.elapsed().as_nanos().max(1);
+    let seconds = elapsed_nanos as f64 / 1_000_000_000.0;
+    let total_signatures = certificate_count.saturating_mul(quorum_threshold);
+    OwnedObjectCertificateThroughputReport {
+        certificate_count,
+        validator_count,
+        quorum_threshold,
+        signatures_per_certificate: quorum_threshold,
+        total_signatures,
+        elapsed_nanos,
+        certificates_per_second: certificate_count as f64 / seconds,
+        signatures_per_second: total_signatures as f64 / seconds,
+        verified_certificates,
+    }
+}
+
+pub fn run_da_sampling_bandwidth_bench(
+    payload_bytes: usize,
+    share_size: u32,
+    sample_count_per_round: usize,
+    rounds: usize,
+    seed: u64,
+) -> DaSamplingBandwidthReport {
+    let payload = deterministic_payload(payload_bytes, seed);
+    let sidecar = fractal_consensus::build_da_sidecar(
+        &payload,
+        fractal_consensus::DEFAULT_DA_NAMESPACE,
+        share_size,
+    );
+    let root = fractal_consensus::da_root(&sidecar);
+    let started = Instant::now();
+    for round in 0..rounds {
+        fractal_consensus::verify_da_samples(
+            &sidecar,
+            root,
+            fractal_consensus::DEFAULT_DA_NAMESPACE,
+            seed.wrapping_add(round as u64),
+            sample_count_per_round,
+        )
+        .unwrap();
+    }
+    let elapsed_nanos = started.elapsed().as_nanos().max(1);
+    let sampled_bytes =
+        sample_count_per_round as u64 * rounds as u64 * u64::from(sidecar.share_size);
+    let seconds = elapsed_nanos as f64 / 1_000_000_000.0;
+    let sampled_bytes_per_second = sampled_bytes as f64 / seconds;
+    DaSamplingBandwidthReport {
+        payload_bytes,
+        encoded_bytes: fractal_consensus::da_encoded_bytes(&sidecar),
+        share_size: sidecar.share_size,
+        share_count: sidecar.shares.len(),
+        sample_count_per_round,
+        rounds,
+        sampled_bytes,
+        elapsed_nanos,
+        sampled_bytes_per_second,
+        sampled_mib_per_second: sampled_bytes_per_second / (1024.0 * 1024.0),
+    }
+}
+
+pub fn run_proof_latency_cost_bench(
+    proof_count: usize,
+    covered_blocks_per_proof: u64,
+    prover_cost_micro_frac_per_block: MicroFrac,
+    seed: u64,
+) -> ProofLatencyCostReport {
+    use fractal_consensus::{
+        coverage_manifest_digest, coverage_manifest_for_circuit_version, eth_signed_raws_for_txs,
+        execute_and_build_block, header_hash, validity_proof_public_input_digest,
+        verify_block_validity_proof, BlockValidityProof, CircuitVersion, ValidityProofSystem,
+    };
+    use fractal_core::State;
+
+    let mut state = State::default();
+    let block = execute_and_build_block(
+        41,
+        1,
+        0,
+        [seed as u8; 32],
+        [0u8; 32],
+        [7u8; 32],
+        1_000,
+        60_000_000,
+        &mut state,
+        Vec::new(),
+        eth_signed_raws_for_txs(0),
+    )
+    .unwrap();
+    let mut proof = BlockValidityProof {
+        chain_id: block.header.chain_id,
+        height: block.header.height,
+        block_hash: header_hash(&block.header).unwrap(),
+        timestamp_ms: block.header.timestamp_ms,
+        parent_state_root: block.header.parent_state_root,
+        state_root: block.header.state_root,
+        tx_root: block.header.tx_root,
+        receipt_root: block.header.receipt_root,
+        native_event_root: block.header.native_event_root,
+        evm_log_root: block.header.evm_log_root,
+        gas_used: block.header.gas_used,
+        zone_namespace: block.header.zone_namespace,
+        da_root: block.header.da_root,
+        circuit_version: CircuitVersion::DevMixedV1,
+        coverage_manifest_digest: coverage_manifest_digest(&coverage_manifest_for_circuit_version(
+            CircuitVersion::DevMixedV1,
+        ))
+        .unwrap(),
+        feature_set: block.header.feature_set,
+        proof_system: ValidityProofSystem::DevDigest,
+        proof_bytes: Vec::new(),
+    };
+    proof.proof_bytes = validity_proof_public_input_digest(&proof).unwrap().to_vec();
+
+    let started = Instant::now();
+    let mut verified_proofs = 0usize;
+    for _ in 0..proof_count {
+        verify_block_validity_proof(&block, &proof).unwrap();
+        verified_proofs += 1;
+    }
+    let elapsed_nanos = started.elapsed().as_nanos().max(1);
+    let seconds = elapsed_nanos as f64 / 1_000_000_000.0;
+    let estimated_cost_per_proof_micro_frac =
+        (covered_blocks_per_proof as MicroFrac).saturating_mul(prover_cost_micro_frac_per_block);
+    let estimated_total_prover_cost_micro_frac =
+        (proof_count as MicroFrac).saturating_mul(estimated_cost_per_proof_micro_frac);
+
+    ProofLatencyCostReport {
+        proof_count,
+        covered_blocks_per_proof,
+        proof_bytes: proof.proof_bytes.len(),
+        elapsed_nanos,
+        avg_verify_latency_micros: elapsed_nanos as f64 / proof_count.max(1) as f64 / 1_000.0,
+        proofs_per_second: proof_count as f64 / seconds,
+        verified_proofs,
+        prover_cost_micro_frac_per_block,
+        estimated_cost_per_proof_micro_frac,
+        estimated_total_prover_cost_micro_frac,
+    }
+}
+
+pub fn run_mixed_proof_slo_bench(iterations: usize, seed: u64) -> MixedProofSloBenchReport {
+    use fractal_consensus::{
+        coverage_manifest_digest, coverage_manifest_for_circuit_version, eth_signed_raws_for_txs,
+        evm_zkvm_proof_fixture_v1, execute_and_build_block, header_hash,
+        mixed_execution_witness_from_replay, mixed_intrablock_aggregate_proof_envelope_v1,
+        native_mixed_component_statement_v1, verify_block_validity_proof, BlockValidityProof,
+        CircuitVersion, ValidityProofSystem,
+    };
+    use fractal_core::{Account, NativeCall, State, Transaction, TxBody, VmKind};
+
+    let native_signer = [seed as u8; 20];
+    let evm_signer = [seed.wrapping_add(1) as u8; 20];
+    let mut pre_state = State::default();
+    pre_state.accounts.insert(
+        native_signer,
+        Account {
+            nonce: 0,
+            balance: 1_000_000,
+        },
+    );
+    pre_state.accounts.insert(
+        evm_signer,
+        Account {
+            nonce: 0,
+            balance: 1_000_000,
+        },
+    );
+    let native_tx = Transaction {
+        signer: native_signer,
+        nonce: 0,
+        vm: VmKind::Native,
+        body: TxBody::Native(NativeCall::NoOp),
+    };
+    let evm_tx = Transaction {
+        signer: evm_signer,
+        nonce: 0,
+        vm: VmKind::Evm,
+        body: TxBody::Transfer {
+            to: [seed.wrapping_add(2) as u8; 20],
+            amount: 10,
+        },
+    };
+    let mut execution_state = pre_state.clone();
+    let block = execute_and_build_block(
+        41,
+        1,
+        0,
+        [seed as u8; 32],
+        [0u8; 32],
+        [7u8; 32],
+        1_000,
+        60_000_000,
+        &mut execution_state,
+        vec![native_tx, evm_tx],
+        eth_signed_raws_for_txs(2),
+    )
+    .unwrap();
+
+    let iterations = iterations.max(1);
+    let mut witness_gen_latency_nanos = 0u128;
+    let mut native_component_latency_nanos = 0u128;
+    let mut evm_zkvm_fixture_latency_nanos = 0u128;
+    let mut aggregation_latency_nanos = 0u128;
+    let mut verification_latency_nanos = 0u128;
+    let mut verified_proofs = 0usize;
+    let mut proof_bytes = 0usize;
+
+    for _ in 0..iterations {
+        let started = Instant::now();
+        let mut witness = mixed_execution_witness_from_replay(&block, &pre_state).unwrap();
+        witness.public_inputs.circuit_version = CircuitVersion::MixedStateTransitionV1;
+        witness.public_inputs.coverage_manifest_digest = coverage_manifest_digest(
+            &coverage_manifest_for_circuit_version(CircuitVersion::MixedStateTransitionV1),
+        )
+        .unwrap();
+        witness_gen_latency_nanos += started.elapsed().as_nanos();
+
+        let started = Instant::now();
+        let _native = native_mixed_component_statement_v1(&witness).unwrap();
+        native_component_latency_nanos += started.elapsed().as_nanos();
+
+        let started = Instant::now();
+        let _evm = evm_zkvm_proof_fixture_v1(&witness).unwrap();
+        evm_zkvm_fixture_latency_nanos += started.elapsed().as_nanos();
+
+        let started = Instant::now();
+        let envelope = mixed_intrablock_aggregate_proof_envelope_v1(&witness).unwrap();
+        let proof_bytes_vec = borsh::to_vec(&envelope).unwrap();
+        aggregation_latency_nanos += started.elapsed().as_nanos();
+        proof_bytes = proof_bytes_vec.len();
+
+        let proof = BlockValidityProof {
+            chain_id: block.header.chain_id,
+            height: block.header.height,
+            block_hash: header_hash(&block.header).unwrap(),
+            timestamp_ms: block.header.timestamp_ms,
+            parent_state_root: block.header.parent_state_root,
+            state_root: block.header.state_root,
+            tx_root: block.header.tx_root,
+            receipt_root: block.header.receipt_root,
+            native_event_root: block.header.native_event_root,
+            evm_log_root: block.header.evm_log_root,
+            gas_used: block.header.gas_used,
+            zone_namespace: block.header.zone_namespace,
+            da_root: block.header.da_root,
+            circuit_version: CircuitVersion::MixedStateTransitionV1,
+            coverage_manifest_digest: coverage_manifest_digest(
+                &coverage_manifest_for_circuit_version(CircuitVersion::MixedStateTransitionV1),
+            )
+            .unwrap(),
+            feature_set: block.header.feature_set,
+            proof_system: ValidityProofSystem::StwoPlonky2,
+            proof_bytes: proof_bytes_vec,
+        };
+        let started = Instant::now();
+        verify_block_validity_proof(&block, &proof).unwrap();
+        verification_latency_nanos += started.elapsed().as_nanos();
+        verified_proofs += 1;
+    }
+
+    let total_latency_nanos = witness_gen_latency_nanos
+        + native_component_latency_nanos
+        + evm_zkvm_fixture_latency_nanos
+        + aggregation_latency_nanos
+        + verification_latency_nanos;
+    MixedProofSloBenchReport {
+        iterations,
+        tx_count: block.transactions.len(),
+        proof_bytes,
+        witness_gen_latency_nanos,
+        native_component_latency_nanos,
+        evm_zkvm_fixture_latency_nanos,
+        aggregation_latency_nanos,
+        verification_latency_nanos,
+        avg_total_latency_micros: total_latency_nanos as f64 / iterations as f64 / 1_000.0,
+        verified_proofs,
+    }
+}
+
+pub fn run_protocol_bench(
+    certificate_count: usize,
+    validator_count: usize,
+    quorum_threshold: usize,
+    da_payload_bytes: usize,
+    da_share_size: u32,
+    da_samples: usize,
+    da_rounds: usize,
+    proof_count: usize,
+    covered_blocks_per_proof: u64,
+    prover_cost_micro_frac_per_block: MicroFrac,
+    seed: u64,
+) -> ProtocolBenchReport {
+    ProtocolBenchReport {
+        owned_object_certificates: run_owned_object_certificate_throughput_bench(
+            certificate_count,
+            validator_count,
+            quorum_threshold,
+        ),
+        da_sampling: run_da_sampling_bandwidth_bench(
+            da_payload_bytes,
+            da_share_size,
+            da_samples,
+            da_rounds,
+            seed,
+        ),
+        proof_latency_cost: run_proof_latency_cost_bench(
+            proof_count,
+            covered_blocks_per_proof,
+            prover_cost_micro_frac_per_block,
+            seed,
+        ),
+        mixed_proof_slo: run_mixed_proof_slo_bench(proof_count, seed),
     }
 }
 
@@ -845,6 +1294,16 @@ fn rate_milli(numerator: u64, denominator: u64) -> u64 {
     } else {
         numerator * 1_000 / denominator
     }
+}
+
+fn deterministic_payload(len: usize, seed: u64) -> Vec<u8> {
+    let mut rng = Lcg::new(seed);
+    let mut out = Vec::with_capacity(len);
+    while out.len() < len {
+        out.extend_from_slice(&rng.next().to_le_bytes());
+    }
+    out.truncate(len);
+    out
 }
 
 struct VerifierProfile {

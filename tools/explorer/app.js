@@ -54,6 +54,30 @@ function shortAddr(addr) {
   return addr.slice(0, 8) + "…" + addr.slice(-6);
 }
 
+function finalityStatus(block) {
+  const status = block && typeof block === "object" ? block.finalityStatus : null;
+  return status === "proof" || status === "soft" ? status : "unknown";
+}
+
+function finalityLabel(status) {
+  if (status === "proof") return "Proof-final";
+  if (status === "soft") return "Soft-final";
+  return "Unknown finality";
+}
+
+function finalityBadge(status) {
+  const badge = document.createElement("span");
+  badge.className = `finality-badge finality-${status}`;
+  badge.textContent = finalityLabel(status);
+  badge.title =
+    status === "proof"
+      ? "Validity proof accepted; suitable for settlement and bridge reliance."
+      : status === "soft"
+        ? "Committee/sequencer accepted; wait for proof finality for high-value settlement."
+        : "RPC did not return finalityStatus for this block.";
+  return badge;
+}
+
 function jumpToAddress(addr) {
   const n = normalizeAddress(addr);
   if (!n) return;
@@ -155,6 +179,7 @@ async function loadSummary(el) {
     ["Gas price (stub)", gasPrice],
     ["Client", client],
     ["Head hash", block?.hash || "—"],
+    ["Head finality", finalityLabel(finalityStatus(block))],
     ["Head gas used", block?.gasUsed ?? "—"],
     ["Head timestamp", block?.timestamp ?? "—"],
     ["Txs in head", String(block?.transactions?.length ?? 0)],
@@ -201,7 +226,7 @@ async function loadBlocks(el) {
   el.innerHTML = "";
   const table = document.createElement("table");
   const thead = document.createElement("thead");
-  thead.innerHTML = "<tr><th>#</th><th>Hash</th><th>Gas used</th><th>Time</th><th>Txs</th></tr>";
+  thead.innerHTML = "<tr><th>#</th><th>Hash</th><th>Finality</th><th>Gas used</th><th>Time</th><th>Txs</th></tr>";
   table.appendChild(thead);
   const tbody = document.createElement("tbody");
   wireBlockRowClicks(tbody);
@@ -213,7 +238,7 @@ async function loadBlocks(el) {
     tr.title = "Show transactions in this block";
     if (!b) {
       const td = document.createElement("td");
-      td.colSpan = 5;
+      td.colSpan = 6;
       td.className = "muted";
       td.textContent = "(missing)";
       tr.appendChild(td);
@@ -222,16 +247,22 @@ async function loadBlocks(el) {
     }
     const n = b.number ?? tags[i];
     const txc = Array.isArray(b.transactions) ? b.transactions.length : 0;
-    for (const [x, cls] of [
-      [n, "mono"],
-      [shortHash(b.hash, 8), "mono"],
-      [b.gasUsed ?? "—", ""],
-      [b.timestamp ?? "—", "mono"],
-      [String(txc), ""],
-    ]) {
+    const cells = [
+      { text: n, cls: "mono" },
+      { text: shortHash(b.hash, 8), cls: "mono" },
+      { badge: finalityBadge(finalityStatus(b)) },
+      { text: b.gasUsed ?? "—" },
+      { text: b.timestamp ?? "—", cls: "mono" },
+      { text: String(txc) },
+    ];
+    for (const cell of cells) {
       const td = document.createElement("td");
-      td.textContent = x;
-      if (cls) td.className = cls;
+      if (cell.badge) {
+        td.appendChild(cell.badge);
+      } else {
+        td.textContent = cell.text;
+      }
+      if (cell.cls) td.className = cell.cls;
       tr.appendChild(td);
     }
     tbody.appendChild(tr);
@@ -252,7 +283,8 @@ async function showBlockDetail(blockTag) {
     const h3 = document.createElement("h3");
     h3.style.fontSize = "1rem";
     h3.style.margin = "0 0 0.5rem";
-    h3.textContent = `Block ${b.number ?? blockTag}`;
+    h3.textContent = `Block ${b.number ?? blockTag} `;
+    h3.appendChild(finalityBadge(finalityStatus(b)));
     detail.appendChild(h3);
 
     if (b.hash) {
@@ -285,6 +317,10 @@ async function showBlockDetail(blockTag) {
       gasLimit: b.gasLimit,
       timestamp: b.timestamp,
       baseFeePerGas: b.baseFeePerGas,
+      finalityStatus: finalityStatus(b),
+      proofCircuitVersion: b.proofCircuitVersion || null,
+      proofCoverageManifestDigest: b.proofCoverageManifestDigest || null,
+      proofCoveredFeatures: b.proofCoveredFeatures || null,
       transactionCount: txs.length,
     };
     meta.textContent = JSON.stringify(metaObj, null, 2);

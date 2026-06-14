@@ -2,6 +2,7 @@ use borsh::{BorshDeserialize, BorshSerialize};
 use std::collections::BTreeSet;
 
 use crate::address::Address;
+use crate::chain_economics::ChainEconomicsParams;
 use crate::native_types::{OnChainTaskReceipt, SettleBatchPayload};
 use fractal_crypto::hash::keccak256;
 use fractal_crypto::{BlsPublicKey, BlsSecretKey, BlsSignature, Hash256};
@@ -67,6 +68,9 @@ pub enum NativeCall {
         validator: Address,
     },
     NoOp,
+    SetChainEconomics {
+        params: ChainEconomicsParams,
+    },
     /// Anchor `keccak256(borsh(TaskReceipt))` (see `wallet_anchor::task_receipt_commitment`).
     /// Empty `receipt_witness`: stores commitment under signer (dev trust). Non-empty witness:
     /// requires `fractal-core` `--features wallet` and must deserialize to a matching `TaskReceipt`.

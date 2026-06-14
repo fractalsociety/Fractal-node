@@ -16,6 +16,7 @@ pub struct BlockRow {
     pub hash: String,
     pub timestamp_ms: u64,
     pub tx_count: u32,
+    pub finality_status: String,
 }
 
 #[derive(Clone, Debug)]
@@ -91,7 +92,8 @@ impl IndexerDb {
               number INTEGER PRIMARY KEY,
               hash TEXT NOT NULL,
               timestamp_ms INTEGER NOT NULL,
-              tx_count INTEGER NOT NULL
+              tx_count INTEGER NOT NULL,
+              finality_status TEXT NOT NULL DEFAULT 'unknown'
             );
             CREATE TABLE IF NOT EXISTS transactions (
               hash TEXT PRIMARY KEY,
@@ -126,6 +128,7 @@ impl IndexerDb {
         )
         .map_err(|e| e.to_string())?;
         Self::migrate_v2_conn(&conn)?;
+        Self::migrate_v3_conn(&conn)?;
         Ok(())
     }
 
@@ -144,6 +147,23 @@ impl IndexerDb {
             "#,
         );
         conn.execute("PRAGMA user_version = 2", [])
+            .map_err(|e| e.to_string())?;
+        Ok(())
+    }
+
+    fn migrate_v3_conn(conn: &Connection) -> Result<(), String> {
+        let version: i64 = conn
+            .query_row("PRAGMA user_version", [], |r| r.get(0))
+            .unwrap_or(0);
+        if version >= 3 {
+            return Ok(());
+        }
+        let _ = conn.execute_batch(
+            r#"
+            ALTER TABLE blocks ADD COLUMN finality_status TEXT NOT NULL DEFAULT 'unknown';
+            "#,
+        );
+        conn.execute("PRAGMA user_version = 3", [])
             .map_err(|e| e.to_string())?;
         Ok(())
     }
@@ -204,13 +224,14 @@ impl IndexerDb {
     pub fn insert_block(&self, block: &BlockRow) -> Result<(), String> {
         let conn = self.lock()?;
         conn.execute(
-            "INSERT OR REPLACE INTO blocks(number, hash, timestamp_ms, tx_count)
-             VALUES (?1, ?2, ?3, ?4)",
+            "INSERT OR REPLACE INTO blocks(number, hash, timestamp_ms, tx_count, finality_status)
+             VALUES (?1, ?2, ?3, ?4, ?5)",
             params![
                 block.number,
                 block.hash,
                 block.timestamp_ms,
                 block.tx_count,
+                block.finality_status,
             ],
         )
         .map_err(|e| e.to_string())?;
@@ -270,18 +291,17 @@ impl IndexerDb {
         let conn = self.lock()?;
         let mut stmt = conn
             .prepare(
-                "SELECT number, hash, timestamp_ms, tx_count FROM blocks WHERE number = ?1",
+                "SELECT number, hash, timestamp_ms, tx_count, finality_status FROM blocks WHERE number = ?1",
             )
             .map_err(|e| e.to_string())?;
-        let mut rows = stmt
-            .query(params![number])
-            .map_err(|e| e.to_string())?;
+        let mut rows = stmt.query(params![number]).map_err(|e| e.to_string())?;
         if let Some(row) = rows.next().map_err(|e| e.to_string())? {
             return Ok(Some(BlockRow {
                 number: row.get(0).map_err(|e| e.to_string())?,
                 hash: row.get(1).map_err(|e| e.to_string())?,
                 timestamp_ms: row.get(2).map_err(|e| e.to_string())?,
                 tx_count: row.get(3).map_err(|e| e.to_string())?,
+                finality_status: row.get(4).map_err(|e| e.to_string())?,
             }));
         }
         Ok(None)
@@ -291,7 +311,7 @@ impl IndexerDb {
         let conn = self.lock()?;
         let mut stmt = conn
             .prepare(
-                "SELECT number, hash, timestamp_ms, tx_count FROM blocks
+                "SELECT number, hash, timestamp_ms, tx_count, finality_status FROM blocks
                  ORDER BY number DESC LIMIT ?1 OFFSET ?2",
             )
             .map_err(|e| e.to_string())?;
@@ -302,6 +322,7 @@ impl IndexerDb {
                     hash: row.get(1)?,
                     timestamp_ms: row.get(2)?,
                     tx_count: row.get(3)?,
+                    finality_status: row.get(4)?,
                 })
             })
             .map_err(|e| e.to_string())?;
@@ -314,19 +335,18 @@ impl IndexerDb {
         let needle = normalize_hash_lookup(hash);
         let mut stmt = conn
             .prepare(
-                "SELECT number, hash, timestamp_ms, tx_count FROM blocks
+                "SELECT number, hash, timestamp_ms, tx_count, finality_status FROM blocks
                  WHERE lower(hash) = lower(?1) LIMIT 1",
             )
             .map_err(|e| e.to_string())?;
-        let mut rows = stmt
-            .query(params![needle])
-            .map_err(|e| e.to_string())?;
+        let mut rows = stmt.query(params![needle]).map_err(|e| e.to_string())?;
         if let Some(row) = rows.next().map_err(|e| e.to_string())? {
             return Ok(Some(BlockRow {
                 number: row.get(0).map_err(|e| e.to_string())?,
                 hash: row.get(1).map_err(|e| e.to_string())?,
                 timestamp_ms: row.get(2).map_err(|e| e.to_string())?,
                 tx_count: row.get(3).map_err(|e| e.to_string())?,
+                finality_status: row.get(4).map_err(|e| e.to_string())?,
             }));
         }
         Ok(None)
@@ -488,13 +508,10 @@ impl IndexerDb {
                  FROM reputation_rows WHERE row_key = ?1",
             )
             .map_err(|e| e.to_string())?;
-        let mut rows = stmt
-            .query(params![row_key])
-            .map_err(|e| e.to_string())?;
+        let mut rows = stmt.query(params![row_key]).map_err(|e| e.to_string())?;
         if let Some(r) = rows.next().map_err(|e| e.to_string())? {
             let clients_json: String = r.get(5).map_err(|e| e.to_string())?;
-            let clients: Vec<String> =
-                serde_json::from_str(&clients_json).unwrap_or_default();
+            let clients: Vec<String> = serde_json::from_str(&clients_json).unwrap_or_default();
             return Ok(Some(ReputationRow {
                 row_key: r.get(0).map_err(|e| e.to_string())?,
                 last_block: r.get(1).map_err(|e| e.to_string())?,
@@ -509,11 +526,7 @@ impl IndexerDb {
         Ok(None)
     }
 
-    pub fn reputation_rows(
-        &self,
-        limit: i64,
-        offset: i64,
-    ) -> Result<Vec<ReputationRow>, String> {
+    pub fn reputation_rows(&self, limit: i64, offset: i64) -> Result<Vec<ReputationRow>, String> {
         let conn = self.lock()?;
         let mut stmt = conn
             .prepare(
@@ -595,10 +608,12 @@ mod tests {
             hash: "0xblock".into(),
             timestamp_ms: 1_700_000_000_000,
             tx_count: 1,
+            finality_status: "proof".into(),
         })
         .unwrap();
         let b = db.block(7).unwrap().unwrap();
         assert_eq!(b.hash, "0xblock");
+        assert_eq!(b.finality_status, "proof");
         db.insert_tx(
             &TxRow {
                 hash: "0xtx".into(),

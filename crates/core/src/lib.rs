@@ -4,6 +4,7 @@
 //! `keccak256(borsh(State))` with sorted `BTreeMap` fields for deterministic iteration.
 
 mod address;
+mod chain_economics;
 mod devnet_accounts;
 mod error;
 mod evm_engine;
@@ -17,6 +18,11 @@ mod tx;
 pub mod wallet_anchor;
 
 pub use address::{create_contract_address, Address};
+pub use chain_economics::{
+    forced_inclusion_penalty_wei, prover_reward_wei, sequencer_reward_wei, ChainEconomicsParams,
+    ProtocolPhaseConfig, ProverRewardParams, ProverWorkReceipt, SequencerRewardParams,
+    SequencerWorkReceipt, ValidatorRegistryEntry,
+};
 pub use devnet_accounts::{
     DEVNET_FAUCET_TREASURY, HARDHAT_DEFAULT_SIGNER_0, HARDHAT_DEFAULT_SIGNER_1,
 };

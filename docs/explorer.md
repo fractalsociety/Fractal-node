@@ -28,6 +28,9 @@ So the explorer’s “transaction hash” column is always “whatever the RPC 
 
 - Reads **only** JSON-RPC (`eth_*`, `web3_*`, `net_*`).
 - Does not index the chain locally; it is a thin client.
+- Shows block `finalityStatus` as **Soft-final** before proof acceptance and **Proof-final** after proof acceptance.
+
+Operators should use proof-final blocks for bridge, settlement, and high-value accounting decisions. See `docs/finality-ops.md` for the operating rules.
 
 For deep block analytics (internal traces, contract labels), a **Blockscout-class** deployment remains a separate milestone; this repo ships the **dev explorer** plus the semantics above.
 

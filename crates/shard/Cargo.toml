@@ -8,5 +8,6 @@ description = "Shard routing and masterchain wire types (PRD v0.2 Track B / M10)
 [dependencies]
 borsh.workspace = true
 fractal-consensus = { path = "../consensus" }
+fractal-core = { path = "../core" }
 fractal-crypto = { path = "../crypto" }
 thiserror.workspace = true

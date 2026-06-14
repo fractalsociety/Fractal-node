@@ -23,12 +23,14 @@ Override port: **`EXPLORER_PORT=4000 ./scripts/serve-explorer.sh`**
 
 ## What it shows
 
-- **Chain** — `eth_chainId`, `net_version`, head block, `eth_gasPrice`, `web3_clientVersion`, head gas/timestamp/tx count.
-- **Recent blocks** — up to **10** blocks from head downward (`eth_getBlockByNumber`). **Click a row** to show block metadata and a list of transaction hashes; each hash fills the tx field and runs lookup.
+- **Chain** — `eth_chainId`, `net_version`, head block, `eth_gasPrice`, `web3_clientVersion`, head gas/timestamp/tx count, and head finality.
+- **Finality** — block rows show `finalityStatus`: **Soft-final** for committee/sequencer acceptance, **Proof-final** after accepted validity proof. Block detail also shows proof circuit version, coverage manifest digest, and covered feature mask when the RPC returns them.
+- **Recent blocks** — up to **10** blocks from head downward (`eth_getBlockByNumber`). **Click a row** to show block metadata, finality, and a list of transaction hashes; each hash fills the tx field and runs lookup.
 - **Account** — `eth_getBalance` + `eth_getTransactionCount` + `eth_getCode` for a pasted `0x` address (includes bytecode length and whether it looks like a contract).
 - **Transaction** — `eth_getTransactionByHash` + `eth_getTransactionReceipt` for a pasted `0x` hash (JSON as returned by the node).
 
 See **`docs/devnet.md`** for faucet and Docker devnet.
+See **`docs/finality-ops.md`** for soft-final versus proof-final operating rules.
 
 ## Transaction hashes (RPC)
 

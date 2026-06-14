@@ -61,6 +61,15 @@ fn quantity_hex_u64(v: u64) -> String {
     format!("0x{:x}", v)
 }
 
+fn circuit_version_label(version: fractal_consensus::CircuitVersion) -> String {
+    match version {
+        fractal_consensus::CircuitVersion::DevMixedV1 => "dev_mixed_v1",
+        fractal_consensus::CircuitVersion::NativeStateTransitionV1 => "native_state_transition_v1",
+        fractal_consensus::CircuitVersion::MixedStateTransitionV1 => "mixed_state_transition_v1",
+    }
+    .to_owned()
+}
+
 fn hash_hex(h: &[u8; 32]) -> String {
     format!("0x{}", hex::encode(h))
 }
@@ -175,6 +184,9 @@ struct RpcBlock {
     /// Post-London field; required for ethers.js / Hardhat to pick EIP-1559 txs.
     base_fee_per_gas: String,
     finality_status: String,
+    proof_circuit_version: Option<String>,
+    proof_coverage_manifest_digest: Option<String>,
+    proof_covered_features: Option<String>,
     transactions: Vec<String>,
     uncles: Vec<String>,
 }
@@ -205,9 +217,12 @@ pub struct RpcProofRejectionMetric {
 pub struct RpcProofMetrics {
     pub proofs_accepted: String,
     pub proofs_rejected: String,
+    pub witness_gen_latency_ms: String,
     pub latest_proof_latency_ms: String,
+    pub latest_proof_final_lag_ms: String,
     pub average_proof_latency_ms: String,
     pub proof_final_height: String,
+    pub unsupported_feature_rejections: String,
     pub latest_rejection_reason: Option<String>,
     pub rejection_reasons: Vec<RpcProofRejectionMetric>,
 }
@@ -237,6 +252,15 @@ pub struct RpcTxScope {
 #[serde(rename_all = "camelCase")]
 pub struct RpcChainConfig {
     pub proof_required_settlement: bool,
+    pub native_transition_proofs_enabled: bool,
+    pub proofs_required_for_settlement: String,
+    pub owned_object_certificates: bool,
+    pub da_sampling: bool,
+    pub proof_final_settlement: bool,
+    pub execution_zones: bool,
+    pub forced_inclusion: bool,
+    pub prover_rewards: bool,
+    pub sequencer_rewards: bool,
     pub settlement_finality: String,
 }
 
@@ -253,6 +277,9 @@ pub struct RpcSettlementBlock {
     pub block_hash: String,
     pub block_number: String,
     pub finality_status: String,
+    pub proof_circuit_version: Option<String>,
+    pub proof_coverage_manifest_digest: Option<String>,
+    pub proof_covered_features: Option<String>,
     pub settlement_allowed: bool,
     pub proof_required_settlement: bool,
 }
@@ -483,6 +510,28 @@ pub trait ChainInteraction: Send {
         false
     }
 
+    fn proof_for_block(&self, _hash: &[u8; 32]) -> Option<fractal_consensus::BlockValidityProof> {
+        None
+    }
+
+    fn settlement_requires_proof_for_features(
+        &self,
+        _features: fractal_consensus::ExecutionFeatureSetV1,
+    ) -> bool {
+        self.chain_config().proof_required_settlement
+    }
+
+    fn settlement_finality_for_block_hash(&self, hash: &[u8; 32]) -> Result<(), String> {
+        let Some(block) = self.block_by_hash(hash) else {
+            return Err("block not found".into());
+        };
+        let requires = self.settlement_requires_proof_for_features(block.header.feature_set);
+        if requires && !self.block_is_proof_final(hash) {
+            return Err("block is not proof-final".into());
+        }
+        Ok(())
+    }
+
     fn tx_by_hash(&self, hash: &[u8; 32]) -> Option<fractal_core::Transaction>;
 
     fn mined_tx_info(&self, hash: &[u8; 32]) -> Option<(u64, [u8; 32], u32)>;
@@ -692,20 +741,38 @@ pub fn build_module(ctx: SharedChain) -> RpcModule<SharedChain> {
                         ));
                     };
                     let proof_final = g.block_is_proof_final(&hash);
-                    let cfg = g.chain_config();
-                    if cfg.proof_required_settlement && !proof_final {
-                        return Err(ErrorObjectOwned::owned(
-                            -32010,
-                            "block is not proof-final",
-                            None::<()>,
-                        ));
+                    let proof = g.proof_for_block(&hash);
+                    let proof_required =
+                        g.settlement_requires_proof_for_features(block.header.feature_set);
+                    if let Err(e) = g.settlement_finality_for_block_hash(&hash) {
+                        let (code, label) = match e.as_str() {
+                            "block is not proof-final" => (-32010, "soft-final"),
+                            "block proof circuit does not cover requested settlement features" => {
+                                (-32011, "uncovered-circuit")
+                            }
+                            "block data availability is unavailable" => (-32012, "unavailable-da"),
+                            _ => (-32001, "block-not-found"),
+                        };
+                        return Err(ErrorObjectOwned::owned(code, label, Some(e)));
                     }
                     Ok::<RpcSettlementBlock, ErrorObjectOwned>(RpcSettlementBlock {
                         block_hash: hash_hex(&hash),
                         block_number: quantity_hex_u64(block.header.height),
                         finality_status: if proof_final { "proof" } else { "soft" }.into(),
-                        settlement_allowed: !cfg.proof_required_settlement || proof_final,
-                        proof_required_settlement: cfg.proof_required_settlement,
+                        proof_circuit_version: proof
+                            .as_ref()
+                            .map(|p| circuit_version_label(p.circuit_version)),
+                        proof_coverage_manifest_digest: proof
+                            .as_ref()
+                            .map(|p| hash_hex(&p.coverage_manifest_digest)),
+                        proof_covered_features: proof.as_ref().map(|p| {
+                            let manifest = fractal_consensus::coverage_manifest_for_circuit_version(
+                                p.circuit_version,
+                            );
+                            quantity_hex_u64(manifest.covered_features.bits)
+                        }),
+                        settlement_allowed: !proof_required || proof_final,
+                        proof_required_settlement: proof_required,
                     })
                 }
             },
@@ -764,6 +831,7 @@ pub fn build_module(ctx: SharedChain) -> RpcModule<SharedChain> {
                     lb,
                     g.base_fee_per_gas(),
                     g.block_is_proof_final(&h),
+                    g.proof_for_block(&h),
                 ))
             }
         })
@@ -788,6 +856,7 @@ pub fn build_module(ctx: SharedChain) -> RpcModule<SharedChain> {
                     lb,
                     g.base_fee_per_gas(),
                     g.block_is_proof_final(&h),
+                    g.proof_for_block(&h),
                 ))
             }
         })
@@ -1300,6 +1369,7 @@ fn rpc_block_from_consensus(
     logs_bloom: [u8; 256],
     base_fee_per_gas: u128,
     proof_final: bool,
+    proof: Option<fractal_consensus::BlockValidityProof>,
 ) -> RpcBlock {
     let h = hash.unwrap_or([0u8; 32]);
     let tx_hashes: Vec<String> = b
@@ -1336,6 +1406,17 @@ fn rpc_block_from_consensus(
         timestamp: quantity_hex_u64(b.header.timestamp_ms / 1000),
         base_fee_per_gas: u256_quantity_hex(base_fee_per_gas),
         finality_status: if proof_final { "proof" } else { "soft" }.into(),
+        proof_circuit_version: proof
+            .as_ref()
+            .map(|p| circuit_version_label(p.circuit_version)),
+        proof_coverage_manifest_digest: proof
+            .as_ref()
+            .map(|p| hash_hex(&p.coverage_manifest_digest)),
+        proof_covered_features: proof.as_ref().map(|p| {
+            let manifest =
+                fractal_consensus::coverage_manifest_for_circuit_version(p.circuit_version);
+            quantity_hex_u64(manifest.covered_features.bits)
+        }),
         transactions: tx_hashes,
         uncles: Vec::new(),
     }

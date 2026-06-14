@@ -260,6 +260,7 @@ mod tests {
                 parent_qc_hash: [2u8; 32],
                 proposer: [3u8; 32],
                 timestamp_ms: 0,
+                parent_state_root: [0u8; 32],
                 state_root: [4u8; 32],
                 tx_root,
                 gas_used: 100,

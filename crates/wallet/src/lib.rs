@@ -9,6 +9,7 @@ pub mod capability;
 pub mod caveat;
 pub mod challenge;
 pub mod emergency;
+pub mod finality_warning;
 pub mod market;
 pub mod merkle;
 pub mod policy;
@@ -23,6 +24,10 @@ pub use capability::{CapabilityId, CapabilityToken, CapabilityVerifyError};
 pub use caveat::Caveat;
 pub use challenge::{AdjudicationDecision, Challenge, ChallengeId, ChallengeKind};
 pub use emergency::{EmergencyLevel, EmergencyRegistry};
+pub use finality_warning::{
+    warn_if_high_value_soft_final, HighValueFinalityPolicy, WalletFinalityStatus,
+    WalletFinalityWarning,
+};
 pub use market::{
     provider_id_from_public_key, ChallengeError, DeliveredInfo, IntentState, MatchError,
     PostIntentError, PostReceiptError, ProviderStake, Quote, QuoteBody, ResolveError, SettleError,

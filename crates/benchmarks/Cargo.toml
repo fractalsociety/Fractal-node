@@ -17,6 +17,14 @@ path = "src/bin/economic.rs"
 name = "fractal-verifier-bench"
 path = "src/bin/verifier.rs"
 
+[[bin]]
+name = "fractal-protocol-bench"
+path = "src/bin/protocol.rs"
+
 [dependencies]
+borsh.workspace = true
+fractal-consensus = { path = "../consensus" }
+fractal-core = { path = "../core" }
+fractal-crypto = { path = "../crypto" }
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
