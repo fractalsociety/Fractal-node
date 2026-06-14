@@ -598,8 +598,6 @@ The exact function is parameterized and governance-tunable. The point is that re
 
 To bootstrap: new providers start with `score = 0` and require larger stake multipliers until they have history. Agents may filter on minimum reputation in their quote-selection policy.
 
-*Phase 1 library:* derived score, bootstrap stake multiplier (basis points), and §7.4-style quote selection (`reputation × stake` gate plus cheapest / fastest / most-reputable) live in **`fractal_wallet::reputation`** (`crates/wallet/src/reputation.rs`). Callers supply a **`ReputationLedgerSummary`** from settlement history (indexer or future `core::reputation`).
-
 ### 10.5 Provider identity & registration
 
 ```
@@ -884,10 +882,6 @@ Two settlement modes per class:
 ### 16.3 Batch finalization
 
 To keep on-chain footprint low, multiple receipt settlements for the same provider and same class can be batched into a single `BatchSettle` transaction. The batch root commits to all included receipts.
-
-**Phase 2 (landed):** On-chain **`NativeCall::WalletBatchSettleV1`** (`OP_WALLET_BATCH_SETTLE_V1` = `0x1b`) commits a Merkle root over many §9.1 **`ToolReceipt`** rows (same provider + tool class). Helpers: `fractal_wallet::prepare_wallet_batch_receipts`, `sign_wallet_tool_batch`. Relayer (tx signer) debits `total_cost`; **`payout_to`** receives funds. CLI: **`chain submit-wallet-batch-settle`**. Tests: `cargo test -p fractal-core --features wallet --test w6_wallet_batch_settle`. **Not** L1 **`NativeCall::SettleBatch`** (M3 / bridge `OnChainTaskReceipt`); see PRD **§13.7**.
-
-**Phase 1 library:** `fractal_wallet::market::ToolMarket` still implements **per-intent** `settle_after_window` / `resolve_challenge` off-chain.
 
 ### 16.4 Pricing units
 
@@ -1192,20 +1186,15 @@ These are honest limitations to call out:
 **Must ship:**
 - Account & capability module with Ed25519 signatures, caveats §4.4 (the first 6 only), revocation SMT.
 - Budget module with reservations, rate limits, refunds.
-- Tool market with intent → quote → match → receipt → settle (per-intent; optimistic windows in library — on-chain **§16.3 `BatchSettle`** for many tool receipts is **not** Phase 1; see PRD **§13.7** vs M3 **`SettleBatch`**).
-- Derived provider reputation (§10.4): `fractal_wallet::reputation` — `compute_reputation_score_milli`, `bootstrap_stake_multiplier_bps`, `select_quote` / `QuoteCandidate`. **Governance path (Phase 1):** operators commit **`NativeCall::WalletReputationSnapshotV1`** (`ReputationLedgerSummary` borsh); on-chain `wallet_reputation_milli` + `wallet_reputation_ledger_commitment`. CLI: **`reputation preview`**, **`chain submit-reputation-snapshot`**; RPC **`fractal_getWalletReputation`**. **`fractal-indexer`** derives rows from snapshots + (by default) **`SettleBatch` / `SettleReceipt`** into SQLite (`tools/indexer/README.md`). Stub JSON: **`./scripts/run-indexer-reputation.sh`** (`INDEXER_REPUTATION_STORE_PATH`, **`INDEXER_REPUTATION_MERGE_SETTLEMENTS=0`** for snapshot-first only).
+- Tool market with intent → quote → match → receipt → settle.
 - Tool classes: `BROWSER`, `LLM_INFERENCE`, `TEST_RUNNER`, `FILE_STORAGE`.
-- Provider staking and slashing (`Optimistic` and `Trusted` tiers only) — **off-chain in `fractal-wallet`** remains the per-intent lock/adjudication helper (`ProviderStake` lock at match, `burn_locked` when challenger wins). **On-chain §14.4 provider stake ops have landed in `fractal-core`**: `WalletRegisterProviderV1`, `WalletStakeForClassV1`, `WalletProviderUnstakeRequestV1`, `WalletProviderUnstakeFinalizeV1`, governance evidence-gated `WalletSlashProviderV1`, `WalletUpdateProviderV1`, and `WalletDeregisterProviderV1`; state rows are `wallet_providers`, `wallet_provider_stakes`, delayed unstake requests, and slash history. Tests: `cargo test -p fractal-core --features wallet --test w14_wallet_provider_stake`.
+- Provider staking and slashing (`Optimistic` and `Trusted` tiers only).
 - TaskReceipt with tool_receipt_root binding.
 - Policy templates: research, coding, verifier.
-- On-chain **§14.1 / §29 emergency stop (v1):** governance `WalletEmergencyStopV1 { engage }` (`borsh` discriminant last in `NativeCall`; document opcode byte `0x1a` = `OP_WALLET_EMERGENCY_STOP_V1`). When `State.wallet_emergency_stop`, new wallet mints, budget create/fund, task post/checkout/renew/submit/verify, and task-receipt anchors fail with `WalletEmergencyStopActive`; revoke, close budget, finalize task, and `WalletReputationSnapshotV1` still succeed. Query: **`fractal_getWalletEmergencyStop`** → `true`/`false`. CLI: **`chain emergency-stop --engage`** / **`--disengage`**. Scoped hardening is implemented as `WalletScopedEmergencyStopV1 { engage, scope, master_public_key, master_sig }` (`0x23`): the master key signs `WalletScopedEmergencyStopSignBodyV1 { chain_id, engage, scope }`, active rules live in `State.wallet_scoped_emergency_stops`, and matching future capability mints under that master fail with `WalletEmergencyStopActive`. Scope selectors support workspace/project/task, tool-class masks, and provider ids; `None` / mask `0` means any. Tests: `cargo test -p fractal-core --test w29_wallet_emergency_stop`; `cargo test -p fractal-core --features wallet --test w29_wallet_scoped_emergency_stop`.
-- Wallet activity UI (reference web client) — `tools/wallet-web/` (`./scripts/serve-wallet-web.sh`): in-browser borsh + Ed25519 verify, template mint, attenuation, revocation proof check; optional RPC for `fractal_getWalletRevocationMerkleRoot`. Golden test: `./scripts/verify-wallet-web.sh`.
+- Emergency stop.
+- Wallet activity UI (reference web client) — static stub: `tools/wallet-web/` (`./scripts/serve-wallet-web.sh`); full in-browser verify deferred (use `fractal-wallet-cli cap show`).
 - Reference provider SDK (TypeScript + Rust) — **`packages/fractal-provider-ts/`** (types + `npm run check`); Rust: **`fractal_sdk::provider`** in `crates/sdk-rust` (re-exports `fractal_wallet` market types, `IndexerCursor`, `IntentPollFilter`, `provider_id_from_public_key`).
-- On-chain **TaskReceipt** anchor (W6-d): `fractal_core::NativeCall::WalletTaskReceiptAnchorV1` (`OP_WALLET_TASK_RECEIPT_ANCHOR_V1` = `0x0e`) + `State.wallet_task_receipt_anchors`; optional borsh witness verified with `cargo test -p fractal-core --features wallet`. Indexer poll stub: **`cargo run -p fractal-indexer-stub`** (`INDEXER_RPC_URL`, `INDEXER_POLL_MS`, optional `INDEXER_JSON_LOG=1`; also logs `eth_getBlockByNumber` tx counts). Subgraph-class indexer (PRD §14.4 / §19): **`fractal-indexer`** — SQLite + GraphQL at `INDEXER_GRAPHQL_BIND` (default `127.0.0.1:8088`); see **`tools/indexer/README.md`** and **`./scripts/serve-indexer.sh`**. Sample provider HTTP: **`tools/provider-http-sample/`** (`./scripts/run-provider-http-sample.sh`; optional **`PROVIDER_ED25519_SEED_HEX`** + `pip install -r requirements-signing.txt` for Ed25519 over borsh `QuoteBody`, with `providerId = BLAKE3(providerPublicKey)`). Followers: comma-separated **`FRACTAL_BOOTSTRAP`** multiaddrs with the same `/p2p/<PeerId>` (W6-e). Borsh reference: `cargo run -p fractal-wallet --example dump_quote_body_borsh`.
-- Sub-agent delegation (§12 / §19.2): `delegate_sub_agent_production` + linked parent/child budgets + verifier tool-market E2E (`fractal_wallet::delegation::session`); CLI: **`cap delegate`** (`--parent-budget-deposited`, `--delegate-amount`, `--child-budget-id`, `--role verifier`, optional `--run-e2e`) and **`session e2e-verifier-delegation`**.
-- On-chain §14.1–14.2 (requires `fractal-core --features wallet`): `NativeCall::WalletMintCapabilityV1` **requires** `revocation_proof_borsh` (`RevocationVerifyProof` vs `wallet_revocation_merkle_root`); `WalletCreateBudgetAccountV1`, `WalletFundBudgetAccountV1`, `WalletCloseBudgetAccountV1` — state fields `wallet_capabilities`, `wallet_budgets`, `wallet_cap_holders`, `wallet_revocation_merkle_root`; tests `cargo test -p fractal-core --features wallet --test w6_wallet_mint_capability`. Operator CLI: **`chain submit-mint-cap`** (auto-builds proof with `--from-rpc` or `--apply-local`; or `--proof-hex`), **`chain submit-create-budget`**, **`chain submit-fund-budget`**, **`chain submit-revoke-cap`** — `--apply-local` or `FRACTAL_RPC_URL` / `--rpc-url` → borsh `Transaction` via `eth_sendRawTransaction`.
-- On-chain **§14.5 Task module** (§29): `WalletPostTaskV1` … `WalletFinalizeTaskV1` (`0x14`–`0x19`) + `State.wallet_tasks` / `next_wallet_task_id`; escrow from poster, checkout → renew → submit → verify (signer ≠ checkout) → finalize pays escrow to checkout signer. CLI: **`chain task-post`**, **`chain task-checkout`**, **`chain task-renew-checkout`**, **`chain task-submit`**, **`chain task-verify`**, **`chain task-finalize`**. Tests: `cargo test -p fractal-core --test w29_wallet_task_module`.
-- Revocation SMT proofs at verify time (§4.6 (c)): 256-bit **sparse Merkle trie** root on-chain; `RevocationSet::build_verify_proof` emits `SmtNonMembershipProof` / `SmtMembershipProof` witnesses; **`provider_verify_intent_capability`** before tool match. On-chain root in `State.wallet_revocation_merkle_root`. JSON-RPC: **`fractal_getWalletRevocationMerkleRoot`** (`[]`), **`fractal_getWalletRevocationEntries`**. CLI: **`cap build-revocation-proof`** (`--from-rpc`), **`cap verify-revocation`**.
+- On-chain **TaskReceipt** anchor (W6-d): `fractal_core::NativeCall::WalletTaskReceiptAnchorV1` (`OP_WALLET_TASK_RECEIPT_ANCHOR_V1` = `0x0e`) + `State.wallet_task_receipt_anchors`; optional borsh witness verified with `cargo test -p fractal-core --features wallet`. Indexer poll stub: **`cargo run -p fractal-indexer-stub`** (`INDEXER_RPC_URL`, `INDEXER_POLL_MS`, optional `INDEXER_JSON_LOG=1`; also logs `eth_getBlockByNumber` tx counts). Sample provider HTTP: **`tools/provider-http-sample/`** (`./scripts/run-provider-http-sample.sh`; optional **`PROVIDER_ED25519_SEED_HEX`** + `pip install -r requirements-signing.txt` for Ed25519 over borsh `QuoteBody`, with `providerId = BLAKE3(providerPublicKey)`). Followers: comma-separated **`FRACTAL_BOOTSTRAP`** multiaddrs with the same `/p2p/<PeerId>` (W6-e). Borsh reference: `cargo run -p fractal-wallet --example dump_quote_body_borsh`.
 
 ### 25.2 Phase 2 — Hardening (Months 6-12)
 
@@ -1213,9 +1202,9 @@ These are honest limitations to call out:
 - `GITHUB_READ`, `GITHUB_WRITE`, `CODE_EXECUTION`, `DATABASE_QUERY` tool classes.
 - Replicated verification (`Replicated` tier).
 - Privacy envelope encryption with TEE-bound keys.
-- Emergency stop on-chain + wallet-web delegation UI; **sparse Merkle trie** on-chain (`wallet_revocation_merkle_root` = 256-bit SMT over `cap_id`); compact proofs use sparse sibling witnesses (`SmtNonMembershipProof` / `SmtMembershipProof`).
-- Reputation indexer — **Phase 1 dev slice:** **`fractal-indexer`** (`./scripts/serve-indexer.sh`) mirrors **`WalletReputationSnapshotV1`**, dispute-slash rows, and **`SettleBatch` / `SettleReceipt`** by default into SQLite + GraphQL (`INDEXER_REPUTATION_MERGE_SETTLEMENTS=0` to disable settlement merge). **`fractal-indexer-stub`** + **`run-indexer-reputation.sh`** remain JSON snapshot-first for lightweight scripts.
-- **On-chain wallet §16.3 batch settle** — **`WalletBatchSettleV1`** (multi–tool-receipt Merkle root; distinct from M3 **`SettleBatch`**). CLI **`chain submit-wallet-batch-settle`**; per-intent settlement remains in **`fractal-wallet`** market (PRD §13.7).
+- Sub-agent delegation in production.
+- Reputation indexer.
+- Batch settlement.
 - Cross-chain bridges in FractalEVM.
 
 ### 25.3 Phase 3 — Advanced (Months 12+)
@@ -1320,13 +1309,12 @@ A minimum-viable, end-to-end implementation requires the following components, o
 □ Intent posting + quote handling
 □ Settlement state machine
 □ Receipt module with DA reference support
-☑ Provider stake module + slashing logic (Phase 1: off-chain `fractal-wallet` — lock at match, slash bond on challenger wins, §10.4 ledger sync; Phase 2: on-chain §14.4 provider registry, per-class stake, delayed unstake, and evidence-gated slash in `fractal-core`)
-☑ Reputation derivation indexer — **`fractal-indexer`**: SQLite `reputation_rows` + GraphQL (`tools/indexer/README.md`); merges governance snapshots, dispute slashes, **`SettleBatch` / `SettleReceipt`**, and **§14.5 `WalletFinalizeTaskV1`** (tool-class keyed rows via batch `receipt_root` / provider registry linkage) by default.
-☑ Batch settlement — **M3 / bridge:** on-chain **`NativeCall::SettleBatch`** + **`ClaimPayout`** (`docs/prd.md` §13.1). **Wallet §16.3:** **`WalletBatchSettleV1`** for many §9.1 tool receipts + per-intent market settlement in **`fractal-wallet`** (`docs/prd.md` §13.7).
+□ Provider stake module + slashing logic
+□ Reputation derivation indexer
 □ Challenge / adjudication module per class
 □ Policy template registry
-☑ Task module (post, checkout, renew, submit, verify, finalize) — native `0x14`–`0x19`, CLI `chain task-*`, `State.wallet_tasks`
-☑ Emergency stop — global governance `NativeCall::WalletEmergencyStopV1`, `State.wallet_emergency_stop`, CLI `chain emergency-stop`, RPC `fractal_getWalletEmergencyStop`; scoped master-key `WalletScopedEmergencyStopV1`, `State.wallet_scoped_emergency_stops`; blocks mint/budget fund+create/task progress/anchors globally, and blocks matching future capability mints by workspace/project/task/tool/provider scope; allows revoke, budget close, task finalize, reputation snapshot
+□ Task module (post, checkout, renew, submit, verify, finalize)
+□ Emergency stop
 □ Reference wallet client (web + CLI)
 □ Reference provider SDK (Rust + TypeScript)
 □ Reference DA integration (one option at launch)

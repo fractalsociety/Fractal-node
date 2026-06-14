@@ -1,4 +1,4 @@
-//! Load a PRD M5 [`fractal_core::SettleBatchPayload`] from operator JSON (off-chain receipt export).
+//! Load PRD M5 settle batch from JSON (off-chain receipt export shape).
 
 use fractal_core::{Address, OnChainTaskReceipt, PayoutEntry, SettleBatchPayload};
 use serde::Deserialize;
@@ -35,15 +35,15 @@ struct ReceiptJson {
     final_status: u8,
     finalized_at: u64,
     schema_version: u16,
-    /// [`fractal_wallet::ToolClass`] discriminant; default `0` = Browser.
-    #[serde(default)]
-    tool_class: u8,
 }
 
 fn hex20(s: &str, field: &str) -> Result<Address, String> {
     let t = s.trim().strip_prefix("0x").unwrap_or(s.trim());
     if t.len() != 40 {
-        return Err(format!("{field}: expected 20-byte hex, got {} nibbles", t.len()));
+        return Err(format!(
+            "{field}: expected 20-byte hex, got {} nibbles",
+            t.len()
+        ));
     }
     let b = hex::decode(t).map_err(|e| format!("{field}: {e}"))?;
     let mut a = [0u8; 20];
@@ -54,7 +54,10 @@ fn hex20(s: &str, field: &str) -> Result<Address, String> {
 fn hex32(s: &str, field: &str) -> Result<[u8; 32], String> {
     let t = s.trim().strip_prefix("0x").unwrap_or(s.trim());
     if t.len() != 64 {
-        return Err(format!("{field}: expected 32-byte hex, got {} nibbles", t.len()));
+        return Err(format!(
+            "{field}: expected 32-byte hex, got {} nibbles",
+            t.len()
+        ));
     }
     let b = hex::decode(t).map_err(|e| format!("{field}: {e}"))?;
     let mut h = [0u8; 32];
@@ -65,7 +68,10 @@ fn hex32(s: &str, field: &str) -> Result<[u8; 32], String> {
 fn hex64(s: &str, field: &str) -> Result<[u8; 64], String> {
     let t = s.trim().strip_prefix("0x").unwrap_or(s.trim());
     if t.len() != 128 {
-        return Err(format!("{field}: expected 64-byte hex, got {} nibbles", t.len()));
+        return Err(format!(
+            "{field}: expected 64-byte hex, got {} nibbles",
+            t.len()
+        ));
     }
     let b = hex::decode(t).map_err(|e| format!("{field}: {e}"))?;
     let mut h = [0u8; 64];
@@ -88,8 +94,14 @@ fn u128_field(v: &serde_json::Value, field: &str) -> Result<u128, String> {
 }
 
 fn receipt_from_json(r: ReceiptJson) -> Result<OnChainTaskReceipt, String> {
-    let verifier_fee = u128_field(r.verifier_fee.as_ref().unwrap_or(&serde_json::Value::Null), "verifierFee")?;
-    let protocol_fee = u128_field(r.protocol_fee.as_ref().unwrap_or(&serde_json::Value::Null), "protocolFee")?;
+    let verifier_fee = u128_field(
+        r.verifier_fee.as_ref().unwrap_or(&serde_json::Value::Null),
+        "verifierFee",
+    )?;
+    let protocol_fee = u128_field(
+        r.protocol_fee.as_ref().unwrap_or(&serde_json::Value::Null),
+        "protocolFee",
+    )?;
     Ok(OnChainTaskReceipt {
         receipt_id: hex32(&r.receipt_id, "receiptId")?,
         job_id: hex32(&r.job_id, "jobId")?,
@@ -105,7 +117,6 @@ fn receipt_from_json(r: ReceiptJson) -> Result<OnChainTaskReceipt, String> {
         final_status: r.final_status,
         finalized_at: r.finalized_at,
         schema_version: r.schema_version,
-        tool_class: r.tool_class,
     })
 }
 

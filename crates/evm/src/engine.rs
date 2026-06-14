@@ -1,12 +1,12 @@
 use borsh::BorshDeserialize;
 use fractal_core::{
-    create_contract_address, is_native_precompile_address, Address, EvmCallOutcome, EvmEngine, EvmLog,
-    ExecError, NativeCall, State,
+    create_contract_address, is_native_precompile_address, Address, EvmCallOutcome, EvmEngine,
+    EvmLog, ExecError, NativeCall, State,
 };
-use revm::context::result::ExecutionResult;
 use revm::bytecode::Bytecode;
+use revm::context::result::ExecutionResult;
 use revm::context::Context;
-use revm::primitives::{Address as RAddress, Bytes, FixedBytes, KECCAK_EMPTY, Log, U256};
+use revm::primitives::{Address as RAddress, Bytes, FixedBytes, Log, KECCAK_EMPTY, U256};
 use revm::state::{Account, AccountInfo};
 use revm::{Database, DatabaseCommit, ExecuteEvm, MainBuilder, MainContext};
 use sha3::Digest;
@@ -17,7 +17,6 @@ use std::convert::Infallible;
 const FRACTAL_DEFAULT_CHAIN_ID: u64 = 41;
 /// Must be ≥ fractal-node block `gas_limit` so Hardhat-style 60M gas txs validate in revm (EIP-7825 cap).
 const FRACTAL_TX_GAS_CAP: u64 = 60_000_000;
-const FRACTAL_DEVNET_GAS_PRICE: u128 = 1;
 
 /// Minimal `revm`-backed engine (M4 initial slice).
 ///
@@ -38,8 +37,7 @@ impl RevmEngine {
     }
 
     fn map_logs(logs: &[Log]) -> Vec<EvmLog> {
-        logs
-            .iter()
+        logs.iter()
             .map(|l| EvmLog {
                 address: {
                     let mut a = [0u8; 20];
@@ -91,7 +89,6 @@ impl EvmEngine for RevmEngine {
         tx.data = Bytes::from(calldata);
         tx.value = U256::from(0u64);
         tx.gas_limit = gas_limit;
-        tx.gas_price = FRACTAL_DEVNET_GAS_PRICE;
         tx.nonce = caller_nonce;
         tx.chain_id = Some(FRACTAL_DEFAULT_CHAIN_ID);
 
@@ -116,11 +113,7 @@ impl EvmEngine for RevmEngine {
 
         Ok(EvmCallOutcome {
             gas_used: out.result.tx_gas_used(),
-            return_data: out
-                .result
-                .output()
-                .map(|b| b.to_vec())
-                .unwrap_or_default(),
+            return_data: out.result.output().map(|b| b.to_vec()).unwrap_or_default(),
             logs,
         })
     }
@@ -147,7 +140,6 @@ impl EvmEngine for RevmEngine {
         tx.data = Bytes::from(init_code);
         tx.value = U256::from(value);
         tx.gas_limit = gas_limit;
-        tx.gas_price = FRACTAL_DEVNET_GAS_PRICE;
         tx.nonce = nonce;
         tx.chain_id = Some(FRACTAL_DEFAULT_CHAIN_ID);
 
@@ -176,11 +168,7 @@ impl EvmEngine for RevmEngine {
 
         Ok(EvmCallOutcome {
             gas_used: out.result.tx_gas_used(),
-            return_data: out
-                .result
-                .output()
-                .map(|b| b.to_vec())
-                .unwrap_or_default(),
+            return_data: out.result.output().map(|b| b.to_vec()).unwrap_or_default(),
             logs,
         })
     }
@@ -225,7 +213,12 @@ impl<'a> Database for StateDb<'a> {
             keccak(&code).into()
         };
 
-        let mut info = AccountInfo::new(U256::from(balance), nonce, code_hash, Bytecode::new_raw(Bytes::from(code)));
+        let mut info = AccountInfo::new(
+            U256::from(balance),
+            nonce,
+            code_hash,
+            Bytecode::new_raw(Bytes::from(code)),
+        );
         if info.code_hash == KECCAK_EMPTY {
             info.code = Some(Bytecode::default());
         }
@@ -263,7 +256,10 @@ impl<'a> Database for StateDb<'a> {
 }
 
 impl<'a> DatabaseCommit for StateDb<'a> {
-    fn commit(&mut self, changes: HashMap<RAddress, Account, revm::primitives::map::FbBuildHasher<20>>) {
+    fn commit(
+        &mut self,
+        changes: HashMap<RAddress, Account, revm::primitives::map::FbBuildHasher<20>>,
+    ) {
         for (addr, acc) in changes {
             let mut a = [0u8; 20];
             a.copy_from_slice(addr.as_slice());
@@ -272,16 +268,20 @@ impl<'a> DatabaseCommit for StateDb<'a> {
             self.st
                 .accounts
                 .entry(a)
-                .or_insert(fractal_core::Account { nonce: 0, balance: 0 })
+                .or_insert(fractal_core::Account {
+                    nonce: 0,
+                    balance: 0,
+                })
                 .balance = info.balance.try_into().unwrap_or(0);
             self.st
                 .accounts
                 .entry(a)
-                .or_insert(fractal_core::Account { nonce: 0, balance: 0 })
+                .or_insert(fractal_core::Account {
+                    nonce: 0,
+                    balance: 0,
+                })
                 .nonce = info.nonce;
-            if info.code_hash == KECCAK_EMPTY {
-                self.st.evm_code.remove(&a);
-            } else if let Some(code) = info.code {
+            if let Some(code) = info.code {
                 let raw = code.bytecode().to_vec();
                 if !raw.is_empty() {
                     self.st.evm_code.insert(a, raw);

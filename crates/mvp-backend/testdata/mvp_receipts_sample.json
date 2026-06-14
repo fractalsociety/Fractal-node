@@ -16,8 +16,7 @@
       "payoutAmount": "5",
       "finalStatus": 1,
       "finalizedAt": 1,
-      "schemaVersion": 2,
-      "toolClass": 1
+      "schemaVersion": 1
     },
     {
       "receiptId": "0x00000000000000000000000000000000000000000000000000000000000000a2",

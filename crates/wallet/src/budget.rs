@@ -20,7 +20,11 @@ pub struct BudgetAccount {
 }
 
 impl BudgetAccount {
-    pub fn new(id: BudgetAccountId, parent: Option<BudgetAccountId>, total_deposited: Amount) -> Self {
+    pub fn new(
+        id: BudgetAccountId,
+        parent: Option<BudgetAccountId>,
+        total_deposited: Amount,
+    ) -> Self {
         Self {
             id,
             parent,
@@ -33,7 +37,9 @@ impl BudgetAccount {
     }
 
     pub fn available(&self) -> Amount {
-        self.total_deposited.saturating_sub(self.reserved).saturating_sub(self.spent)
+        self.total_deposited
+            .saturating_sub(self.reserved)
+            .saturating_sub(self.spent)
     }
 
     pub fn deposit(&mut self, amount: Amount) {
@@ -75,7 +81,11 @@ impl BudgetAccount {
     }
 
     /// Partial settle: move `settle` from reserved → spent, remainder reserved → available.
-    pub fn partial_settle(&mut self, settle: Amount, reserved_total: Amount) -> Result<(), BudgetError> {
+    pub fn partial_settle(
+        &mut self,
+        settle: Amount,
+        reserved_total: Amount,
+    ) -> Result<(), BudgetError> {
         if reserved_total > self.reserved {
             return Err(BudgetError::InsufficientReserved);
         }
@@ -89,26 +99,6 @@ impl BudgetAccount {
         self.nonce = self.nonce.saturating_add(1);
         Ok(())
     }
-
-    /// §12.1 — atomically move `amount` from parent's `total_deposited` into `child.total_deposited`.
-    /// Requires `child.parent == Some(parent.id)` and `amount <= parent.available()`.
-    pub fn allocate_to_linked_child(
-        parent: &mut BudgetAccount,
-        child: &mut BudgetAccount,
-        amount: Amount,
-    ) -> Result<(), BudgetError> {
-        if child.parent != Some(parent.id) {
-            return Err(BudgetError::BudgetDelegationHierarchy);
-        }
-        if amount > parent.available() {
-            return Err(BudgetError::InsufficientAvailable);
-        }
-        parent.total_deposited = parent.total_deposited.saturating_sub(amount);
-        child.total_deposited = child.total_deposited.saturating_add(amount);
-        parent.nonce = parent.nonce.saturating_add(1);
-        child.nonce = child.nonce.saturating_add(1);
-        Ok(())
-    }
 }
 
 #[derive(Debug, Error, PartialEq, Eq)]
@@ -119,8 +109,6 @@ pub enum BudgetError {
     InsufficientReserved,
     #[error("per-tool cap exceeded")]
     PerToolCapExceeded,
-    #[error("child budget account is not linked to this parent id")]
-    BudgetDelegationHierarchy,
 }
 
 #[cfg(test)]
@@ -142,23 +130,12 @@ mod tests {
     }
 
     #[test]
-    fn allocate_to_linked_child_moves_deposit() {
-        let mut parent = BudgetAccount::new(1, None, 1000);
-        let mut child = BudgetAccount::new(2, Some(1), 0);
-        BudgetAccount::allocate_to_linked_child(&mut parent, &mut child, 300).unwrap();
-        assert_eq!(parent.total_deposited, 700);
-        assert_eq!(child.total_deposited, 300);
-        assert_eq!(parent.available(), 700);
-        assert_eq!(child.available(), 300);
-    }
-
-    #[test]
-    fn allocate_to_linked_child_rejects_unlinked() {
-        let mut parent = BudgetAccount::new(1, None, 1000);
-        let mut child = BudgetAccount::new(2, None, 0);
-        assert_eq!(
-            BudgetAccount::allocate_to_linked_child(&mut parent, &mut child, 100),
-            Err(BudgetError::BudgetDelegationHierarchy)
-        );
+    fn partial_settle() {
+        let mut b = BudgetAccount::new(1, None, 1000);
+        b.reserve(ToolClass::LlmInference, 300).unwrap();
+        b.partial_settle(100, 300).unwrap();
+        assert_eq!(b.reserved, 0);
+        assert_eq!(b.spent, 100);
+        assert_eq!(b.available(), 900);
     }
 }

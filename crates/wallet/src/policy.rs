@@ -174,8 +174,6 @@ pub mod builtins {
     pub const RESEARCH_AGENT_V1_ID: TemplateId = 1;
     pub const CODING_AGENT_V1_ID: TemplateId = 2;
     pub const VERIFIER_AGENT_V1_ID: TemplateId = 3;
-    /// Phase 2 production slice: GitHub + DB + sandboxed code with TEE caveats.
-    pub const CODING_AGENT_V2_PRODUCTION_ID: TemplateId = 4;
 
     /// One-FRAC-in-base-units. `Amount` (= `u128`) is in the smallest indivisible
     /// FRAC unit; the protocol's accounting precision matches Ethereum's wei.
@@ -285,35 +283,6 @@ pub mod builtins {
         }
     }
 
-    /// `tpl:coding-agent-v2-production` — Phase 2 tool classes + TEE requirements (§25.2).
-    pub fn coding_agent_v2_production() -> PolicyTemplate {
-        PolicyTemplate {
-            template_id: CODING_AGENT_V2_PRODUCTION_ID,
-            version: semver_1_0_0(),
-            name: "tpl:coding-agent-v2-production".into(),
-            description: "LLM + tests + Phase 2 GitHub/DB/code with TEE attestation".into(),
-            inherits: Some(CODING_AGENT_V1_ID),
-            base_caveats: vec![
-                Caveat::TeeAttestationRequired {
-                    class: ToolClass::GithubWrite,
-                    tee: crate::types::TeeType::IntelTdx,
-                },
-                Caveat::OutputCommitmentRequired(ToolClass::GithubWrite),
-            ],
-            required_attestations: BTreeSet::from([
-                (ToolClass::GithubWrite, crate::types::TeeType::IntelTdx),
-                (ToolClass::CodeExecution, crate::types::TeeType::AwsNitro),
-            ]),
-            default_budget: BudgetSpec {
-                total_cap: 20 * FRAC,
-                per_tool: BTreeMap::new(),
-            },
-            rate_limits: BTreeMap::new(),
-            publisher: [0u8; 32],
-            audit_record_uri: None,
-        }
-    }
-
     /// `tpl:verifier-agent-v1` (§15.2) — independent verification (read + test).
     pub fn verifier_agent_v1() -> PolicyTemplate {
         PolicyTemplate {
@@ -343,43 +312,38 @@ pub mod builtins {
     pub fn suggested_tool_class_mask(template_id: TemplateId) -> Option<u64> {
         match template_id {
             RESEARCH_AGENT_V1_ID => Some(
-                ToolClass::Browser.bit() | ToolClass::LlmInference.bit() | ToolClass::FileStorage.bit(),
+                ToolClass::Browser.bit()
+                    | ToolClass::LlmInference.bit()
+                    | ToolClass::FileStorage.bit(),
             ),
             CODING_AGENT_V1_ID => Some(
-                ToolClass::LlmInference.bit() | ToolClass::TestRunner.bit() | ToolClass::FileStorage.bit(),
-            ),
-            VERIFIER_AGENT_V1_ID => Some(
-                ToolClass::FileStorage.bit() | ToolClass::TestRunner.bit() | ToolClass::LlmInference.bit(),
-            ),
-            CODING_AGENT_V2_PRODUCTION_ID => Some(
-                ToolClass::phase2_tool_class_mask()
-                    | ToolClass::LlmInference.bit()
+                ToolClass::LlmInference.bit()
                     | ToolClass::TestRunner.bit()
                     | ToolClass::FileStorage.bit(),
+            ),
+            VERIFIER_AGENT_V1_ID => Some(
+                ToolClass::FileStorage.bit()
+                    | ToolClass::TestRunner.bit()
+                    | ToolClass::LlmInference.bit(),
             ),
             _ => None,
         }
     }
 
-    /// Register Phase 1 templates plus the Phase 2 production coding template.
+    /// Register all three Phase 1 templates into a fresh registry.
     pub fn register_builtins(reg: &mut PolicyRegistry) -> Result<(), PolicyError> {
         reg.register(research_agent_v1())?;
         reg.register(coding_agent_v1())?;
         reg.register(verifier_agent_v1())?;
-        reg.register(coding_agent_v2_production())?;
         Ok(())
     }
 
     /// Names of all built-in templates in stable order (matches `register_builtins`).
-    pub fn all_ids() -> [(TemplateId, &'static str); 4] {
+    pub fn all_ids() -> [(TemplateId, &'static str); 3] {
         [
             (RESEARCH_AGENT_V1_ID, "tpl:research-agent-v1"),
             (CODING_AGENT_V1_ID, "tpl:coding-agent-v1"),
             (VERIFIER_AGENT_V1_ID, "tpl:verifier-agent-v1"),
-            (
-                CODING_AGENT_V2_PRODUCTION_ID,
-                "tpl:coding-agent-v2-production",
-            ),
         ]
     }
 
@@ -397,10 +361,6 @@ pub mod builtins {
             VERIFIER_AGENT_V1_ID => Some((
                 "tpl:verifier-agent-v1",
                 "Independent verification: file read + test + LLM (Phase 1)",
-            )),
-            CODING_AGENT_V2_PRODUCTION_ID => Some((
-                "tpl:coding-agent-v2-production",
-                "LLM + tests + Phase 2 GitHub/DB/code with TEE attestation",
             )),
             _ => None,
         }
@@ -497,7 +457,7 @@ mod tests {
         };
         let mut reg = PolicyRegistry::default();
         register_builtins(&mut reg).unwrap();
-        assert_eq!(all_ids().len(), 4);
+        assert_eq!(all_ids().len(), 3);
 
         let r = reg.resolve(RESEARCH_AGENT_V1_ID).unwrap();
         assert_eq!(r.default_budget.total_cap, 3 * FRAC);
@@ -512,9 +472,7 @@ mod tests {
             .any(|c| matches!(c, Caveat::MaxTotalSpend(v) if *v == 3 * FRAC)));
         assert_eq!(
             suggested_tool_class_mask(RESEARCH_AGENT_V1_ID).unwrap(),
-            ToolClass::Browser.bit()
-                | ToolClass::LlmInference.bit()
-                | ToolClass::FileStorage.bit()
+            ToolClass::Browser.bit() | ToolClass::LlmInference.bit() | ToolClass::FileStorage.bit()
         );
 
         let c = reg.resolve(CODING_AGENT_V1_ID).unwrap();

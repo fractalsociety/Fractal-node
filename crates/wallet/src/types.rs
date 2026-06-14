@@ -182,12 +182,19 @@ impl ToolClass {
     /// Operators can still tighten tiers via caveats (e.g. `TeeAttestationRequired`).
     pub fn default_verification_tier(self) -> VerificationTier {
         match self {
-            Self::Browser | Self::WebScrape | Self::LlmInference | Self::Embedding
-            | Self::FileStorage | Self::VectorSearch | Self::Ocr | Self::TestRunner => {
-                VerificationTier::Optimistic
-            }
+            Self::Browser
+            | Self::WebScrape
+            | Self::LlmInference
+            | Self::Embedding
+            | Self::FileStorage
+            | Self::VectorSearch
+            | Self::Ocr
+            | Self::TestRunner => VerificationTier::Optimistic,
             Self::GithubRead => VerificationTier::Trusted,
-            Self::GithubWrite | Self::GpuJob | Self::DatabaseQuery | Self::EmailSend
+            Self::GithubWrite
+            | Self::GpuJob
+            | Self::DatabaseQuery
+            | Self::EmailSend
             | Self::CodeExecution => VerificationTier::Attested,
         }
     }
@@ -237,7 +244,7 @@ fn mask_subset(child: u64, parent: u64) -> bool {
 
 fn opt_id_subset(child: Option<u64>, parent: Option<u64>) -> bool {
     match (parent, child) {
-        (None, _) => true, // parent ANY
+        (None, _) => true,        // parent ANY
         (Some(_), None) => false, // parent specific, child ANY — too broad
         (Some(p), Some(c)) => c == p,
     }

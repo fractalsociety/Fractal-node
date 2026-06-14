@@ -1,0 +1,23 @@
+# PRD §18 M6 — local devnet (JSON-RPC + optional faucet).
+# Build from repository root context is not used here; compose build context is `../..`.
+services:
+  node:
+    build:
+      context: ../..
+      dockerfile: testnets/devnet/Dockerfile
+    ports:
+      - "8545:8545"
+    environment:
+      FRACTAL_RPC_ADDR: "0.0.0.0:8545"
+
+  faucet:
+    build:
+      context: ../..
+      dockerfile: testnets/devnet/Dockerfile.faucet
+    ports:
+      - "8088:8088"
+    environment:
+      FRACTAL_RPC_URL: "http://node:8545"
+      FAUCET_BIND: "0.0.0.0:8088"
+    depends_on:
+      - node

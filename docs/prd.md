@@ -3,11 +3,10 @@
 ## Product Requirements Document
 
 **Product:** FractalChain L1 (the AI-agent-first blockchain)
-**Version:** v0.2 (Target architecture + testnet track)
+**Version:** v0.1 (Testnet)
 **Status:** Draft for Implementation
 **Companion to:** FractalWork Core MVP PRD v0.2
-**Primary Goal (testnet track):** Ship a fast, low-cost L1 testnet that settles FractalWork TaskReceipts on-chain, pays agents in testnet FRAC, and grows from 1 block producer to a 21-node HotStuff-2 BFT validator set without a hard fork.
-**Primary Goal (v1.0+ target):** Scale to **sharded execution** with **pipelined HyperBFT** per shard, a **masterchain** for global coordination and ZK anchoring, and an **async permissionless prover pool** so consensus never waits on proofs while history stays **O(log n)** verifiable.
+**Primary Goal:** Ship a fast, low-cost L1 testnet that settles FractalWork TaskReceipts on-chain, pays agents in testnet FRAC, and grows from 1 block producer to a 21-node HotStuff-2 BFT validator set without a hard fork.
 
 ---
 
@@ -17,9 +16,7 @@ FractalChain is a purpose-built Layer 1 designed around a single workload: **AI 
 
 Unlike general-purpose chains that bolt on AI as an afterthought, FractalChain's architecture treats the FractalWork primitives — `TaskReceipt`, `PayoutBatch`, `AgentRegistry`, `Verification` — as **first-class on-chain objects with dedicated precompiles**. General-purpose smart contracts (governance, DeFi, prediction markets on agent outcomes) run on a colocated EVM.
 
-The chain ships in **two parallel tracks**:
-
-**Track A — Testnet v0.1 (in repo today):** single logical chain, HotStuff-2 consensus, monolithic execution.
+The chain ships in three phases without breaking changes:
 
 ```text
 Phase 1 (Singleton):    1 block producer, BFT-ready code path, public testnet
@@ -27,18 +24,16 @@ Phase 2 (BFT-7):        7-validator HotStuff-2, dynamic validator set
 Phase 3 (BFT-21):       21-validator production target, full slashing
 ```
 
-**Track B — Production target (this PRD v0.2):** **execution shards** + **masterchain** + **async ZK prover pool** (§6.2–§6.4, §7.9–§7.10). Consensus on shards stays **latency-bounded**; proofs are **retroactive** (chain live first, provable as provers catch up).
+### Design Targets (Testnet)
 
-### Design Targets
-
-| Metric | Testnet v0.1 (Track A) | Production target (Track B, per shard × N shards) |
-|---|---|---|
-| Block time | 500 ms | **70 ms** target (HyperBFT pipelined) |
-| Finality | 1 block (HotStuff-2) | **≤ 200 ms** median, **≤ 900 ms** p99 (absolute, no reorgs) |
-| Throughput | 5,000 TPS native / 1,500 TPS EVM (1 chain) | **~200K TPS** aggregate design budget (10 shards × ~20K TPS/shard — TBD per shard hardware) |
-| TaskReceipt settlement | < $0.001 equivalent | Same economics at native precompile layer |
-| Validator hardware | 8 vCPU / 32 GB RAM / NVMe | Shard validator: similar; provers: GPU-class optional |
-| History growth | Linear block replay | **O(log n)** verifiable sync after ZK pruning (§6.3) |
+| Metric | Target |
+|---|---|
+| Block time | 500 ms (sub-second) |
+| Finality | 1 block (HotStuff-2 deterministic) |
+| Throughput | 5,000 TPS native ops / 1,500 TPS EVM at testnet |
+| TaskReceipt settlement cost | < $0.001 equivalent |
+| Native FractalCore op cost | ~10× cheaper than EVM equivalent |
+| Validator hardware | 8 vCPU / 32 GB RAM / NVMe SSD |
 
 ### Why This Works for AI Agents
 
@@ -97,9 +92,8 @@ These aren't smart contracts. They're **precompiled opcodes** that read/write di
 ## 4.2 Secondary Goals
 
 1. Bridge testnet FRAC to a public EVM testnet (Sepolia) for liquidity testing.
-2. Evolve toward **async ZK prover pool** with a **two-tier proof stack**: **STWO** (shard STARK / proof condensing) + **Plonky2** (masterchain recursive SNARK aggregation) — §6.2, §7.8; v0.1 ships the **STWO condenser** on the monolith first (M9).
-3. Evolve toward **sharded HyperBFT** execution (§7.9, M10+) after testnet Track A stabilizes (§6.4).
-4. Enable prediction markets on agent outcomes via EVM contracts.
+2. Provide a STARK/proof hook for future state validity proofs.
+3. Enable prediction markets on agent outcomes via EVM contracts.
 
 ---
 
@@ -112,8 +106,7 @@ The testnet **will not** include:
 * Permissionless validator entry on day one
 * On-chain LLM inference
 * On-chain artifact storage (artifacts remain in S3/IPFS; only hashes on-chain)
-* Full **synchronous** ZK verification on any BFT block critical path (would break sub-100 ms shard cadence). **Async** prover pool + masterchain posting (§6.2) is the only supported model for validity proofs.
-* **Sharded masterchain topology** on testnet v0.1 exit (Track A remains one chain); shard + masterchain is Track B (§7.0 migration map).
+* Full ZK proof system (proof hook only)
 * Complex on-chain governance (off-chain Snapshot-style for testnet)
 * Account abstraction (EIP-4337) for v0.1
 * Privacy features (mixers, stealth addresses)
@@ -121,141 +114,6 @@ The testnet **will not** include:
 ---
 
 # 6. High-Level Architecture
-
-## 6.1 Target topology (Track B — production)
-
-FractalChain v1.0+ is a **sharded L1**: each **shard** runs agent transactions and local state; the **masterchain** coordinates validators, anchors shard state, accepts ZK proofs, and routes cross-shard agent messages. **Provers are off-chain** and never block shard finality.
-
-```text
-┌─────────────────────────────────────────────────────────────────────────┐
-│                     FractalWork Core MVP (off-chain)                     │
-└───────────────────────────────┬─────────────────────────────────────────┘
-                                │ PayoutBatch / agent txs
-        ┌───────────────────────┼───────────────────────┐
-        ▼                       ▼                       ▼
-┌───────────────┐       ┌───────────────┐       ┌───────────────┐
-│  Shard 0      │       │  Shard 1      │  ...  │  Shard N-1    │
-│  HyperBFT     │       │  HyperBFT     │       │  HyperBFT     │
-│  Native+EVM   │       │  Native+EVM   │       │  Native+EVM   │
-│  state trie   │       │  state trie   │       │  state trie   │
-└───────┬───────┘       └───────┬───────┘       └───────┬───────┘
-        │   STARK proofs        │                       │
-        └───────────────────────┼───────────────────────┘
-                                ▼
-                    ┌───────────────────────┐
-                    │  Async ZK prover pool  │  (permissionless race)
-                    │  STWO (shard) → Plonky2│
-                    │  (masterchain SNARK)   │
-                    └───────────┬───────────┘
-                                ▼
-                    ┌───────────────────────┐
-                    │      Masterchain       │
-                    │  validator set, shard  │
-                    │  map, anchors, global  │
-                    │  ZK root, cross-shard  │
-                    │  agent messages        │
-                    └───────────────────────┘
-```
-
-**Layer responsibilities:**
-
-| Layer | Role | Executes agent txs? |
-|---|---|---|
-| **Shard** | Pipelined HyperBFT + FractalCore/EVM + per-shard MPT | **Yes** (primary workload) |
-| **Async ZK pool** | **STWO** condenses each shard; **Plonky2** aggregates to `globalZkRoot` | No |
-| **Masterchain** | Global validator set, shard map, anchors, validity proofs, cross-shard routing | **No** (coordination only) |
-
-## 6.2 Async ZK prover pool
-
-### 6.2.1 Design principle
-
-ZK proof generation is **fully decoupled from consensus**. Provers are **off-chain**, **permissionless**, and **race** to generate proofs for shard block ranges. Proofs are posted to the **masterchain** when ready. **Consensus never waits for a proof.**
-
-Implications:
-
-* The chain is always **live and fast** on the shard hot path.
-* It becomes **retroactively provable** as provers catch up.
-* In steady state, **proof lag** is seconds to minutes depending on prover hardware.
-
-### 6.2.2 Proof scheme (two tiers: STWO → Plonky2)
-
-Proof generation is intentionally **split across two systems**. Each tier does what it is best at; neither runs on the consensus critical path (§6.2.1).
-
-| Tier | System | Where it runs | Properties | Output |
-|---|---|---|---|---|
-| **1 — Shard condensing** | **STWO** (+ RISC-V trace) | Per-shard provers (permissionless race) | Transparent STARK, no trusted setup, quantum-resistant; larger proofs OK off-chain | `StarkProof` over block range `[N..M]` binding `state_root`, execution, `witnessCommitment` |
-| **2 — Global aggregation** | **Plonky2** | Aggregator provers (permissionless race or rotating set) | Recursive **SNARK**; compact verify on masterchain and external chains | Single proof → `globalZkRoot` in masterchain block |
-
-```text
-Shard blocks N..M
-    →  witness (RISC-V replay of native + EVM)
-    →  STWO prove  ──►  shard STARK  (ProofSubmission.proof)
-                              │
-         (all shards)         ▼
-    Plonky2 recursive circuit verifies STARK statements
-    →  one SNARK  ──►  masterchain globalZkRoot
-```
-
-**Why two tiers (mental model):**
-
-* **STWO** is the **proof condenser** for execution: it argues “this shard state transition is correct” over a RISC-V trace without trusted setup. This is what `fractal-proof-condenser` implements today (checkpoint-scale witnesses first; full block ranges in M10+).
-* **Plonky2** is the **compressor across shards**: it takes many shard STARKs (or their verified statements) and produces **one small proof** the masterchain (and bridges) can check cheaply. STWO alone at masterchain scale would be bulky; Plonky2 is the planned **aggregation layer**.
-
-**Relationship to testnet code (Track A):**
-
-* **In repo today:** `fractal-proof-condenser` — async **STWO** over checkpoint jobs, `CheckpointStwoArtifactV1`, RocksDB `checkpoint_proofs`, RPC `fractal_getCheckpointProof*` (§7.8, M9). **Plonky2 is not in the repo yet.**
-* **Track B:** same STWO path per shard + new **Plonky2 aggregator** crate/worker posting to masterchain (M11).
-
-**Wire shape (unchanged intent, explicit types):**
-
-```typescript
-interface ProofSubmission {
-  shardId: ShardId;
-  blockRange: [u64, u64];
-  proof: StarkProof;        // STWO output (tier 1)
-  proverAddress: Address;
-  lagSeconds: u32;
-}
-
-// Masterchain block carries tier-2 result:
-// globalZkRoot = hash/bind Plonky2 SNARK over accepted shard STARKs for this height
-```
-
-### 6.2.3 Block pruning
-
-Once a **validity proof** covers a range of shard blocks, those **raw blocks are prunable**. Verification needs only:
-
-* The **state root** at the covered tip, and
-* The **proof chain** (O(log n) proofs, not O(n) blocks).
-
-New nodes sync by downloading:
-
-1. Current **masterchain** state root (and shard map), and
-2. **Proof chain** back to genesis or last trusted checkpoint.
-
-Without pruning, at a design budget of **200K TPS × 10 shards**, raw block data could grow on the order of **~10 TB/day**. With ZK compression, the **provable** chain state grows **O(log n)** in proof depth, not linearly in block count.
-
-**Pruning policy (parameters):** `PRUNE_AFTER_VALIDITY_PROOF = true` once masterchain accepts proof for `[shardId, startBlock, endBlock]`; retain witness commitments until proof finality (see `witnessCommitment` in §7.10).
-
-### 6.2.4 Prover incentives
-
-Provers earn a reward from the **protocol treasury** for each **accepted** proof. Reward is proportional to the **block range covered** and **inversely proportional to proof lag** (faster provers earn more). This creates a competitive prover market **without** requiring provers to be validators.
-
-```typescript
-interface ProofSubmission {
-  shardId: ShardId;
-  blockRange: [u64, u64];   // [startBlock, endBlock]
-  proof: StarkProof;
-  proverAddress: Address;
-  lagSeconds: u32;          // time since last block in range was finalized
-}
-```
-
-On masterchain inclusion, the protocol verifies the proof statement (shard id, range, state transition binding) and credits `proverAddress` per the incentive curve (exact formula TBD in economics spec).
-
-## 6.3 Testnet v0.1 topology (Track A — in repo)
-
-Track A remains a **single chain** for M1–M8. The diagram below is what ships first; §7.0 maps each box to Track B.
 
 ```text
 ┌──────────────────────────────────────────────────────────────────┐
@@ -265,7 +123,8 @@ Track A remains a **single chain** for M1–M8. The diagram below is what ships 
                                   │
                                   ▼ PayoutBatch (signed)
 ┌──────────────────────────────────────────────────────────────────┐
-│                    FractalChain L1 (monolith)                    │
+│                          FractalChain L1                         │
+│                                                                  │
 │  ┌────────────────────────────────────────────────────────────┐  │
 │  │   Consensus: HotStuff-2 (Phase 1 = singleton, 2 = 7, 3 = 21)│  │
 │  └────────────────────────────────────────────────────────────┘  │
@@ -274,62 +133,37 @@ Track A remains a **single chain** for M1–M8. The diagram below is what ships 
 │  └────────────────────────────────────────────────────────────┘  │
 │  ┌────────────────────────────────────────────────────────────┐  │
 │  │                       Execution Layer                      │  │
-│  │  Native VM (FractalCore) + EVM (revm) → unified state trie │  │
+│  │  ┌──────────────────────────┐  ┌─────────────────────────┐ │  │
+│  │  │  Native VM (Rust)        │  │  EVM (revm)             │ │  │
+│  │  │  • TaskReceipt           │  │  • Solidity contracts   │ │  │
+│  │  │  • PayoutBatch           │  │  • Governance           │ │  │
+│  │  │  • AgentRegistry         │  │  • Prediction markets   │ │  │
+│  │  │  • Verification          │  │  • DeFi (later)         │ │  │
+│  │  │  • Dispute               │  │                         │ │  │
+│  │  └──────────┬───────────────┘  └─────────┬───────────────┘ │  │
+│  │             │                            │                 │  │
+│  │             ▼                            ▼                 │  │
+│  │       ┌─────────────────────────────────────────┐          │  │
+│  │       │   Unified State Trie (Merkle Patricia)  │          │  │
+│  │       │   accounts | code | storage | native    │          │  │
+│  │       └─────────────────────────────────────────┘          │  │
 │  └────────────────────────────────────────────────────────────┘  │
 │  ┌────────────────────────────────────────────────────────────┐  │
-│  │              Storage (RocksDB column families)               │  │
+│  │              Storage Layer (RocksDB / Sled)                │  │
 │  └────────────────────────────────────────────────────────────┘  │
 │  ┌────────────────────────────────────────────────────────────┐  │
-│  │     RPC: JSON-RPC (EVM-compat) + fractal_* extensions       │  │
+│  │     RPC: JSON-RPC (EVM-compat) + Native gRPC + WebSocket   │  │
 │  └────────────────────────────────────────────────────────────┘  │
-│  Optional: async STWO checkpoint worker (§7.8) — not on hot path │
 └──────────────────────────────────────────────────────────────────┘
 ```
 
-## 6.4 How to migrate from Track A (v0.1) to Track B (v1.0+)
-
-This table is the **implementation migration guide** for engineers updating the repo and ops after testnet stabilizes. Order is approximate; some work can proceed in parallel.
-
-| Current (Track A / PRD v0.1) | Target (Track B) | Migration steps |
-|---|---|---|
-| Single `chain_id`, one `NodeInner` state | `ShardId` + per-shard state machines | Introduce `shard_id` in tx envelope; route txs by shard key (e.g. agent id hash mod N); keep monolith as **shard 0** until cutover |
-| HotStuff-2 in `fractal-consensus` | HyperBFT pipelined per shard (§7.9) | New crate or `consensus::hyperbft` module; preserve HotStuff-2 for regression tests; shard validators run one instance per assigned shard |
-| `Vote` / `QuorumCertificate` / `cf_consensus` | `CommitSig` pipeline + shard-local QC store | Extend RocksDB keys with `shard_id`; map existing vote pool semantics to pipelined commit stage |
-| Monolithic `state_root` in block header | Per-shard `state_root` + masterchain `globalStateRoot` | Shard blocks carry local root; masterchain block merkleizes shard roots (§7.10) |
-| `cf_state` full `State` snapshots | Shard MPT + pruning after proof | Keep snapshots for devnet; production nodes prune per §6.2.3; sync via proof chain |
-| `fractal-proof-condenser` (STWO only) | Tier-1 shard provers + tier-2 **Plonky2** aggregator | Split crate: keep `proof-condenser` for STWO; add `proof-aggregator` (Plonky2) in M11; masterchain `SubmitValidityProof` + `globalZkRoot` |
-| No cross-shard | `crossShardMessages` in masterchain block | Agent message format + routing table; agents pin to home shard, masterchain delivers at anchor cadence |
-| 500 ms block time target | 70 ms shard block time | Re-tune pacemaker, networking, optimistic execution; separate milestone (M10+) |
-| libp2p single mesh | Per-shard validator mesh + masterchain validators | Partition gossip topics by `shard_id`; masterchain peers subscribe to anchor/proof topics only |
-| RPC single endpoint | Shard-aware RPC (`eth_chainId` encodes shard or explicit `fractal_shardId`) | Gateway routes reads/writes to correct shard backend |
-
-**Hard fork boundary:** Track B is expected to require a **coordinated upgrade** (new genesis or state export) once shard count and masterchain genesis are fixed — not a silent swap. Testnet Track A remains valid until announced sunset.
-
-**Do not break Track A milestones:** M1–M8 exit criteria stay on HotStuff-2 monolith. M10+ (below) scopes Track B.
-
-## 6.5 Shared execution and storage (both tracks)
-
-Both tracks keep: **Native VM + EVM** on a **unified per-shard state trie** (Merkle Patricia for EVM accounts; native subtries for FractalCore), **RocksDB** column families (§10.3), and **deterministic ordering within a shard** (§7.9.4). Cross-shard ordering is **not** merged at mempool level — only via masterchain anchors and explicit agent messages.
+Five layers, top to bottom: consensus, networking, execution (Native VM + EVM sharing one state trie), storage, RPC. The split between native and EVM is purely about gas economics and developer ergonomics — both execution engines write to the **same state trie**, so cross-calls are cheap.
 
 ---
 
 # 7. Consensus Layer
 
-## 7.0 Consensus roadmap (two tracks)
-
-| Track | Algorithm | Scope | Status |
-|---|---|---|---|
-| **A** | HotStuff-2 | Single chain, testnet v0.1 | **In repo** (`fractal-consensus`, `fractal-node`) — §7.1–§7.7 |
-| **B** | HyperBFT-derived pipelined BFT | One instance **per shard** | **Specified here** — §7.9; implementation M10+ |
-| **Coordination** | Masterchain BFT (lightweight) | Validator set, anchors, proofs | **Specified here** — §7.10; implementation M11+ |
-
-Shard consensus (Track B) and masterchain consensus may share the same codebase with different parameters, or use a smaller validator committee on the masterchain — **TBD**. What is fixed: **shard validators execute agent work**; **masterchain validators do not**.
-
----
-
-## 7.1 Algorithm Choice: HotStuff-2 (Track A — testnet v0.1)
-
-*This section describes the consensus algorithm shipping in M1–M8. Production shards use §7.9 instead; see §6.4 for migration.*
+## 7.1 Algorithm Choice: HotStuff-2
 
 **Why HotStuff-2 over alternatives:**
 
@@ -475,207 +309,9 @@ Evidence is submitted as a special `SlashTransaction` and processed by the nativ
 * **Liveness**: progress under partial synchrony; bounded message delay after GST (Global Stabilization Time).
 * **View-change cost**: O(n) messages; aggregated via BLS.
 
-## 7.8 Proof condensing: STWO (tier 1) + Plonky2 (tier 2)
-
-**Normative async-ZK model:** §6.2.2 (STWO shard STARKs → Plonky2 masterchain SNARK). This section documents **tier 1** in the repo today and **tier 2** as the planned aggregator.
-
-The **condenser** (STWO) sits **beside** HotStuff-2 (Track A) or **beside** HyperBFT (Track B), never inside propose–vote–commit. The **Plonky2 aggregator** sits beside the **masterchain** only — it never executes agent txs. Together they enable **pruning** (§6.2.3) without slowing shard BFT.
-
-### Problem statement
-
-As blocks accrue, **replay-based sync** and **deep historical audit** scale linearly with chain size. A fixed **500 ms** BFT cadence must not be held hostage by heavyweight proving or verification. The design therefore **decouples** (1) *what the chain commits to next* from (2) *how aggressively the network condenses already-committed data into STARK proofs*.
-
-### Tier 1 — STWO proof condenser (implemented / evolving)
-
-**STWO** (StarkWare’s STARK stack, vendored in `third_party/stwo`, used from `fractal-proof-condenser`) is the **mandated tier-1** prover. It **condenses** finalized execution into STARK proofs. Proofs attest to well-defined statements, for example:
-
-* A transition from **state root A** to **state root B** over an ordered batch of blocks or txs, or
-* Inclusion and correctness of **native + EVM** execution summarized in a **RISC-V** trace, or
-* A checkpoint over **N** blocks binding headers, execution results, and consensus metadata.
-
-Exact statement grammars, proof versions, and on-chain verifier precompiles are **TBD**; this PRD fixes the **two-tier separation** (STWO vs Plonky2), not every circuit release.
-
-**Artifacts today:** `CheckpointStwoArtifactV1` (borsh job + STWO proof JSON), `PersistedCheckpointProofV1` in RocksDB `checkpoint_proofs`, blake3 fallback when STWO fails (`docs/devnet.md`). The tier-1 job now includes replay-trace public inputs: `riscvTraceRoot` and `riscvTraceSteps` from the deterministic `FRACRV02` block-range harness, which validates contiguous heights, parent links, and transaction roots before proving.
-
-### Tier 2 — Plonky2 recursive SNARK (planned, M11)
-
-**Plonky2** is the **mandated tier-2** system for masterchain aggregation (§6.2.2):
-
-* **Input:** verified statements from shard **STWO** proofs (one or more shards per masterchain block).
-* **Output:** a single recursive **SNARK** committed as `globalZkRoot`.
-* **Why Plonky2:** fast recursive composition, relatively small proofs on-chain, mature open-source stack (Polygon Zero lineage); fits “many STARKs → one SNARK” better than posting raw STWO proofs to the masterchain.
-
-**Not in repo yet.** Planned deliverables:
-
-* `fractal-proof-aggregator` (or submodule) wrapping Plonky2 verify-of-STARK-statement circuits.
-* Aggregator worker: collect accepted `ProofSubmission`s → prove → submit to masterchain.
-* Masterchain light-client verifier: check Plonky2 SNARK + `globalStateRoot` (§7.10).
-
-Alternatives (e.g. Groth16 wrapper, STWO-only recursion) remain possible for experiments but **Plonky2 is the default architecture** unless superseded by explicit governance.
-
-### RISC-V as the provable execution ISA (feeds tier 1 only)
-
-**RISC-V** is the preferred **ISA for the trace** that the prover argues about: tooling, emulators, and future hardware extensions align with a single, well-understood instruction set. The **L1 execution engines** (native FractalCore + revm) remain authoritative for consensus; the RISC-V layer is the **canonical replay harness** inside the proof circuit (or a wrapper that produces a fixed trace format the STWO pipeline consumes). This keeps proving **fast to iterate** and **amenable to specialization** without changing the on-chain opcode surface for ordinary txs.
-
-### x86_64 reference port (development and CI)
-
-The **default machine class** for building, running, and **automated testing** of the async proof condenser today is **64-bit x86 Linux** (`x86_64-unknown-linux-gnu`) and typical **developer laptops** (including Apple Silicon via the same Rust nightly pin in `rust-toolchain.toml`). This is **not** an alternate “product ISA”: consensus and execution remain as elsewhere in this PRD; x86_64 is the **reference environment** where STWO prove/verify, `tokio::task::spawn_blocking`, and the full workspace are expected to pass in CI and on engineer machines **before** optional bring-up on **riscv64** VMs or hardware.
-
-**Smoke commands (repo root, nightly from `rust-toolchain.toml`):**
-
-* `cargo tree -p fractal-proof-condenser -i stwo` — confirm `stwo` resolves from `third_party/stwo` (Cargo patch), not crates.io alone.
-* `cargo test -p fractal-proof-condenser` — async STWO path + checkpoint witness tests.
-* `cargo test --workspace` — full regression including condenser integration.
-
-Operator and toolchain notes: **`docs/stwo-run-notes.md`** (patch, pinned nightly, optional `riscv64gc-unknown-linux-gnu` cross-check when that target is installed).
-
-### Async “spare compute” on nodes
-
-Validators and **full nodes** expose **flexible worker capacity**:
-
-* A **scheduler** (per-node, plus optional gossip of job metadata) assigns proof jobs from a queue: e.g. “prove blocks \[H..H+k\]”, “compress receipts epoch E”, “roll forward last checkpoint”.
-* Workers use **idle CPU / GPU / second-tier cores** so proof work **does not contend** with the latency-sensitive consensus and RPC threads.
-* **Completion is non-blocking:** when a job finishes, the resulting **proof artifact + public inputs** are submitted for inclusion in a **later** block (header extension, dedicated tx type, or sidecar committed by hash in-header). If a proof is late or skipped, **safety is unchanged** — the canonical chain is still the BFT-committed block sequence; proofs only strengthen **verifiability and sync economics**.
-
-### Interaction with HotStuff-2
-
-* **Hot path:** leaders propose, validators vote, QCs form — **unchanged**; no step waits on STWO completion.
-* **Cold path:** proof workers consume finalized blocks, build traces, generate proofs, and gossip or publish results; inclusion policy (mandatory per epoch vs. best-effort) is a **parameterizable liveness/UX tradeoff**, not a consensus safety dependency for v0.1.
-
-### Why this keeps the chain “hot”
-
-BFT stays **hot** (sub-second, quorum-driven) because **proof throughput is elastic**: the network can add nodes, widen proof windows, or shrink proof granularity under load. Chain **operational throughput** for user txs is not throttled by worst-case proving time; at worst, **succinct verification lags** until proofs land, while full nodes still have full state.
-
-### Deliverables sketch (future milestone)
-
-Wire formats for proof bundles, verifier gas/precompile budget, slashing for **invalid** proofs when proofs are mandatory, and light-client sync using the latest valid checkpoint. Tracked under **§18 M9** (STWO condenser on monolith), **M10** (shard-scale STWO), **M11** (Plonky2 + masterchain). **Tier-1 wire bundle today:** `CheckpointStwoArtifactV1` + `docs/stwo-run-notes.md`. **Invalid proof slashing today:** `InvalidProofSlashEventV1` rows burn registered prover bond once per unique evidence hash and deactivate under-bonded identities. **Tier-2 wire bundle TBD:** Plonky2 proof bytes + public inputs for `globalZkRoot`.
-
----
-
-## 7.9 HyperBFT pipelined consensus (Track B — per shard)
-
-Each **shard** runs an independent instance of a **HyperBFT-derived** BFT protocol. This replaces HotStuff-2 on the shard hot path for v1.0+ (§6.4).
-
-### 7.9.1 Overview
-
-Key properties:
-
-| Property | Detail |
-|---|---|
-| Message complexity | **O(n)** — leader aggregates votes, no all-to-all broadcast |
-| Pipelining | Block **N** commits while **N+1** votes and **N+2** is proposed — no idle rounds |
-| Optimistic execution | Txs execute **speculatively** before commit; **rollback on rejection** (rare with honest 2/3+ quorum) |
-| Optimistic responsiveness | Blocks produced as soon as quorum reached, not on a fixed wall-clock timer alone |
-| Finality | **Absolute** — no forks, no reorgs, ever |
-| Fault tolerance | Up to **1/3** Byzantine validators (by voting weight) |
-
-### 7.9.2 Block timing (shard parameters)
-
-| Parameter | Value |
-|---|---|
-| Target block time | **70 ms** |
-| Finality | **≤ 200 ms** (median), **≤ 900 ms** (p99) |
-| Leader rotation | Every **epoch** (configurable; default **100 blocks**) |
-| Quorum threshold | **2/3 + 1** of validator **voting weight** |
-
-Track A’s 500 ms / HotStuff-2 targets remain valid until shard cutover (§6.4).
-
-### 7.9.3 Pipeline stages
-
-Three stages run **concurrently** on each shard:
-
-```text
-Round T:    [Propose N+2] [Vote N+1  ] [Commit N  ]
-Round T+1:  [Propose N+3] [Vote N+2  ] [Commit N+1]
-Round T+2:  [Propose N+4] [Vote N+3  ] [Commit N+2]
-```
-
-A block is **committed** once it collects **2/3+ `CommitSig`** signatures (BLS-aggregated or equivalent). The leader for round **T+1** is known **deterministically** from the validator set — they begin proposing before **T** commits.
-
-**Mapping from Track A:** HotStuff-2’s propose → vote → QC-in-next-block maps to this pipeline; implementation should reuse `Vote`/`QuorumCertificate` crypto where possible but **must not** serialize the pipeline to one block per round.
-
-### 7.9.4 Deterministic ordering guarantee (hard requirement for AI agents)
-
-Within a shard, transaction ordering is **fully deterministic**:
-
-* The **leader sequences** all transactions in the proposal.
-* Validators **accept or reject the entire proposal** (no partial reordering).
-* There is **no mempool reordering after proposal**.
-
-This is a **hard requirement** for AI agent state machines: two agents submitting conflicting state transitions must see the **same canonical ordering**. Cross-shard conflicts are resolved by **home shard** assignment + masterchain cross-shard message ordering (§7.10), not by competing mempool sorts.
-
-### 7.9.5 Shard block header (sketch)
-
-Shard blocks extend the Track A header with `shard_id` and optional `witness_commitment` for provers:
-
-```rust
-struct ShardBlockHeader {
-    shard_id: u32,
-    height: u64,
-    round: u64,                    // pipeline round (analogous to view)
-    parent_hash: Hash256,
-    state_root: Hash256,           // post-execution, this shard only
-    tx_root: Hash256,
-    witness_commitment: Hash256,   // commitment to witness data for ZK prover (§7.10)
-    // ... gas, timestamp, proposer, commit_cert_hash, etc.
-}
-```
-
----
-
-## 7.10 Masterchain (Track B — coordination layer)
-
-The **masterchain does not execute agent transactions**. It is **coordination and anchoring only**.
-
-### 7.10.1 Responsibilities
-
-| Function | Description |
-|---|---|
-| **Global validator set** | Canonical validator registry and stake weights |
-| **Shard map** | Which validators serve which shards; shard count parameter |
-| **State anchors** | Each shard’s `state_root` + height on a schedule |
-| **Validity proofs** | Accept `ProofSubmission` from async prover pool (§6.2) |
-| **Cross-shard routing** | `AgentMessage` delivery between shards |
-| **Global roots** | `globalStateRoot` (merkle over shard roots), `globalZkRoot` (recursive SNARK) |
-
-### 7.10.2 Anchor frequency
-
-Shards anchor to the masterchain every **`ANCHOR_INTERVAL`** shard blocks (default: **100** shard blocks ≈ **7 s** at 70 ms/block).
-
-* Batches cross-shard coordination so the masterchain is not per-tx bottleneck.
-* Agents needing cross-shard delivery **faster than ~7 s** may request **priority anchoring** at a higher fee (parameter TBD).
-
-### 7.10.3 Global state structure
-
-```typescript
-interface MasterchainBlock {
-  height: u64;
-  shardAnchors: Map<ShardId, ShardAnchor>;
-  validityProofs: Map<ShardId, ProofSubmission>;
-  globalStateRoot: Hash256;   // merkle root of all shard state roots
-  globalZkRoot: Hash256;      // recursive SNARK covering all shard proofs
-  crossShardMessages: AgentMessage[];
-}
-
-interface ShardAnchor {
-  shardId: ShardId;
-  blockHeight: u64;
-  stateRoot: Hash256;
-  witnessCommitment: Hash256; // commitment to witness data for ZK prover
-}
-```
-
-**Verifier flow:** light clients trust masterchain finality → check `globalZkRoot` → optionally verify single shard proof → read shard state root at anchor.
-
-### 7.10.4 Relationship to Track A blocks
-
-During migration, the monolithic chain can be treated as **shard 0** with `ANCHOR_INTERVAL = ∞` (anchors implicit) until masterchain genesis launches (§6.4).
-
 ---
 
 # 8. Networking Layer
-
-**Track B note:** validators participate in a **per-shard** libp2p mesh (or subset mesh per assignment) **and** optionally a **masterchain** mesh for anchors/proofs. Full nodes subscribe to shard topics they serve; provers gossip proof jobs and submissions independently of shard BFT traffic.
 
 ## 8.1 Stack
 
@@ -704,7 +340,6 @@ Peer Identity:    Ed25519 (same key as consensus identity for validators)
 | `qcs` | Quorum certificates | Piggybacked in next block; standalone gossip on view-change |
 | `txs` | User transactions | Gossipsub, all nodes |
 | `evidence` | Slashing evidence | Gossipsub, all nodes |
-| `proof_artifacts` (future) | STWO checkpoint metadata / proof bundle refs (§7.8) | Optional gossipsub; inclusion via block commitment |
 
 ## 8.4 Bandwidth Budget
 
@@ -829,7 +464,6 @@ struct OnChainTaskReceipt {
     finalized_at: u64,             // chain timestamp
     signatures: SignatureBundle,   // requester + worker + verifier
     schema_version: u16,
-    tool_class: u8,                // wallet ToolClass discriminant (Browser=0, …)
 }
 ```
 
@@ -964,10 +598,7 @@ cf_native_events — native event log, indexed for query
 cf_mempool       — pending txs (in-memory primary, RocksDB backup)
 cf_consensus     — HotStuff-2 state: votes, QCs, view info
 cf_snapshots     — periodic state snapshots for fast sync
-checkpoint_proofs — (M9 / §7.8) async STWO checkpoint blobs; same DB, separate CF
 ```
-
-**Implemented in-repo (`fractal-storage`):** `FractalRocksDb` opens **all** of the above column families in a single RocksDB directory (`create_missing_column_families` so existing proof-only paths gain empty PRD CFs). Typed v1 records: **`StoredBlockV1`** (`cf_blocks`), **`StoredTxIndexV1`** (`cf_tx_index`), **`StoredReceiptV1`** (`cf_receipts`), **`StoredStateAtHeightV1`** (`cf_state` — full execution state after height, not yet MPT-wide). `fractal-node` persists on each commit when **`FRACTAL_CHAIN_ROCKSDB_PATH`** is set (must match **`FRACTAL_PROOF_ROCKSDB_PATH`** if both are set). Opaque `put_raw` / `get_raw` remain for other CFs.
 
 ## 10.4 Snapshot and Fast Sync
 
@@ -1095,31 +726,6 @@ The off-chain dispute flow (Section 9.9 of the Core MVP PRD) is mirrored on-chai
 
 The off-chain backend listens for these events and updates its reputation accordingly.
 
-## 13.5 Agent wallet vs L1 — tool-provider stake / slash
-
-Consensus staking and slashing (`§12` / `DepositConsensusStake`, `SlashConsensusStake`, …) are **separate** from the FractalWork **tool market** bond model in `docs/wallet.md` v2. Until native `StakeForClass` / `SlashProvider` (§14.4 of the wallet spec) are scoped on-chain, provider stake for intents is **wallet-enforced only**:
-
-| Concern | Phase 1 slice |
-| --- | --- |
-| Provider stake / slash on-chain | Off-chain in `fractal-wallet`; not full protocol-enforced staking/slashing tied to tool market |
-
-Implementation slice: `fractal_wallet::market::ProviderStake` locks `slash_multiplier × price` at match; adjudication **challenger wins** forfeits the locked bond (`burn_locked`) and `ToolMarketWithReputation` records a §10.4 `slashing_events` increment for reputation snapshots (`WalletReputationSnapshotV1`).
-
-## 13.6 Reputation indexer (wallet infra)
-
-| Concern | Phase 1 slice |
-| --- | --- |
-| Reputation indexer | **`fractal-indexer`**: SQLite + GraphQL `reputationRows`; default **merges** `SettleBatch` / `SettleReceipt` into §10.4 rows (`INDEXER_REPUTATION_MERGE_SETTLEMENTS=0` disables). Always ingests **`WalletReputationSnapshotV1`** and dispute-slash signals via `reputation_chain_mirror_json`. **`fractal-indexer-stub`** / **`run-indexer-reputation.sh`** stay snapshot-first for JSON file workflows. |
-
-## 13.7 Agent wallet vs L1 — batch settlement
-
-The wallet spec (`docs/wallet.md` §7 / §16.3) describes **per-intent** settlement with **optimistic challenge windows** in the tool market, and a future **multi-receipt `BatchSettle`** to amortize on-chain cost. That wallet-native batched opcode is **not** the same as L1 **`NativeCall::SettleBatch`**, which batches **FractalWork / M3 `OnChainTaskReceipt`** records and payout roots (PRD **§13.1**, `crates/mvp-backend`, `fractal-mvp-bridge`).
-
-| Concern | Phase 1 slice |
-| --- | --- |
-| Batch settlement (wallet tool market §7) | **Off-chain** library state in `fractal-wallet` — optimistic windows, per-intent settle; **not** on-chain batched settlement of wallet tool intents per §16.3 |
-| Batch settlement (Core MVP / M3) | **On-chain** — **`SettleBatch`** / **`SettleReceipt`** + **`ClaimPayout`** for operator-submitted receipt batches |
-
 ---
 
 # 14. RPC and Developer Interface
@@ -1238,8 +844,6 @@ fractal_disputes_filed_total
 fractal_validators_active
 ```
 
-**In-repo (dev slice, PRD §18 M6 / ops backlog):** **`fractal-node`** exposes an optional **`GET /metrics`** endpoint when **`FRACTAL_METRICS_ADDR`** is set (see `docs/devnet.md`). OpenMetrics includes consensus height/view gauges; mempool, last-block, p2p peer, DB-size, and proof-worker gauges; RPC request, proof-job, and p2p topic/direction counters; and latency histograms for RPC methods, proposal build, QC formation, and state-root recomputation. Chain-wide/indexer metrics remain separate from the node-local endpoint.
-
 ## 16.2 Logs
 
 Structured JSON, OpenTelemetry traces. Same standard as the Core MVP backend.
@@ -1259,8 +863,6 @@ Structured JSON, OpenTelemetry traces. Same standard as the Core MVP backend.
 
 ## 17.1 Latency
 
-### Track A (testnet v0.1 — HotStuff-2 monolith)
-
 | Operation | Target (p50) | Target (p99) |
 |---|---|---|
 | Tx → block inclusion | 250 ms | 800 ms |
@@ -1270,18 +872,7 @@ Structured JSON, OpenTelemetry traces. Same standard as the Core MVP backend.
 | RPC `eth_call` (state read) | 20 ms | 100 ms |
 | RPC `fractal_getReceipt` | 15 ms | 80 ms |
 
-### Track B (per shard — HyperBFT target)
-
-| Operation | Target (p50) | Target (p99) |
-|---|---|---|
-| Tx → block inclusion | **35 ms** | **100 ms** |
-| Tx → finality (shard) | **≤ 200 ms** | **≤ 900 ms** |
-| Cross-shard agent message (via masterchain anchor) | **~7 s** default | priority fee for faster anchor TBD |
-| Proof lag (async, non-blocking) | seconds | minutes under load |
-
 ## 17.2 Throughput
-
-### Track A
 
 | Workload | Phase 1 | Phase 3 |
 |---|---|---|
@@ -1291,22 +882,13 @@ Structured JSON, OpenTelemetry traces. Same standard as the Core MVP backend.
 
 (Phase 3 lower because of BFT message overhead at 21 nodes.)
 
-### Track B (design budget)
-
-| Workload | Per shard (target) | Aggregate (10 shards, illustrative) |
-|---|---|---|
-| Native + EVM mixed | ~20,000 TPS | **~200,000 TPS** |
-| Masterchain anchors | N/A (coordination only) | bounded by anchor interval, not tx execution |
-
-Exact per-shard numbers depend on hardware, shard count, and optimistic execution rollback rate — to be validated in M10 load tests.
-
 ## 17.3 Resource Footprint
 
 Validator node (Phase 3, sustained load):
 ```text
 CPU:      8 vCPU (32-core helpful for batch verification)
 RAM:      32 GB
-Storage:  1 TB NVMe SSD (Track A: ~50 GB/month at load; Track B: shard data pruned after validity proof — §6.2.3)
+Storage:  1 TB NVMe SSD (chain data grows ~50 GB/month at load)
 Network:  200 Mbps symmetric minimum
 ```
 
@@ -1362,7 +944,7 @@ Exit criteria: deploy a contract via Hardhat; call native precompiles from it; M
 ## M5: Bridge to Core MVP (Weeks 9-11)
 
 Deliverables:
-* Off-chain Core MVP backend submits real `SETTLE_BATCH` calls (**reference bridge** binary: `cargo run -p fractal-mvp-backend --bin fractal-mvp-bridge`; optional `MVP_RECEIPTS_JSON` for a JSON receipt export — see `crates/mvp-backend/testdata/mvp_receipts_sample.json`; post-run logs include `eth_getBalance` for the claim agent). PRD-scale smoke: **`./scripts/run-mvp-bridge-smoke.sh`** (default `MVP_RECEIPT_COUNT=100`); optional GitHub Actions workflow source **`docs/ci/mvp-bridge-smoke.workflow.yml`** (`docs/devnet.md`).
+* Off-chain Core MVP backend submits real `SETTLE_BATCH` calls (stub binary: `cargo run -p fractal-mvp-backend --bin fractal-mvp-bridge`; optional `MVP_RECEIPTS_JSON` for a JSON receipt export — see `crates/mvp-backend/testdata/mvp_receipts_sample.json`; post-run logs include `eth_getBalance` for the claim agent). PRD-scale smoke: **`./scripts/run-mvp-bridge-smoke.sh`** (default `MVP_RECEIPT_COUNT=100`); optional GitHub Actions workflow source **`docs/ci/mvp-bridge-smoke.workflow.yml`** (`docs/devnet.md`).
 * Agents claim payouts via SDK (`fractal_sdk::m5` in `crates/sdk-rust`)
 * End-to-end: post job off-chain → settle batch on-chain → agent claims tFRAC → tFRAC appears in MetaMask
 
@@ -1371,11 +953,10 @@ Exit criteria: ≥ 100 receipts flow from off-chain MVP to on-chain settlement t
 ## M6: Explorer, Faucet, Public Testnet (Weeks 10-12)
 
 Deliverables:
-* Block explorer — **FractalScan** static Blockscout-style UI: `tools/explorer/` (`./scripts/serve-explorer.sh`), chain + block window + tx/receipt/logs + search; **`docs/explorer.md`** (Ethereum vs internal tx hash, leader vs follower RPC); `docs/devnet.md`. Forked Blockscout / custom Next.js remains an optional ops path for contract verify + DB-backed indexing.
+* Block explorer (forked Blockscout or custom Next.js) — static dev explorer: `tools/explorer/` (`./scripts/serve-explorer.sh`), chain + recent blocks (row → tx hashes) + account (balance, nonce, `eth_getCode`) + tx lookup; **`docs/explorer.md`** (Ethereum vs internal tx hash, leader vs follower RPC); `docs/devnet.md`
 * Faucet with rate limiting — `fractal-faucet` (`crates/faucet`) + Docker service in `testnets/devnet/docker-compose.yml`
 * Public bootnodes (3 minimum) — template `testnets/devnet/bootnodes.example.txt` + `FRACTAL_BOOTSTRAP` (see `testnets/devnet/README.md`)
-* **Local two-node Docker devnet (optional):** `docker compose -f testnets/devnet/docker-compose.yml --profile follower up` — producer uses **`FRACTAL_P2P_DOCKER_FIXTURE=producer`** for a stable libp2p **`PeerId`**; follower uses **`FRACTAL_BOOTSTRAP`** to **`node:4001`** with the same **`/p2p/<PeerId>`** on every line; operator keys still win via **`FRACTAL_P2P_IDENTITY_PATH`** (`docs/devnet.md`, `crates/node/src/p2p.rs`). **Compose health:** **`node`** / **`follower`** JSON-RPC probes (`eth_chainId` via `curl` in-image), **`faucet`** `GET /health` in **`Dockerfile.faucet`**; **`depends_on: service_healthy`** defers follower + faucet until producer RPC answers.
-* Documentation site — operator notes: `docs/devnet.md` (full product site TBD); **Prometheus:** optional **`FRACTAL_METRICS_ADDR`** on **`fractal-node`** for **`GET /metrics`** (PRD §16.1 dev slice, `docs/devnet.md`).
+* Documentation site — operator notes: `docs/devnet.md` (full product site TBD)
 * Discord + status page — out of repo (operational); **`tools/status/`** + `./scripts/serve-status.sh` for a minimal JSON-RPC liveness stub; full public status TBD
 
 Exit criteria: external developer can connect MetaMask, get tFRAC, deploy a contract, call native precompiles, and see everything in the explorer — without team help.
@@ -1385,70 +966,22 @@ Exit criteria: external developer can connect MetaMask, get tFRAC, deploy a cont
 Deliverables:
 * Full HotStuff-2 with 7 validators
 * BLS aggregation working end-to-end
-* Validator onboarding flow — **dev fixtures:** `cargo run -p fractal-node -- print-devnet-validator-keys` (honors `FRACTAL_VALIDATOR_SET`; see `docs/devnet.md` §Validator onboarding). On-chain / governance-gated onboarding remains future work.
-* View-change / liveness — **partial (M7-f):** quorum BLS `Timeout` on gossip `/fractalchain/timeouts/1.0.0`; each timeout signs `(view, high_qc: QuorumCertificate)`; pool keyed by `(view, hash_qc(high_qc))`; `NodeInner.high_prepare_qc` tracks max `(block_height, view)` from parent QCs and formed tip QCs; pacemaker + `try_advance_view_on_timeout_quorum` in `try_produce_one_tick` (PRD §7.4). **Not yet:** merging conflicting high-QCs across partitions, partition torture tests, full HotStuff-2 safety proofs.
-* Phase 2 staking + basic slashing — **partial (M7-g):** native **`DepositConsensusStake`** / **`WithdrawConsensusStake`** (unbonding queue + **`FRACTAL_UNBONDING_PERIOD_MS`** finalize payouts) / **`CommitSlashingEvidence`** + **`SlashConsensusStake`** (evidence hash must be committed first); `State.consensus_stakes` / shares / `consensus_unbonding`; optional producer gate **`FRACTAL_MIN_CONSENSUS_STAKE_WEI`** + **`ProduceTickOutcome::AwaitingConsensusStake`**. **Implemented:** **`FRACTAL_BLOCK_REWARD_WEI`** treasury-funded block rewards into consensus stake (proposer + parent-QC signers); stake-weighted QC when total bonded stake > 0 (`docs/devnet.md` §Consensus stake). **§12.3 delegation:** **`Delegate`** / **`WithdrawRewards`** on **32-byte validator fingerprints**; **`SetValidatorCommission`**; commission + pro-rata reward compounding in **`finalize_block_hooks`**. **Mainnet economics (dev slice):** **`ChainEconomicsParams`** on state; **`FRACTAL_ECONOMICS_PROFILE=mainnet`**; permissionless **`RegisterValidator`** + dynamic validator set sync; **`Redelegate`**; EVM base-fee burn in finalize; governance **`SetChainEconomics`**. **Not yet:** full misbehavior verification pipeline (hashes are governance-committed placeholders).
+* Validator onboarding flow
+* View-change tested under partition and Byzantine validators
+* Phase 2 staking + basic slashing
 
 Exit criteria: 7-validator testnet runs for 30 days at sustained load; tolerates 2 Byzantine validators in test scenarios.
 
 ## M8: BFT-21 + Production Hardening (Months 6-8)
 
 Deliverables:
-* 21-validator set — **dev slice:** in-repo **`ValidatorSet::phase3_bft21_fixture()`** + env **`FRACTAL_VALIDATOR_SET=21`** or **`bft21`** (same pattern as M7 BFT-7); deterministic BLS keys via **`print-devnet-validator-keys`**. Operating 21 networked processes + liveness at this scale remains an ops exercise (full mesh, vote gossip).
+* 21-validator set
 * Full slashing including delegation
-* Snapshot-based fast sync — **v2 + proof-chain path implemented:** `GetSnapshot` serves **`ChainSyncSnapshotV2`** over QUIC by default. v2 chunks the state payload, verifies per-chunk hashes plus `stateRoot` and EVM account MPT root, persists the verified state row and EVM account MPT root/nodes into **`cf_state`**, and stores the v2 manifest/chunks in **`cf_snapshots`**. With **`FRACTAL_PROOF_CHAIN_FAST_SYNC=1`**, peers prefer **`ChainSyncProofSnapshotV1`**: verified state chunks + one checkpoint tip block + masterchain proof chain + Plonky2 bundle, so a pruned node can join without carrying or replaying the full raw execution block vector. Legacy trusted **`ChainSyncSnapshotV1`** remains accepted as a fallback; set **`FRACTAL_FAST_SYNC=0`** for block-by-block replay only.
+* Snapshot-based fast sync
 * External audit complete
 * Bug bounty live
 
 Exit criteria: 21-validator testnet stable for 60 days; audit findings resolved; ready for mainnet planning.
-
-## M9: STWO + RISC-V async proof condenser — tier 1 only (post–testnet)
-
-**Intent:** Ship **tier 1** of §6.2.2 / §7.8: **STWO proof condensing** over RISC-V-backed witnesses on **spare node compute**, committed asynchronously without blocking HotStuff-2’s 500 ms path. **Plonky2 (tier 2) is out of scope for M9** — see M11.
-
-**Reference platform (today):** **x86_64** (Linux CI and developer hosts) is the version of the stack you run and test first; see §7.8 *x86_64 reference port* and `docs/stwo-run-notes.md`. RISC-V remains the **trace ISA** target for provable execution; riscv64 bring-up is incremental once the reference port stays green.
-
-**Implemented in repo (reference port, evolving):**
-
-* Async condenser + `FRACTAL_ASYNC_PROOF` toggle (`docs/devnet.md`); `prove_checkpoint` + STWO with fallback digest.
-* `prove_checkpoint_stwo` / `verify_checkpoint_stwo_proof_json(json, job)` / `checkpoint_stwo_digest_from_json` — prove, verify-only (FS-bound to **borsh(job)**), and JSON digest handle.
-* RISC-V replay trace harness — `riscv_trace_from_blocks` emits canonical `BeginBlock` / `ApplyTx` / `EndBlock` rows from finalized block ranges, and `CheckpointJob` binds `riscvTraceRoot` + `riscvTraceSteps` into STWO public inputs.
-* `CheckpointStwoArtifactV1` — versioned **borsh** wire bundle (job + `serde_json` STARK proof) with `verify(digest)` for operators and future gossip/sidecar plumbing.
-* **`FRACTAL_PROOF_ROCKSDB_PATH`** + `fractal-storage` RocksDB CF `checkpoint_proofs`; optional **`FRACTAL_PROOF_ARTIFACT_DIR`** flat files; JSON-RPC **`fractal_getCheckpointProof`** / **`fractal_getCheckpointProofDigest`** (`docs/devnet.md`).
-
-**Non-binding exit criteria (to be refined when prioritized):**
-
-* Verifier path (full node + optional light client) can **check a proof** against a published checkpoint faster than replaying the covered span.
-* Proof workers can be **enabled/disabled** per operator without affecting consensus participation rules on testnet.
-* Load tests show **no regression** in block production latency when proof jobs saturate background cores.
-
-## M10: Shard execution + HyperBFT (Track B — post–testnet)
-
-**Depends on:** M8 stable monolith (Track A).
-
-Deliverables:
-
-* `ShardId` routing in mempool and RPC gateway (§6.4).
-* HyperBFT pipelined consensus crate wired to **one** pilot shard (shard 0 = migrated monolith state).
-* 70 ms block time tuning on lab network; deterministic ordering tests for conflicting agent txs (§7.9.4).
-* Per-shard RocksDB / `cf_*` keys namespaced by `shard_id`.
-
-Exit criteria: two shard processes on lab net finalize independently; agent txs on shard A never reorder post-proposal; rollback test on invalid proposal.
-
-## M11: Masterchain + STWO provers + Plonky2 aggregator (Track B)
-
-**Depends on:** M10 pilot shard.
-
-Deliverables:
-
-* Masterchain node binary (`fractal-masterchain`, RPC **8550**): HotStuff-style BFT over coordination blocks; shards post `fractal_submitShardAnchor` via `FRACTAL_MASTERCHAIN_RPC`.
-* **Tier 1:** permissionless shard provers submit `ProofSubmission` with **STWO** `StarkProof` (extend `fractal-proof-condenser` from checkpoint-scale to block-range witnesses).
-* **Tier 2:** **Plonky2** aggregator crate verifies shard STARK statements and posts recursive **SNARK** → `globalZkRoot` (§6.2.2, §7.8).
-* Treasury payout curve for both tiers (§6.2.4); faster lag → higher reward.
-* Pruning policy behind `PRUNE_AFTER_VALIDITY_PROOF` (§6.2.3) — env `FRACTAL_PRUNE_AFTER_VALIDITY_PROOF` on `fractal-node` (drops proved checkpoint blobs + old in-memory blocks).
-* Light-client sync: masterchain head + Plonky2 proof chain (no full block replay) — RPC `fractal_getLightClientHead`.
-
-Exit criteria: shard prover STWO-proves block range → Plonky2 aggregator posts SNARK → masterchain accepts → old shard blocks pruned on test nodes; new node syncs via proof chain faster than full replay for 1M blocks (benchmark TBD).
 
 ---
 
@@ -1459,16 +992,13 @@ fractalchain/
   crates/
     core/              # pure state machine, native opcodes
     crypto/            # Ed25519, BLS, hashing, canonical encoding
-    consensus/         # HotStuff-2 (Track A); HyperBFT shard target (Track B, M10+)
+    consensus/         # HotStuff-2 implementation
     network/           # libp2p + QUIC + gossipsub
     evm/               # revm integration + precompile bridge
     storage/           # RocksDB column families, MPT
     mempool/           # tx pool + EIP-1559
     rpc/               # JSON-RPC + gRPC + WebSocket
-    node/              # main binary (validator / full node / future masterchain role)
-    proof-condenser/   # tier 1: async STWO + RISC-V condenser (§7.8 M9 → M10 shard proofs)
-    proof-aggregator/  # tier 2: Plonky2 recursive SNARK → globalZkRoot (M11)
-    masterchain/       # dedicated BFT coordinator binary (M11)
+    node/              # main binary, assembles all crates
     cli/               # operator CLI (start, status, stake, etc.)
     sdk-rust/          # Rust SDK
     faucet/            # devnet HTTP faucet (M6)
@@ -1486,7 +1016,7 @@ fractalchain/
     indexer/           # native event indexer with GraphQL
 
   testnets/
-    devnet/            # local docker-compose (node + faucet; optional --profile follower)
+    devnet/            # local docker-compose, 1 node
     alphanet/          # 3-node configuration
     testnet/           # public 21-node configuration
 
@@ -1508,7 +1038,7 @@ fractalchain/
 
 # 20. Open Decisions
 
-Resolve before Phase 2 (Track A) and before M10 (Track B).
+Resolve before Phase 2.
 
 | # | Decision | Recommendation |
 |---|---|---|
@@ -1517,19 +1047,11 @@ Resolve before Phase 2 (Track A) and before M10 (Track B).
 | 3 | Mainnet token decimals | 18 (consistent with EVM ecosystem) |
 | 4 | Validator selection at Phase 3 | Permissioned testnet; permissionless on mainnet (stake threshold) |
 | 5 | Governance model | Off-chain Snapshot for testnet; on-chain Compound-style for mainnet |
-| 6 | Fast-sync trust model | Genesis hash + checkpoint hashes from 2f+1 validators (Track A); **proof chain** from masterchain (Track B) |
+| 6 | Fast-sync trust model | Genesis hash + checkpoint hashes from 2f+1 validators |
 | 7 | Backwards-compatibility window | 6-month soft-fork window; hard-fork requires 30-day notice |
 | 8 | Mempool privacy | Public for testnet; encrypted mempool deferred to v1.1 |
 | 9 | Cross-chain story | Native bridge to Sepolia for testnet liquidity tests only |
 | 10 | Account abstraction (4337) | Deferred to v1.0 mainnet |
-| 11 | **Shard count (Track B)** | Start with **10** shards in design docs; pilot **2** in M10 |
-| 12 | **Shard assignment key** | `keccak256(agent_id) mod N` vs explicit `home_shard` in `AgentRegistry` |
-| 13 | **Masterchain validator set** | Same as union of shard validators vs dedicated smaller committee |
-| 14 | **STARK → SNARK aggregator** | **Plonky2** recursive SNARK (tier 2 default); permissionless aggregator race; tier 1 remains STWO shard race |
-| 15 | **Plonky2 circuit versioning** | Pin circuit hash in `globalZkRoot` metadata; upgrade via governance + proof version byte |
-| 16 | **ANCHOR_INTERVAL** | Default **100** shard blocks; priority anchor fee curve TBD |
-| 17 | **Proof incentive curve** | `reward = f(range, lagSeconds)` — exact formula in economics spec |
-| 18 | **HyperBFT vs HotStuff-2 naming** | User-facing: “HyperBFT”; codebase may retain `Vote`/`QC` types during migration |
 
 ---
 
@@ -1586,10 +1108,8 @@ FractalChain is structurally different:
 | Reputation lives off-chain | Reputation is queryable on-chain in O(1) |
 | Sybil resistance = "good luck" | Operator binding + future staking |
 | Gas costs variable, surge-prone | Native ops have fixed cost |
-| Finality: 12s to minutes | Finality: **≤200ms** per shard (Track B), deterministic |
+| Finality: 12s to minutes | Finality: 500ms, deterministic |
 | Batch settlement = custom L2 | Batch settlement = built-in opcode |
-| Single-chain throughput ceiling | **Sharded** execution + masterchain coordination (Track B) |
-| History = replay all blocks forever | **ZK-pruned** O(log n) proof sync (§6.2.3) |
 | LLM agents bridge to TradFi-style chains | LLM agents are the primary workload |
 
 When 100,000 agents are working, bidding, verifying, and settling thousands of receipts per minute — FractalChain is the chain built for that exact workload, and built from the assumption that humans will be the minority of users.
@@ -1598,4 +1118,4 @@ That's the bet.
 
 ---
 
-**End of FractalChain L1 PRD v0.2**
+**End of FractalChain L1 PRD v0.1**

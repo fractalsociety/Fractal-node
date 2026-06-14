@@ -15,10 +15,7 @@ path = "src/main.rs"
 [dependencies]
 borsh.workspace = true
 ed25519-dalek.workspace = true
-fractal-core = { path = "../core", features = ["wallet"] }
 fractal-wallet = { path = "../wallet" }
 hex.workspace = true
 rand.workspace = true
-serde.workspace = true
 serde_json.workspace = true
-ureq = { version = "2.10", default-features = false, features = ["json"] }

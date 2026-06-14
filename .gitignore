@@ -11,9 +11,3 @@ packages/**/node_modules/
 packages/**/dist/
 contracts/cache/
 contracts/artifacts/
-
-# Local devnet / lab process state (created by ./scripts/run-*.sh)
-.hyperbft-bft7-shard/
-.pilot-shards/
-.masterchain-bft/
-.track-b-lab/

@@ -24,15 +24,12 @@ So the explorer’s “transaction hash” column is always “whatever the RPC 
 
 **Operational rule:** for explorer + wallet debugging, point the UI at the **same JSON-RPC instance** you used to submit the transaction (usually the producer), unless you have verified follower RPC parity.
 
-## What the static explorer does (`tools/explorer/` — **FractalScan**)
+## What the static explorer does
 
-- Reads **only** JSON-RPC (`eth_*`, `web3_*`, `net_*`, optional `fractal_*` checkpoint methods).
-- Does **not** index the chain locally; it is a thin client (no Blockscout Postgres stack).
-- **FractalScan (dev)** adds a Blockscout-**style** surface: universal search, per-block tx table with receipt status/gas, tx summary + **event logs** table, configurable block window, `eth_syncing`, and head **checkpoint digest** when the node exposes it.
+- Reads **only** JSON-RPC (`eth_*`, `web3_*`, `net_*`).
+- Does not index the chain locally; it is a thin client.
 
-For **contract verification**, **internal traces**, and **GraphQL** the way hosted Blockscout does, you still need a full Blockscout (or similar) deployment or future indexer work — see PRD M6 vs M8.
-
-For deep block analytics (internal traces, contract labels) beyond what JSON-RPC returns today, a **hosted Blockscout** deployment remains an optional ops milestone; this repo ships **FractalScan** as the **static** operator/developer explorer plus the semantics above.
+For deep block analytics (internal traces, contract labels), a **Blockscout-class** deployment remains a separate milestone; this repo ships the **dev explorer** plus the semantics above.
 
 ## Related paths
 

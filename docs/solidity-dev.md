@@ -52,24 +52,7 @@ That script installs npm dependencies, compiles, and runs `npm run deploy` again
 
 ## MetaMask
 
-MetaMask accounts are normal Ethereum-style **secp256k1** accounts. You do not create a separate Fractal-only wallet type; create or import an account in MetaMask, then add the Fractal devnet as a custom network:
-
-| Field | Value |
-|-------|-------|
-| Network name | `FractalChain Devnet` |
-| RPC URL | `http://127.0.0.1:8545` unless `FRACTAL_RPC_ADDR` points elsewhere |
-| Chain ID | `41` |
-| Currency symbol | `tFRAC` |
-| Block explorer URL | optional; use your local explorer if running one |
-
-To move tokens between MetaMask accounts:
-
-1. Start `fractal-node` and make sure `eth_chainId` returns `0x29`.
-2. Create two MetaMask accounts on the custom network.
-3. Fund the sender. For local dev you can either import the prefunded Hardhat account `0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266`, or run `fractal-faucet` and fund any MetaMask address from the faucet page/API (`docs/devnet.md`).
-4. Use MetaMask's normal **Send** flow. The node accepts signed EIP-1559 type-`0x02` transfers through `eth_sendRawTransaction`, mines them into devnet blocks, and exposes receipts through `eth_getTransactionReceipt`.
-
-For RPC compatibility, the node exposes the wallet-facing Ethereum methods MetaMask needs: `eth_chainId`, `net_version`, `eth_accounts` / `eth_requestAccounts` (empty because MetaMask owns keys locally), `eth_getBalance`, `eth_getTransactionCount` including `pending`, `eth_estimateGas`, `eth_feeHistory`, `eth_sendRawTransaction`, `eth_getTransactionByHash`, `eth_getTransactionReceipt`, and block queries.
+Add a custom network with the dev node RPC URL and **chain id 41**. Fund the deployer account in devnet genesis / faucet flows as implemented for your environment (see **`docs/devnet.md`**: `fractal-faucet`, `DEVNET_FAUCET_TREASURY`, static explorer under `tools/explorer`).
 
 ## Related PRD sections
 

@@ -1,4 +1,4 @@
-//! Caveats — Phase 1 first six variants plus `NoRecursion` for §12 sub-agent delegation.
+//! Caveats — Phase 1 first six variants only (`docs/wallet.md` §4.4, §25.1).
 
 use borsh::{BorshDeserialize, BorshSerialize};
 
@@ -7,7 +7,10 @@ use crate::types::{Amount, TeeType, ToolClass};
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub enum Caveat {
     MaxTotalSpend(Amount),
-    MaxPerCallSpend { class: ToolClass, max: Amount },
+    MaxPerCallSpend {
+        class: ToolClass,
+        max: Amount,
+    },
     RateLimit {
         class: ToolClass,
         count: u32,
@@ -15,9 +18,10 @@ pub enum Caveat {
     },
     RequireApprovalAbove(Amount),
     OutputCommitmentRequired(ToolClass),
-    TeeAttestationRequired { class: ToolClass, tee: TeeType },
-    /// When present on a parent capability, that token must not mint further child capabilities (`docs/wallet.md` §12.1).
-    NoRecursion,
+    TeeAttestationRequired {
+        class: ToolClass,
+        tee: TeeType,
+    },
 }
 
 impl Caveat {
@@ -47,7 +51,6 @@ impl Caveat {
                 Self::TeeAttestationRequired { class: c1, tee: t1 },
                 Self::TeeAttestationRequired { class: c2, tee: t2 },
             ) => c1 == c2 && t1 == t2,
-            (Self::NoRecursion, Self::NoRecursion) => true,
             _ => false,
         }
     }
@@ -61,33 +64,4 @@ pub fn caveats_attenuate_parent(parent: &[Caveat], child: &[Caveat]) -> bool {
         }
     }
     true
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn no_recursion_borsh_round_trip() {
-        let c = Caveat::NoRecursion;
-        let v = borsh::to_vec(&c).unwrap();
-        let d: Caveat = borsh::from_slice(&v).unwrap();
-        assert_eq!(c, d);
-    }
-
-    #[test]
-    fn child_may_add_no_recursion_when_parent_lacks_it() {
-        let parent = vec![Caveat::MaxTotalSpend(100)];
-        let child = vec![Caveat::MaxTotalSpend(50), Caveat::NoRecursion];
-        assert!(caveats_attenuate_parent(&parent, &child));
-    }
-
-    #[test]
-    fn parent_no_recursion_requires_child_no_recursion() {
-        let parent = vec![Caveat::MaxTotalSpend(100), Caveat::NoRecursion];
-        let child_ok = vec![Caveat::MaxTotalSpend(50), Caveat::NoRecursion];
-        assert!(caveats_attenuate_parent(&parent, &child_ok));
-        let child_bad = vec![Caveat::MaxTotalSpend(50)];
-        assert!(!caveats_attenuate_parent(&parent, &child_bad));
-    }
 }

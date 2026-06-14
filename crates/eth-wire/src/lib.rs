@@ -65,7 +65,11 @@ pub fn decode_eip1559(raw: &[u8]) -> Result<Eth1559Envelope, String> {
     if !rlp.is_list() {
         return Err("invalid rlp: expected list".into());
     }
-    if rlp.item_count().map_err(|e| format!("rlp item_count: {e}"))? != 12 {
+    if rlp
+        .item_count()
+        .map_err(|e| format!("rlp item_count: {e}"))?
+        != 12
+    {
         return Err("invalid rlp: expected 12 fields for 1559 tx".into());
     }
 
@@ -141,7 +145,8 @@ pub fn recover_sender_eip1559(raw: &[u8], env: &Eth1559Envelope) -> Result<Addre
     }
     let recid = RecoveryId::try_from(env.y_parity).map_err(|e| format!("recovery id: {e}"))?;
     let sig = Signature::from_scalars(env.r, env.s).map_err(|e| format!("sig scalars: {e}"))?;
-    let vk = VerifyingKey::recover_from_prehash(&sighash, &sig, recid).map_err(|e| format!("recover: {e}"))?;
+    let vk = VerifyingKey::recover_from_prehash(&sighash, &sig, recid)
+        .map_err(|e| format!("recover: {e}"))?;
     let uncompressed = vk.to_encoded_point(false);
     let pubkey = uncompressed.as_bytes();
     if pubkey.len() != 65 || pubkey[0] != 0x04 {
@@ -153,10 +158,16 @@ pub fn recover_sender_eip1559(raw: &[u8], env: &Eth1559Envelope) -> Result<Addre
     Ok(addr)
 }
 
-pub fn to_core_tx(raw: &[u8], expected_chain_id: u64) -> Result<(Transaction, [u8; 32], u128, u128), String> {
+pub fn to_core_tx(
+    raw: &[u8],
+    expected_chain_id: u64,
+) -> Result<(Transaction, [u8; 32], u128, u128), String> {
     let env = decode_eip1559(raw)?;
     if env.chain_id != expected_chain_id {
-        return Err(format!("wrong chainId: got {}, expected {}", env.chain_id, expected_chain_id));
+        return Err(format!(
+            "wrong chainId: got {}, expected {}",
+            env.chain_id, expected_chain_id
+        ));
     }
     let signer = recover_sender_eip1559(raw, &env)?;
     let tx_hash = keccak256(raw);
@@ -164,7 +175,10 @@ pub fn to_core_tx(raw: &[u8], expected_chain_id: u64) -> Result<(Transaction, [u
     let body = match env.to {
         Some(to) => {
             if env.data.is_empty() {
-                TxBody::Transfer { to, amount: env.value }
+                TxBody::Transfer {
+                    to,
+                    amount: env.value,
+                }
             } else {
                 TxBody::EvmCall {
                     to,

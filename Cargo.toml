@@ -1,7 +1,6 @@
 [workspace]
 resolver = "2"
 members = [
-    "crates/bft-wire",
     "crates/core",
     "crates/wallet",
     "crates/crypto",
@@ -18,20 +17,14 @@ members = [
     "crates/mvp-backend",
     "crates/faucet",
     "crates/indexer-stub",
-    "crates/indexer",
-    "crates/proof-condenser",
-    "crates/proof-aggregator",
-    "crates/shard",
-    "crates/masterchain",
-    "crates/light-client",
-    "tools/load-tps",
+    "crates/benchmarks",
 ]
 
 [workspace.package]
 version = "0.1.0"
 edition = "2021"
 license = "MIT OR Apache-2.0"
-repository = "https://github.com/fractalsociety/Fractal-node"
+repository = "https://github.com/fractalwork/fractalchain"
 
 [workspace.dependencies]
 blake3 = "1.5"
@@ -41,6 +34,7 @@ ed25519-dalek = { version = "2.1", features = ["rand_core"] }
 rand = { version = "0.8", features = ["std", "std_rng"] }
 sha2 = "0.10"
 sha3 = "0.10"
+reed-solomon-erasure = "6.0"
 thiserror = "1.0"
 hex = "0.4"
 jsonrpsee = { version = "0.24", features = ["server", "macros"] }
@@ -56,10 +50,3 @@ rlp = "0.5"
 k256 = { version = "0.13", features = ["ecdsa"] }
 tower = "0.4"
 tower-http = { version = "0.5", features = ["cors"] }
-rocksdb = "0.22"
-
-# Vendored `stwo` 2.2.0: drop obsolete `array_chunks` / `iter_array_chunks` nightly feature gates so
-# the prover builds on current nightlies (see `third_party/stwo/src/lib.rs`). Remove when crates.io
-# ships a fixed release.
-[patch.crates-io]
-stwo = { path = "third_party/stwo" }

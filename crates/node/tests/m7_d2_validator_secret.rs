@@ -28,11 +28,7 @@ fn devnet_with_validator_index_populates_dev_secret_for_bft7() {
 
 #[test]
 fn devnet_with_validator_secret_accepts_none() {
-    let n = NodeInner::devnet_with_validator_secret(
-        ValidatorSet::phase2_bft7_fixture(),
-        0,
-        None,
-    );
+    let n = NodeInner::devnet_with_validator_secret(ValidatorSet::phase2_bft7_fixture(), 0, None);
     assert!(n.validator_secret.is_none());
     // Validator set still exposes the pubkey so peers can verify others' votes.
     assert!(n.validators.bls_pubkey(0).is_some());
@@ -54,8 +50,5 @@ fn devnet_with_validator_secret_accepts_operator_supplied_key() {
         3,
         Some(custom),
     );
-    assert_eq!(
-        n.validator_secret.as_ref().unwrap().public_key(),
-        pk_before
-    );
+    assert_eq!(n.validator_secret.as_ref().unwrap().public_key(), pk_before);
 }

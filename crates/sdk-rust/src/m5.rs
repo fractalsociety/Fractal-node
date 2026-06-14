@@ -1,8 +1,8 @@
 //! PRD §18 **M5** helpers: build `SETTLE_BATCH` + Merkle `CLAIM_PAYOUT` transactions (native VM).
 
 use fractal_core::{
-    merkle_proof, Address, NativeCall, OnChainTaskReceipt, PayoutEntry, SettleBatchPayload, Transaction,
-    TxBody, VmKind, HARDHAT_DEFAULT_SIGNER_0, HARDHAT_DEFAULT_SIGNER_1,
+    merkle_proof, Address, NativeCall, OnChainTaskReceipt, PayoutEntry, SettleBatchPayload,
+    Transaction, TxBody, VmKind, HARDHAT_DEFAULT_SIGNER_0, HARDHAT_DEFAULT_SIGNER_1,
 };
 use fractal_crypto::hash::keccak256;
 use fractal_crypto::Hash256;
@@ -56,7 +56,6 @@ pub fn build_settle_batch_payload(
             final_status: 1,
             finalized_at: 1,
             schema_version: 1,
-            tool_class: 0,
         });
         payout_entries.push(PayoutEntry {
             index: i,
@@ -85,14 +84,8 @@ pub fn build_settle_then_claim_txs(
     payout_each: u128,
     submitted_at: u64,
 ) -> (Transaction, Vec<Transaction>) {
-    let payload = build_settle_batch_payload(
-        operator,
-        agent,
-        batch_id,
-        count,
-        payout_each,
-        submitted_at,
-    );
+    let payload =
+        build_settle_batch_payload(operator, agent, batch_id, count, payout_each, submitted_at);
     build_settle_then_claim_txs_from_payload(payload, operator_nonce, agent, agent_start_nonce)
         .expect("synthetic payload is valid for single agent")
 }

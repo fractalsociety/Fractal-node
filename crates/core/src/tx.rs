@@ -1,12 +1,10 @@
 use borsh::{BorshDeserialize, BorshSerialize};
 
 use crate::address::Address;
-use crate::native_types::{
-    OnChainTaskReceipt, ProviderRegistration, ProviderSlashRecord, SettleBatchPayload,
-    WalletToolBatchSettlePayload,
-};
-use crate::native_types::{WalletBudgetSeed, WalletEmergencyScopeV1};
-use fractal_crypto::Hash256;
+use crate::native_types::{OnChainTaskReceipt, SettleBatchPayload};
+use fractal_crypto::hash::keccak256;
+use fractal_crypto::{BlsSignature, Hash256};
+use thiserror::Error;
 
 #[derive(BorshSerialize, BorshDeserialize, Clone, Debug, PartialEq, Eq)]
 pub enum VmKind {
@@ -60,15 +58,12 @@ pub enum NativeCall {
         validator_id: Address,
         evidence_hash: fractal_crypto::Hash256,
     },
-    /// PRD §12.3 `DELEGATE`: bond liquid FRAC to a validator fingerprint (same accounting as
-    /// [`DepositConsensusStake`] but the canonical delegation opcode).
     Delegate {
-        validator_fingerprint: [u8; 32],
+        validator: Address,
         amount: u128,
     },
-    /// PRD §12.3 `WITHDRAW_REWARDS`: liquidate accrued commission / rewards for this delegation.
     WithdrawRewards {
-        validator_fingerprint: [u8; 32],
+        validator: Address,
     },
     NoOp,
     /// Anchor `keccak256(borsh(TaskReceipt))` (see `wallet_anchor::task_receipt_commitment`).
@@ -77,181 +72,6 @@ pub enum NativeCall {
     WalletTaskReceiptAnchorV1 {
         commitment: Hash256,
         receipt_witness: Vec<u8>,
-    },
-    /// PRD §12 / M7: bond FRAC to a validator identity (`BlockHeader.proposer` fingerprint).
-    /// Any funded account may deposit; tracked per `(signer, fingerprint)` for withdrawal.
-    DepositConsensusStake {
-        validator_fingerprint: [u8; 32],
-        amount: u128,
-    },
-    /// Withdraw the caller's own [`DepositConsensusStake`] for this fingerprint.
-    WithdrawConsensusStake {
-        validator_fingerprint: [u8; 32],
-        amount: u128,
-    },
-    /// Governance-only: register `evidence_hash` before [`NativeCall::SlashConsensusStake`].
-    CommitSlashingEvidence {
-        evidence_hash: fractal_crypto::Hash256,
-    },
-    /// Governance-only: burn consensus stake for `validator_fingerprint` after [`CommitSlashingEvidence`].
-    SlashConsensusStake {
-        validator_fingerprint: [u8; 32],
-        evidence_hash: fractal_crypto::Hash256,
-    },
-    /// Permissionless: slash after native verification of `evidence_borsh`
-    /// ([`fractal_bft_wire::ConsensusMisbehaviorEvidenceV1`]). Does not require governance
-    /// [`CommitSlashingEvidence`]; evidence hash is derived and stored for replay protection.
-    SlashConsensusStakeVerified {
-        validator_fingerprint: [u8; 32],
-        evidence_borsh: Vec<u8>,
-    },
-    /// §17 `core::reputation`: store indexer-derived [`fractal_wallet::ReputationLedgerSummary`] (borsh).
-    /// Requires `fractal-core` **`--features wallet`**. Governance-only; recomputes score with default params.
-    WalletReputationSnapshotV1 {
-        provider_id: [u8; 32],
-        tool_class: u8,
-        summary_borsh: Vec<u8>,
-    },
-    /// PRD §12.3: validator operator sets commission on rewards (basis points, max 10_000).
-    SetValidatorCommission {
-        validator_fingerprint: [u8; 32],
-        commission_bps: u16,
-    },
-    /// Mainnet permissionless enrollment after bonded stake ≥ `State.chain_economics.min_validator_stake_wei`.
-    RegisterValidator {
-        validator_fingerprint: [u8; 32],
-        bls_pubkey: [u8; 48],
-    },
-    /// Move the caller's bonded stake from one validator fingerprint to another (unbonding not required).
-    Redelegate {
-        from_validator_fingerprint: [u8; 32],
-        to_validator_fingerprint: [u8; 32],
-        amount: u128,
-    },
-    /// Governance-only: update on-chain economics profile fields.
-    SetChainEconomics {
-        min_validator_stake_wei: u128,
-        unbonding_period_ms: u64,
-        permissionless_validator_entry: bool,
-        evm_base_fee_burn: bool,
-    },
-    /// §14.1 `MintCapability` — register `child_token` and optional `budget_seed` split.
-    /// Requires `fractal-core` **`--features wallet`** and `revocation_proof_borsh`
-    /// (`fractal_wallet::RevocationVerifyProof` against `wallet_revocation_merkle_root`).
-    WalletMintCapabilityV1 {
-        parent_cap_id: Option<[u8; 32]>,
-        child_token_borsh: Vec<u8>,
-        budget_seed: Option<WalletBudgetSeed>,
-        revocation_proof_borsh: Vec<u8>,
-    },
-    /// §14.2 `CreateBudgetAccount` — returns new id via state (`next_wallet_budget_id` before bump).
-    WalletCreateBudgetAccountV1 {
-        parent: Option<u64>,
-        initial_deposit: u128,
-    },
-    /// §14.2 `FundBudgetAccount`.
-    WalletFundBudgetAccountV1 {
-        budget: u64,
-        amount: u128,
-        source_budget: Option<u64>,
-    },
-    /// §14.2 `CloseBudgetAccount`.
-    WalletCloseBudgetAccountV1 {
-        budget: u64,
-    },
-    /// §14.1 `RevokeCapability` — requires `fractal-core` **`--features wallet`**.
-    WalletRevokeCapabilityV1 {
-        cap_id: [u8; 32],
-        reason_code: u8,
-        cascade: bool,
-        issuer_sig: [u8; 64],
-    },
-    /// §14.5 `PostTask` — creates a task row and escrows budgets from the poster.
-    WalletPostTaskV1 {
-        metadata_uri: String,
-        bounty_budget: u128,
-        tool_budget: u128,
-        verifier_budget: u128,
-    },
-    /// §14.5 `CheckoutTask`.
-    WalletCheckoutTaskV1 {
-        task_id: u64,
-        agent_session: [u8; 32],
-        expiry_ms: u64,
-    },
-    /// §14.5 `RenewCheckout`.
-    WalletRenewCheckoutV1 {
-        task_id: u64,
-        evidence_uri: String,
-        new_expiry_ms: u64,
-    },
-    /// §14.5 `SubmitTask`.
-    WalletSubmitTaskV1 {
-        task_id: u64,
-        artifact_pointer: String,
-        tool_receipt_root: Hash256,
-    },
-    /// §14.5 `VerifyTask` (verifier must differ from checkout signer).
-    WalletVerifyTaskV1 {
-        task_id: u64,
-        verifier_sig: [u8; 64],
-        score: u8,
-    },
-    /// §14.5 `FinalizeTask` — pays escrow to checkout signer; permissionless relayer OK.
-    WalletFinalizeTaskV1 {
-        task_id: u64,
-    },
-    /// §14.1 / §29: governance kill-switch (global v1). When engaged, blocks new wallet mints,
-    /// budget creates/funds, task progress ops, and receipt anchors; revokes, budget close, and
-    /// task finalize remain permitted.
-    WalletEmergencyStopV1 {
-        engage: bool,
-    },
-    /// §16.3 wallet-native multi–tool-receipt batch (`docs/wallet.md`; not M3 `SettleBatch`).
-    WalletBatchSettleV1(WalletToolBatchSettlePayload),
-    /// §14.4 `RegisterProvider`.
-    WalletRegisterProviderV1 {
-        registration: ProviderRegistration,
-    },
-    /// §14.4 `StakeForClass`.
-    WalletStakeForClassV1 {
-        provider_id: [u8; 32],
-        tool_class: u8,
-        amount: u128,
-    },
-    /// §14.4 `UnstakeRequest`.
-    WalletProviderUnstakeRequestV1 {
-        provider_id: [u8; 32],
-        tool_class: u8,
-        amount: u128,
-    },
-    /// §14.4 `UnstakeFinalize`.
-    WalletProviderUnstakeFinalizeV1 {
-        request_id: u64,
-    },
-    /// §14.4 `SlashProvider`.
-    WalletSlashProviderV1 {
-        provider_id: [u8; 32],
-        slash: ProviderSlashRecord,
-    },
-    /// §14.4 `UpdateProvider`.
-    WalletUpdateProviderV1 {
-        provider_id: [u8; 32],
-        metadata_uri: String,
-        endpoint_uri: String,
-        active: bool,
-    },
-    /// §14.4 `DeregisterProvider`.
-    WalletDeregisterProviderV1 {
-        provider_id: [u8; 32],
-    },
-    /// §14.1 scoped master-wallet stop. `master_sig` signs
-    /// `WalletScopedEmergencyStopSignBodyV1 { chain_id, engage, scope }` with `master_public_key`.
-    WalletScopedEmergencyStopV1 {
-        engage: bool,
-        scope: WalletEmergencyScopeV1,
-        master_public_key: [u8; 32],
-        master_sig: [u8; 64],
     },
 }
 
@@ -279,10 +99,458 @@ pub enum TxBody {
     },
 }
 
+#[derive(BorshSerialize, BorshDeserialize, Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub enum OwnedObjectId {
+    AccountNonce(Address),
+    Agent(u64),
+    Receipt(Hash256),
+    WalletTaskReceipt(Hash256),
+}
+
+#[derive(BorshSerialize, BorshDeserialize, Clone, Debug, PartialEq, Eq)]
+pub enum TxExecutionScope {
+    /// Must enter the ordered consensus lane because it touches shared state.
+    Consensus,
+    /// Must enter the ordered consensus lane because it touches both owned and shared state.
+    Mixed {
+        owner: Address,
+        owned_objects: Vec<OwnedObjectId>,
+    },
+    /// Can use the certified owned-object lane once validators countersign it.
+    Owned {
+        owner: Address,
+        objects: Vec<OwnedObjectId>,
+    },
+}
+
+#[derive(Debug, Error, PartialEq, Eq)]
+pub enum OwnedObjectCertificateError {
+    #[error("transaction is not eligible for owned-object certificate path")]
+    NotOwnedObject,
+    #[error("object version set does not match transaction owned-object set")]
+    ObjectVersionSet,
+    #[error("owned-object certificate borsh encoding failed")]
+    Encode,
+}
+
+#[derive(BorshSerialize, BorshDeserialize, Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub struct OwnedObjectVersion {
+    pub object_id: OwnedObjectId,
+    pub version: u64,
+}
+
+#[derive(BorshSerialize, BorshDeserialize, Clone, Debug, PartialEq, Eq)]
+pub struct OwnedObjectValidatorSignature {
+    pub validator_index: u32,
+    pub signature: BlsSignature,
+}
+
+#[derive(BorshSerialize, BorshDeserialize, Clone, Debug, PartialEq, Eq)]
+pub struct OwnedObjectCertificateSignBody {
+    pub tx_hash: Hash256,
+    pub owner: Address,
+    pub signer_nonce: u64,
+    pub object_versions: Vec<OwnedObjectVersion>,
+}
+
+impl OwnedObjectCertificateSignBody {
+    pub fn sign_bytes(&self) -> Result<Vec<u8>, OwnedObjectCertificateError> {
+        borsh::to_vec(self).map_err(|_| OwnedObjectCertificateError::Encode)
+    }
+}
+
+#[derive(BorshSerialize, BorshDeserialize, Clone, Debug, PartialEq, Eq)]
+pub struct OwnedObjectCertificate {
+    pub tx_hash: Hash256,
+    pub owner: Address,
+    pub signer_nonce: u64,
+    pub object_versions: Vec<OwnedObjectVersion>,
+    /// Validator indexes are explicit so the certificate remains compact without
+    /// committing this wire type to one validator-set bitmap width.
+    pub signer_indices: Vec<u32>,
+    pub validator_signatures: Vec<OwnedObjectValidatorSignature>,
+}
+
+impl OwnedObjectCertificate {
+    pub fn sign_body(&self) -> OwnedObjectCertificateSignBody {
+        OwnedObjectCertificateSignBody {
+            tx_hash: self.tx_hash,
+            owner: self.owner,
+            signer_nonce: self.signer_nonce,
+            object_versions: self.object_versions.clone(),
+        }
+    }
+
+    pub fn from_owned_transaction(
+        tx: &Transaction,
+        mut object_versions: Vec<OwnedObjectVersion>,
+        mut validator_signatures: Vec<OwnedObjectValidatorSignature>,
+    ) -> Result<Self, OwnedObjectCertificateError> {
+        let TxExecutionScope::Owned { owner, objects } = tx.execution_scope() else {
+            return Err(OwnedObjectCertificateError::NotOwnedObject);
+        };
+
+        object_versions.sort();
+        object_versions.dedup();
+        let versioned_objects = object_versions
+            .iter()
+            .map(|v| v.object_id.clone())
+            .collect::<Vec<_>>();
+        if versioned_objects != objects {
+            return Err(OwnedObjectCertificateError::ObjectVersionSet);
+        }
+
+        validator_signatures.sort_by_key(|s| s.validator_index);
+        validator_signatures.dedup_by_key(|s| s.validator_index);
+        let signer_indices = validator_signatures
+            .iter()
+            .map(|s| s.validator_index)
+            .collect();
+        let tx_hash =
+            keccak256(&borsh::to_vec(tx).map_err(|_| OwnedObjectCertificateError::Encode)?);
+        Ok(Self {
+            tx_hash,
+            owner,
+            signer_nonce: tx.nonce,
+            object_versions,
+            signer_indices,
+            validator_signatures,
+        })
+    }
+}
+
 #[derive(BorshSerialize, BorshDeserialize, Clone, Debug, PartialEq, Eq)]
 pub struct Transaction {
     pub signer: Address,
     pub nonce: u64,
     pub vm: VmKind,
     pub body: TxBody,
+}
+
+impl Transaction {
+    pub fn execution_scope(&self) -> TxExecutionScope {
+        let normalize = |mut objects: Vec<OwnedObjectId>| {
+            objects.insert(0, OwnedObjectId::AccountNonce(self.signer));
+            objects.sort();
+            objects.dedup();
+            objects
+        };
+        let owned = |objects: Vec<OwnedObjectId>| TxExecutionScope::Owned {
+            owner: self.signer,
+            objects: normalize(objects),
+        };
+        let mixed = |objects: Vec<OwnedObjectId>| TxExecutionScope::Mixed {
+            owner: self.signer,
+            owned_objects: normalize(objects),
+        };
+
+        match (&self.vm, &self.body) {
+            (VmKind::Native, TxBody::Native(NativeCall::SuspendAgent { agent_id, .. })) => {
+                mixed(vec![OwnedObjectId::Agent(*agent_id)])
+            }
+            (VmKind::Native, TxBody::Native(NativeCall::UpdateAgent { agent_id, .. })) => {
+                owned(vec![OwnedObjectId::Agent(*agent_id)])
+            }
+            (VmKind::Native, TxBody::Native(NativeCall::SettleReceipt(receipt))) => {
+                owned(vec![OwnedObjectId::Receipt(receipt.receipt_id)])
+            }
+            (VmKind::Native, TxBody::Native(NativeCall::SettleBatch(payload))) => mixed(
+                payload
+                    .receipts
+                    .iter()
+                    .map(|receipt| OwnedObjectId::Receipt(receipt.receipt_id))
+                    .collect(),
+            ),
+            (VmKind::Native, TxBody::Native(NativeCall::FileDispute { receipt_id, .. })) => {
+                mixed(vec![OwnedObjectId::Receipt(*receipt_id)])
+            }
+            (
+                VmKind::Native,
+                TxBody::Native(NativeCall::WalletTaskReceiptAnchorV1 { commitment, .. }),
+            ) => owned(vec![OwnedObjectId::WalletTaskReceipt(*commitment)]),
+            (VmKind::Native, TxBody::Native(NativeCall::NoOp)) => owned(Vec::new()),
+            _ => TxExecutionScope::Consensus,
+        }
+    }
+
+    pub fn is_owned_object_tx(&self) -> bool {
+        matches!(self.execution_scope(), TxExecutionScope::Owned { .. })
+    }
+
+    pub fn is_mixed_object_tx(&self) -> bool {
+        matches!(self.execution_scope(), TxExecutionScope::Mixed { .. })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn signer() -> Address {
+        [7u8; 20]
+    }
+
+    fn receipt(receipt_id: Hash256) -> OnChainTaskReceipt {
+        OnChainTaskReceipt {
+            receipt_id,
+            job_id: [1u8; 32],
+            requester: signer(),
+            worker: 1,
+            verifier: 2,
+            artifact_root: [3u8; 32],
+            output_hash: [4u8; 32],
+            score: 100,
+            payout_amount: 10,
+            verifier_fee: 1,
+            protocol_fee: 1,
+            final_status: 1,
+            finalized_at: 123,
+            schema_version: 1,
+        }
+    }
+
+    #[test]
+    fn update_agent_is_owned_by_signer_and_agent_object() {
+        let tx = Transaction {
+            signer: signer(),
+            nonce: 0,
+            vm: VmKind::Native,
+            body: TxBody::Native(NativeCall::UpdateAgent {
+                agent_id: 42,
+                new_metadata_uri: "ipfs://new".into(),
+                new_pubkey: None,
+            }),
+        };
+
+        assert_eq!(
+            tx.execution_scope(),
+            TxExecutionScope::Owned {
+                owner: signer(),
+                objects: vec![
+                    OwnedObjectId::AccountNonce(signer()),
+                    OwnedObjectId::Agent(42)
+                ],
+            }
+        );
+    }
+
+    #[test]
+    fn wallet_anchor_is_owned_by_signer_and_commitment() {
+        let commitment = [3u8; 32];
+        let tx = Transaction {
+            signer: signer(),
+            nonce: 0,
+            vm: VmKind::Native,
+            body: TxBody::Native(NativeCall::WalletTaskReceiptAnchorV1 {
+                commitment,
+                receipt_witness: Vec::new(),
+            }),
+        };
+
+        assert_eq!(
+            tx.execution_scope(),
+            TxExecutionScope::Owned {
+                owner: signer(),
+                objects: vec![
+                    OwnedObjectId::AccountNonce(signer()),
+                    OwnedObjectId::WalletTaskReceipt(commitment)
+                ],
+            }
+        );
+    }
+
+    #[test]
+    fn transfers_stay_on_consensus_path() {
+        let tx = Transaction {
+            signer: signer(),
+            nonce: 0,
+            vm: VmKind::Evm,
+            body: TxBody::Transfer {
+                to: [8u8; 20],
+                amount: 1,
+            },
+        };
+
+        assert_eq!(tx.execution_scope(), TxExecutionScope::Consensus);
+    }
+
+    #[test]
+    fn settle_batch_is_explicitly_mixed() {
+        let receipt_id = [9u8; 32];
+        let tx = Transaction {
+            signer: signer(),
+            nonce: 0,
+            vm: VmKind::Native,
+            body: TxBody::Native(NativeCall::SettleBatch(SettleBatchPayload {
+                batch_id: [8u8; 32],
+                operator: signer(),
+                receipts: vec![receipt(receipt_id)],
+                payout_entries: Vec::new(),
+                submitted_at: 123,
+                operator_sig: [0u8; 64],
+            })),
+        };
+
+        assert_eq!(
+            tx.execution_scope(),
+            TxExecutionScope::Mixed {
+                owner: signer(),
+                owned_objects: vec![
+                    OwnedObjectId::AccountNonce(signer()),
+                    OwnedObjectId::Receipt(receipt_id)
+                ],
+            }
+        );
+        assert!(tx.is_mixed_object_tx());
+        assert!(!tx.is_owned_object_tx());
+    }
+
+    #[test]
+    fn file_dispute_is_explicitly_mixed() {
+        let receipt_id = [4u8; 32];
+        let tx = Transaction {
+            signer: signer(),
+            nonce: 0,
+            vm: VmKind::Native,
+            body: TxBody::Native(NativeCall::FileDispute {
+                receipt_id,
+                reason_code: 7,
+                evidence_hash: [6u8; 32],
+            }),
+        };
+
+        assert_eq!(
+            tx.execution_scope(),
+            TxExecutionScope::Mixed {
+                owner: signer(),
+                owned_objects: vec![
+                    OwnedObjectId::AccountNonce(signer()),
+                    OwnedObjectId::Receipt(receipt_id)
+                ],
+            }
+        );
+    }
+
+    #[test]
+    fn owned_object_certificate_wire_type_binds_owned_scope() {
+        let tx = Transaction {
+            signer: signer(),
+            nonce: 7,
+            vm: VmKind::Native,
+            body: TxBody::Native(NativeCall::UpdateAgent {
+                agent_id: 42,
+                new_metadata_uri: "ipfs://new".into(),
+                new_pubkey: None,
+            }),
+        };
+        let object_versions = vec![
+            OwnedObjectVersion {
+                object_id: OwnedObjectId::Agent(42),
+                version: 3,
+            },
+            OwnedObjectVersion {
+                object_id: OwnedObjectId::AccountNonce(signer()),
+                version: 7,
+            },
+        ];
+        let sig = BlsSignature([5u8; 96]);
+        let cert = OwnedObjectCertificate::from_owned_transaction(
+            &tx,
+            object_versions,
+            vec![
+                OwnedObjectValidatorSignature {
+                    validator_index: 2,
+                    signature: sig,
+                },
+                OwnedObjectValidatorSignature {
+                    validator_index: 2,
+                    signature: sig,
+                },
+            ],
+        )
+        .expect("certificate");
+
+        assert_eq!(cert.owner, signer());
+        assert_eq!(cert.signer_nonce, 7);
+        assert_eq!(cert.tx_hash, keccak256(&borsh::to_vec(&tx).unwrap()));
+        assert_eq!(
+            cert.object_versions,
+            vec![
+                OwnedObjectVersion {
+                    object_id: OwnedObjectId::AccountNonce(signer()),
+                    version: 7,
+                },
+                OwnedObjectVersion {
+                    object_id: OwnedObjectId::Agent(42),
+                    version: 3,
+                },
+            ]
+        );
+        assert_eq!(cert.signer_indices, vec![2]);
+        assert_eq!(cert.validator_signatures.len(), 1);
+        assert!(!cert.sign_body().sign_bytes().unwrap().is_empty());
+
+        let bytes = borsh::to_vec(&cert).unwrap();
+        let round_trip = OwnedObjectCertificate::try_from_slice(&bytes).unwrap();
+        assert_eq!(round_trip, cert);
+    }
+
+    #[test]
+    fn owned_object_certificate_rejects_consensus_transaction() {
+        let tx = Transaction {
+            signer: signer(),
+            nonce: 0,
+            vm: VmKind::Evm,
+            body: TxBody::Transfer {
+                to: [8u8; 20],
+                amount: 1,
+            },
+        };
+
+        assert_eq!(
+            OwnedObjectCertificate::from_owned_transaction(&tx, Vec::new(), Vec::new()),
+            Err(OwnedObjectCertificateError::NotOwnedObject)
+        );
+    }
+
+    #[test]
+    fn owned_object_certificate_rejects_mixed_transaction() {
+        let tx = Transaction {
+            signer: signer(),
+            nonce: 0,
+            vm: VmKind::Native,
+            body: TxBody::Native(NativeCall::FileDispute {
+                receipt_id: [5u8; 32],
+                reason_code: 1,
+                evidence_hash: [6u8; 32],
+            }),
+        };
+
+        assert_eq!(
+            OwnedObjectCertificate::from_owned_transaction(&tx, Vec::new(), Vec::new()),
+            Err(OwnedObjectCertificateError::NotOwnedObject)
+        );
+    }
+
+    #[test]
+    fn owned_object_certificate_rejects_wrong_object_version_set() {
+        let tx = Transaction {
+            signer: signer(),
+            nonce: 0,
+            vm: VmKind::Native,
+            body: TxBody::Native(NativeCall::NoOp),
+        };
+
+        assert_eq!(
+            OwnedObjectCertificate::from_owned_transaction(
+                &tx,
+                vec![OwnedObjectVersion {
+                    object_id: OwnedObjectId::Agent(42),
+                    version: 0,
+                }],
+                Vec::new(),
+            ),
+            Err(OwnedObjectCertificateError::ObjectVersionSet)
+        );
+    }
 }

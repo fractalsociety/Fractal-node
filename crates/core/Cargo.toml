@@ -6,49 +6,15 @@ license.workspace = true
 
 [dependencies]
 borsh.workspace = true
-fractal-bft-wire = { path = "../bft-wire" }
 fractal-crypto = { path = "../crypto" }
 fractal-wallet = { path = "../wallet", optional = true }
-ed25519-dalek = { workspace = true, optional = true }
 thiserror.workspace = true
 rlp.workspace = true
 
 [features]
 default = []
-wallet = ["dep:fractal-wallet", "dep:ed25519-dalek"]
+wallet = ["dep:fractal-wallet"]
 
 [dev-dependencies]
 rand.workspace = true
 ed25519-dalek.workspace = true
-fractal-consensus = { path = "../consensus" }
-fractal-wallet = { path = "../wallet" }
-
-[[test]]
-name = "w6_wallet_reputation_snapshot"
-path = "tests/w6_wallet_reputation_snapshot.rs"
-required-features = ["wallet"]
-
-[[test]]
-name = "w6_wallet_mint_capability"
-path = "tests/w6_wallet_mint_capability.rs"
-required-features = ["wallet"]
-
-[[test]]
-name = "w6_wallet_revoke_capability"
-path = "tests/w6_wallet_revoke_capability.rs"
-required-features = ["wallet"]
-
-[[test]]
-name = "w6_wallet_batch_settle"
-path = "tests/w6_wallet_batch_settle.rs"
-required-features = ["wallet"]
-
-[[test]]
-name = "w14_wallet_provider_stake"
-path = "tests/w14_wallet_provider_stake.rs"
-required-features = ["wallet"]
-
-[[test]]
-name = "w29_wallet_scoped_emergency_stop"
-path = "tests/w29_wallet_scoped_emergency_stop.rs"
-required-features = ["wallet"]

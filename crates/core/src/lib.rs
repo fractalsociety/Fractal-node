@@ -4,10 +4,6 @@
 //! `keccak256(borsh(State))` with sorted `BTreeMap` fields for deterministic iteration.
 
 mod address;
-mod block_finalize;
-mod chain_economics;
-mod consensus_misbehavior;
-mod consensus_stake;
 mod devnet_accounts;
 mod error;
 mod evm_engine;
@@ -19,31 +15,8 @@ mod tx;
 
 #[cfg(feature = "wallet")]
 pub mod wallet_anchor;
-#[cfg(feature = "wallet")]
-pub mod wallet_batch_settle;
-pub mod wallet_native;
-#[cfg(feature = "wallet")]
-pub mod wallet_provider;
 
-pub use address::{Address, create_contract_address};
-pub use block_finalize::{
-    BlockFinalizeContext, finalize_block_hooks, validator_stake_weights,
-};
-pub use consensus_misbehavior::{
-    misbehavior_evidence_hash, validator_set_for_slashing, verify_slashing_evidence_borsh,
-};
-pub use fractal_bft_wire::quorum_stake_threshold;
-pub use chain_economics::{
-    ChainEconomicsParams, MAINNET_MIN_VALIDATOR_STAKE_WEI, MAINNET_UNBONDING_PERIOD_MS,
-    TESTNET_MIN_VALIDATOR_STAKE_WEI, TESTNET_UNBONDING_PERIOD_MS, ValidatorRegistryEntry,
-    WEI_PER_FRAC,
-};
-pub use consensus_stake::{
-    MAX_COMMISSION_BPS, active_permissionless_validator_fingerprints, commission_bps_for,
-    deposit_consensus_stake, distribute_fingerprint_block_reward, permissionless_validator_entries,
-    redelegate_consensus_stake, register_validator, set_validator_commission,
-    validator_operator_address, withdraw_consensus_rewards,
-};
+pub use address::{create_contract_address, Address};
 pub use devnet_accounts::{
     DEVNET_FAUCET_TREASURY, HARDHAT_DEFAULT_SIGNER_0, HARDHAT_DEFAULT_SIGNER_1,
 };
@@ -51,23 +24,16 @@ pub use error::ExecError;
 pub use evm_engine::{EvmCallOutcome, EvmEngine};
 pub use merkle::{merkle_proof, merkle_root, verify_merkle_proof};
 pub use native_gas::{
-    EVM_CALL_BASE_GAS, PER_BYTE, TRANSFER_GAS, intrinsic_gas, is_native_precompile_address,
-    native_opcode_from_precompile_address, tx_gas_limit,
+    intrinsic_gas, is_native_precompile_address, native_opcode_from_precompile_address,
+    tx_gas_limit, EVM_CALL_BASE_GAS, PER_BYTE, TRANSFER_GAS,
 };
 pub use native_types::*;
 pub use state::EvmLog;
 pub use state::{Account, State};
-pub use tx::{NativeCall, Transaction, TxBody, VmKind};
-#[cfg(feature = "wallet")]
-pub use wallet_native::{
-    ancestor_chain_for_mint, is_capability_revoked, mint_capability, mint_revocation_proof_bytes,
-    revoke_capability, sync_wallet_revocation_merkle_root, verify_mint_revocation_proof,
-};
-pub use wallet_native::{close_budget_account, create_budget_account, fund_budget_account};
-#[cfg(feature = "wallet")]
-pub use wallet_provider::{
-    deregister_provider, finalize_unstake, register_provider, request_unstake, slash_provider,
-    stake_for_class, update_provider,
+pub use tx::{
+    NativeCall, OwnedObjectCertificate, OwnedObjectCertificateError,
+    OwnedObjectCertificateSignBody, OwnedObjectId, OwnedObjectValidatorSignature,
+    OwnedObjectVersion, Transaction, TxBody, TxExecutionScope, VmKind,
 };
 
 use fractal_crypto::hash::{commit_borsh, keccak256};

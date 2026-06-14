@@ -1,8 +1,10 @@
 //! Determinism harness: fixed RNG + 10k txs → identical `state_root` across repeated runs.
 
-use fractal_core::{apply_block, state_root, NativeCall, State, Transaction, TxBody, VmKind, Address};
-use rand::{Rng, SeedableRng};
+use fractal_core::{
+    apply_block, state_root, Address, NativeCall, State, Transaction, TxBody, VmKind,
+};
 use rand::rngs::StdRng;
+use rand::{Rng, SeedableRng};
 
 fn addr(i: u16) -> Address {
     let mut a = [0u8; 20];

@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>FractalWork — reference wallet (web stub)</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #ffffff;
+      --fg: #0f172a;
+      --fg-muted: #475569;
+      --border: #cbd5e1;
+      --surface: #f8fafc;
+      --mono-bg: #e2e8f0;
+      --mono-fg: #0f172a;
+      --err: #b91c1c;
+      --link: #1d4ed8;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        color-scheme: dark;
+        --bg: #0f172a;
+        --fg: #f1f5f9;
+        --fg-muted: #94a3b8;
+        --border: #334155;
+        --surface: #1e293b;
+        --mono-bg: #334155;
+        --mono-fg: #f8fafc;
+        --err: #f87171;
+        --link: #93c5fd;
+      }
+    }
+    body {
+      font-family: system-ui, sans-serif;
+      max-width: 52rem;
+      margin: 0 auto;
+      padding: 1rem 1.25rem 2rem;
+      line-height: 1.45;
+      color: var(--fg);
+      background: var(--bg);
+    }
+    h1 { font-size: 1.35rem; margin-bottom: 0.25rem; }
+    h2 { font-size: 1.05rem; margin: 1.5rem 0 0.5rem; border-bottom: 1px solid var(--border); padding-bottom: 0.2rem; }
+    .muted { color: var(--fg-muted); font-size: 0.9rem; }
+    .err { color: var(--err); margin: 0.5rem 0; }
+    a { color: var(--link); }
+    .policy-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 1rem 1.1rem;
+      margin-bottom: 1rem;
+    }
+    .policy-card h3 { margin: 0 0 0.35rem; font-size: 1rem; }
+    pre.json-snippet {
+      margin: 0.5rem 0;
+      padding: 0.65rem 0.75rem;
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      font-size: 0.78rem;
+      overflow: auto;
+      max-height: 22rem;
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+      word-break: break-word;
+    }
+    code.mono { font-family: ui-monospace, monospace; font-size: 0.82rem; background: var(--mono-bg); color: var(--mono-fg); padding: 0.1rem 0.35rem; border-radius: 4px; }
+    p.cli-hint { font-size: 0.85rem; margin: 0.5rem 0 0; }
+    .verify-box {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 1rem 1.1rem;
+    }
+    textarea {
+      width: 100%;
+      min-height: 5rem;
+      box-sizing: border-box;
+      font-family: ui-monospace, monospace;
+      font-size: 0.82rem;
+      padding: 0.5rem;
+      border-radius: 8px;
+      border: 1px solid var(--border);
+      background: var(--bg);
+      color: var(--fg);
+    }
+  </style>
+</head>
+<body>
+  <h1>FractalWork — reference wallet (web stub)</h1>
+  <p class="muted">PRD <code>docs/wallet.md</code> §25.1 Phase 1 — built-in policy templates (§15.2). Offline static UI; no chain RPC.</p>
+  <p class="muted">Spec: open <code>docs/wallet.md</code> in this repo clone · CLI: <code>fractal-wallet-cli</code> (<code>crates/cli</code>)</p>
+
+  <h2>Built-in policy templates</h2>
+  <p id="loadError" class="err" role="alert"></p>
+  <div id="policies">Loading…</div>
+
+  <h2>Verify a capability token</h2>
+  <div class="verify-box">
+    <p class="muted">Browser-side borsh + Ed25519 verify is not bundled in this stub yet. Paste a hex token from <code>cap mint</code> and verify from your machine:</p>
+    <textarea id="pasteHex" placeholder="0x… capability token hex (optional paste for your notes)"></textarea>
+    <p class="cli-hint" style="margin-top:0.75rem">
+      <code class="mono">cargo run -p fractal-cli -- cap show &lt;paste_hex&gt;</code>
+    </p>
+    <p class="muted">JSON output includes <code>signatureOk</code>, scope, and template resolution fields.</p>
+  </div>
+
+  <h2>Serve locally</h2>
+  <p class="muted">From repo root: <code class="mono">./scripts/serve-wallet-web.sh</code> (default port 3344, override <code>WALLET_WEB_PORT</code>).</p>
+
+  <script src="app.js"></script>
+</body>
+</html>

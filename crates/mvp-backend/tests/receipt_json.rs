@@ -15,7 +15,8 @@ fn load_sample_receipts_builds_three_claims() {
     assert_eq!(payload.operator, HARDHAT_DEFAULT_SIGNER_0);
     let total: u128 = payload.payout_entries.iter().map(|e| e.amount).sum();
     assert_eq!(total, 5 + 7 + 11);
-    let (settle, claims) = build_settle_then_claim_txs_from_payload(payload, 0, claim_agent, 0).unwrap();
+    let (settle, claims) =
+        build_settle_then_claim_txs_from_payload(payload, 0, claim_agent, 0).unwrap();
     assert!(matches!(
         settle.body,
         fractal_sdk::TxBody::Native(fractal_sdk::NativeCall::SettleBatch(_))

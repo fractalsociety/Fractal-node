@@ -1,9 +1,52 @@
-//! HotStuff-2 quorum certificate wire shape + block-header helpers (`docs/prd.md` §7.3).
+//! HotStuff-2 quorum certificate wire shape (`docs/prd.md` §7.3, §18 M7).
+//!
+//! Phase 1 (`n = 1`): aggregate signature bytes are zeroed; [`hash_qc`] still commits the
+//! voted header identity so `parent_qc_hash` chains across blocks. Real BLS verification
+//! is deferred to full M7.
 
-pub use fractal_bft_wire::qc::*;
+use borsh::{BorshDeserialize, BorshSerialize};
+use fractal_crypto::hash::keccak256;
+use fractal_crypto::{AggregateSignature, Hash256};
 
 use crate::BlockHeader;
-use fractal_crypto::Hash256;
+
+/// Certificate that a quorum voted for a specific block header identity.
+#[derive(BorshSerialize, BorshDeserialize, Clone, Debug, PartialEq, Eq)]
+pub struct QuorumCertificate {
+    pub view: u64,
+    pub block_height: u64,
+    pub block_header_hash: Hash256,
+    pub aggregate_sig: AggregateSignature,
+}
+
+/// `keccak256(borsh(qc))` — used as `BlockHeader.parent_qc_hash`.
+pub fn hash_qc(qc: &QuorumCertificate) -> Result<Hash256, std::io::Error> {
+    Ok(keccak256(&borsh::to_vec(qc)?))
+}
+
+/// QC for the synthetic genesis parent (height 0, no header yet).
+pub fn genesis_parent_qc() -> QuorumCertificate {
+    QuorumCertificate {
+        view: 0,
+        block_height: 0,
+        block_header_hash: [0u8; 32],
+        aggregate_sig: AggregateSignature { bytes: [0u8; 96] },
+    }
+}
+
+/// Singleton placeholder: one logical vote for `block_header_hash` at (`height`, `view`).
+pub fn singleton_qc_certifying(
+    block_header_hash: Hash256,
+    block_height: u64,
+    view: u64,
+) -> QuorumCertificate {
+    QuorumCertificate {
+        view,
+        block_height,
+        block_header_hash,
+        aggregate_sig: AggregateSignature { bytes: [0u8; 96] },
+    }
+}
 
 /// After committing `header` (with canonical `header_hash`), the next block's `parent_qc_hash`.
 pub fn next_parent_qc_hash_after_commit(
@@ -33,14 +76,6 @@ mod tests {
         assert_ne!(h, [0u8; 32]);
         let h2 = hash_qc(&genesis_parent_qc()).unwrap();
         assert_eq!(h, h2);
-    }
-
-    #[test]
-    fn is_genesis_parent_qc_detects_genesis_only() {
-        assert!(is_genesis_parent_qc(&genesis_parent_qc()));
-        let mut q = genesis_parent_qc();
-        q.view = 1;
-        assert!(!is_genesis_parent_qc(&q));
     }
 
     #[test]

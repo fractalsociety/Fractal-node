@@ -18,7 +18,9 @@ fn evm_call_executes_bytecode_and_persists_storage() {
     // RETURN(0, 32)
     //
     // 60 2a 60 00 55 60 2a 60 00 52 60 20 60 00 f3
-    let runtime = vec![0x60, 0x2a, 0x60, 0x00, 0x55, 0x60, 0x2a, 0x60, 0x00, 0x52, 0x60, 0x20, 0x60, 0x00, 0xf3];
+    let runtime = vec![
+        0x60, 0x2a, 0x60, 0x00, 0x55, 0x60, 0x2a, 0x60, 0x00, 0x52, 0x60, 0x20, 0x60, 0x00, 0xf3,
+    ];
 
     let mut st = State::default();
     st.accounts.insert(
@@ -46,7 +48,10 @@ fn evm_call_executes_bytecode_and_persists_storage() {
     assert_eq!(out.return_data[31], 0x2a);
 
     let slot0 = [0u8; 32];
-    let stored = st.evm_storage.get(&(contract, slot0)).copied().unwrap_or([0u8; 32]);
+    let stored = st
+        .evm_storage
+        .get(&(contract, slot0))
+        .copied()
+        .unwrap_or([0u8; 32]);
     assert_eq!(stored[31], 0x2a);
 }
-

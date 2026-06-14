@@ -1,7 +1,7 @@
 //! Gossipsub vote wire (`docs/prd.md` §18 M7-d-5): two Swarms on QUIC exchange `Vote` on
 //! [`fractal_network::VOTES_TOPIC_STR`] while block sync runs on request-response.
 
-use std::sync::{Arc, Mutex as StdMutex};
+use std::sync::Arc;
 use std::time::Duration;
 
 use fractal_consensus::{header_hash, ValidatorSet};
@@ -10,28 +10,8 @@ use libp2p::multiaddr::Protocol;
 use libp2p::Multiaddr;
 use tokio::sync::{oneshot, Mutex};
 
-/// Snapshot fast sync can finish before gossipsub has delivered the producer's first tip vote
-/// (messages are not replayed). This test targets vote propagation during incremental block replay.
-static GOSSIP_VOTE_TEST_ENV_LOCK: StdMutex<()> = StdMutex::new(());
-
 #[tokio::test]
 async fn producer_and_follower_exchange_votes_over_gossipsub() {
-    let _env_guard = GOSSIP_VOTE_TEST_ENV_LOCK
-        .lock()
-        .expect("gossip vote test env lock");
-    let prev_fast = std::env::var("FRACTAL_FAST_SYNC").ok();
-    std::env::set_var("FRACTAL_FAST_SYNC", "0");
-    struct RestoreFastSync(Option<String>);
-    impl Drop for RestoreFastSync {
-        fn drop(&mut self) {
-            match &self.0 {
-                None => std::env::remove_var("FRACTAL_FAST_SYNC"),
-                Some(v) => std::env::set_var("FRACTAL_FAST_SYNC", v),
-            }
-        }
-    }
-    let _restore_fast = RestoreFastSync(prev_fast);
-
     let validators = ValidatorSet::phase2_bft7_fixture();
 
     let (prod_vote_tx, prod_vote_rx) = tokio::sync::mpsc::unbounded_channel();
@@ -52,7 +32,6 @@ async fn producer_and_follower_exchange_votes_over_gossipsub() {
         listen,
         Some(tx),
         Some(prod_vote_rx),
-        None,
     ));
 
     let (addr, peer) = tokio::time::timeout(Duration::from_secs(15), rx)
@@ -70,7 +49,6 @@ async fn producer_and_follower_exchange_votes_over_gossipsub() {
         f,
         vec![bootstrap],
         Some(fol_vote_rx),
-        None,
     ));
 
     for _ in 0..120 {

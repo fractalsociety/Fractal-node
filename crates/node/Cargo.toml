@@ -9,21 +9,16 @@ borsh.workspace = true
 k256.workspace = true
 rlp.workspace = true
 fractal-consensus = { path = "../consensus" }
-fractal-core = { path = "../core", features = ["wallet"] }
+fractal-core = { path = "../core" }
 fractal-eth-wire = { path = "../eth-wire" }
 fractal-evm = { path = "../evm" }
 fractal-crypto = { path = "../crypto" }
 fractal-mempool = { path = "../mempool" }
 fractal-network = { path = "../network" }
-fractal-proof-condenser = { path = "../proof-condenser" }
-fractal-proof-aggregator = { path = "../proof-aggregator" }
 fractal-rpc = { path = "../rpc" }
-fractal-shard = { path = "../shard" }
-fractal-masterchain = { path = "../masterchain" }
 fractal-storage = { path = "../storage" }
 futures.workspace = true
 hex.workspace = true
 libp2p.workspace = true
-serde_json.workspace = true
 thiserror.workspace = true
 tokio.workspace = true

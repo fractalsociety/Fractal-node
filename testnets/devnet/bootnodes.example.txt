@@ -1,0 +1,9 @@
+# PRD M6: replace with real libp2p QUIC multiaddrs (≥3 validators / bootnodes).
+# Used with FRACTAL_BOOTSTRAP for followers. Lines starting with # are ignored when you parse manually.
+#
+# Note: fractal-node follower accepts comma-separated multiaddrs in FRACTAL_BOOTSTRAP when they
+# share the same /p2p/<PeerId>. You can still use a single line, or run multiple followers.
+
+# /dns4/boot-1.fractal.example/udp/4001/quic-v1/p2p/12D3KooWREPLACE_WITH_PEER_ID
+# /dns4/boot-2.fractal.example/udp/4001/quic-v1/p2p/12D3KooWREPLACE_WITH_PEER_ID
+# /dns4/boot-3.fractal.example/udp/4001/quic-v1/p2p/12D3KooWREPLACE_WITH_PEER_ID

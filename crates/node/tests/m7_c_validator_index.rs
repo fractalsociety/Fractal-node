@@ -12,7 +12,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use fractal_consensus::{header_hash, ValidatorSet, Vote, VoteSignBody};
+use fractal_consensus::ValidatorSet;
 use fractal_core::{NativeCall, Transaction, TxBody, VmKind};
 use fractal_mempool::PooledTx;
 use fractal_node::{
@@ -33,35 +33,6 @@ fn push_one_native_noop(n: &mut NodeInner) {
         max_fee_per_gas: u128::MAX,
         eth_signed_raw: None,
     });
-}
-
-/// Injects dev BLS votes until the vote pool reaches quorum for the current tip (M7-d-6).
-fn inject_quorum_votes_for_current_tip(n: &mut NodeInner) {
-    let tip = n.blocks.last().expect("tip");
-    let set = n.validators.clone();
-    let hh = header_hash(&tip.header).expect("header_hash");
-    let view = tip.header.view;
-    let height = tip.header.height;
-    let need = set.quorum_threshold();
-    for idx in 0u32..(set.len() as u32) {
-        if n.vote_pool.count(view, hh) >= need {
-            break;
-        }
-        let Some(sk) = set.dev_bls_secret(idx as usize) else {
-            continue;
-        };
-        let body = VoteSignBody {
-            view,
-            height,
-            header_hash: hh,
-        };
-        let v = Vote::sign(body, idx, &sk);
-        let _ = n.record_vote(v);
-    }
-    assert!(
-        n.vote_pool.count(view, hh) >= need,
-        "expected quorum votes for tip view={view} height={height}"
-    );
 }
 
 #[tokio::test]
@@ -89,7 +60,10 @@ async fn bft7_non_leader_does_not_produce_and_does_not_drain_mempool() {
         push_one_native_noop(&mut n);
         assert_eq!(n.mempool.len(), 1);
     }
-    assert_eq!(try_produce_one_tick(&node).await, ProduceTickOutcome::NotMyTurn);
+    assert_eq!(
+        try_produce_one_tick(&node).await,
+        ProduceTickOutcome::NotMyTurn
+    );
 
     let n = node.lock().await;
     assert_eq!(n.height, 0, "non-leader must not have produced");
@@ -114,12 +88,14 @@ async fn bft7_index_zero_produces_only_at_view_zero() {
     }
     // After producing, view advances to 1; index 0 is NOT leader for view 1..6.
     for _ in 0..6 {
-        assert_eq!(try_produce_one_tick(&node).await, ProduceTickOutcome::NotMyTurn);
+        assert_eq!(
+            try_produce_one_tick(&node).await,
+            ProduceTickOutcome::NotMyTurn
+        );
     }
     // Operator workaround for solo-binary BFT-7 stalls: hop view to 7 manually.
     {
         let mut n = node.lock().await;
-        inject_quorum_votes_for_current_tip(&mut n);
         n.view = 7;
     }
     match try_produce_one_tick(&node).await {
@@ -136,7 +112,10 @@ async fn bft7_index_three_takes_over_at_view_three() {
     )));
     // Skip ticks at view 0..2 (NotMyTurn). Then jump to view 3 and produce.
     for _ in 0..3 {
-        assert_eq!(try_produce_one_tick(&node).await, ProduceTickOutcome::NotMyTurn);
+        assert_eq!(
+            try_produce_one_tick(&node).await,
+            ProduceTickOutcome::NotMyTurn
+        );
     }
     {
         let mut n = node.lock().await;

@@ -1,9 +1,8 @@
 //! PRD §18 M3 exit path: `SETTLE_BATCH` with 100 receipts + Merkle `CLAIM_PAYOUT` for each leaf.
 
 use fractal_core::{
-    apply_block, merkle_proof, merkle_root,
-    Account, NativeCall, OnChainTaskReceipt, PayoutEntry, SettleBatchPayload, State, Transaction,
-    TxBody, VmKind,
+    apply_block, merkle_proof, merkle_root, Account, NativeCall, OnChainTaskReceipt, PayoutEntry,
+    SettleBatchPayload, State, Transaction, TxBody, VmKind,
 };
 use fractal_crypto::hash::keccak256;
 
@@ -27,7 +26,13 @@ fn settle_batch_hundred_receipts_then_hundred_claims() {
             balance: 10_000_000,
         },
     );
-    st.accounts.insert(agent, Account { nonce: 0, balance: 0 });
+    st.accounts.insert(
+        agent,
+        Account {
+            nonce: 0,
+            balance: 0,
+        },
+    );
 
     let mut receipts = Vec::new();
     let mut payouts = Vec::new();
@@ -49,7 +54,6 @@ fn settle_batch_hundred_receipts_then_hundred_claims() {
             final_status: 1,
             finalized_at: 1,
             schema_version: 1,
-            tool_class: 0,
         });
         payouts.push(PayoutEntry {
             index: i,

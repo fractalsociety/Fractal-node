@@ -11,7 +11,11 @@ use fractal_node::NodeInner;
 fn sign_for(set: &ValidatorSet, idx: u32, view: u64, height: u64, hh_byte: u8) -> Vote {
     let sk = set.dev_bls_secret(idx as usize).unwrap();
     Vote::sign(
-        VoteSignBody { view, height, header_hash: [hh_byte; 32] },
+        VoteSignBody {
+            view,
+            height,
+            header_hash: [hh_byte; 32],
+        },
         idx,
         &sk,
     )
@@ -29,16 +33,13 @@ fn singleton_node_self_vote_reaches_quorum_and_forms_qc() {
         .try_form_qc(0, 1, [0x42; 32])
         .expect("singleton forms QC immediately");
     assert_eq!(formed.signer_indices, vec![0u32]);
-    verify_formed_qc(&formed, &n.validators, None).expect("QC verifies via fast_aggregate_verify");
+    verify_formed_qc(&formed, &n.validators).expect("QC verifies via fast_aggregate_verify");
 }
 
 #[test]
 fn node_without_signing_key_cannot_build_self_vote_but_can_record_peers() {
-    let mut n = NodeInner::devnet_with_validator_secret(
-        ValidatorSet::phase2_bft7_fixture(),
-        0,
-        None,
-    );
+    let mut n =
+        NodeInner::devnet_with_validator_secret(ValidatorSet::phase2_bft7_fixture(), 0, None);
     assert!(n.build_self_vote(1, 1, [0xaa; 32]).is_none());
     // But it can still record peer votes.
     let set = n.validators.clone();
@@ -51,7 +52,7 @@ fn node_without_signing_key_cannot_build_self_vote_but_can_record_peers() {
         }
     }
     let formed = n.try_form_qc(1, 1, [0xaa; 32]).expect("five signers → QC");
-    verify_formed_qc(&formed, &n.validators, None).expect("aggregate verifies");
+    verify_formed_qc(&formed, &n.validators).expect("aggregate verifies");
 }
 
 #[test]
@@ -86,5 +87,5 @@ fn try_form_qc_returns_none_until_threshold() {
     }
     let formed = n.try_form_qc(1, 1, [0xdd; 32]).expect("threshold met");
     assert_eq!(formed.signer_indices, vec![0, 1, 2, 3, 4]);
-    verify_formed_qc(&formed, &n.validators, None).expect("verify");
+    verify_formed_qc(&formed, &n.validators).expect("verify");
 }

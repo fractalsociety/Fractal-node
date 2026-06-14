@@ -1,7 +1,7 @@
 //! Keccak binary Merkle tree (same pairing rule as `fractal-consensus` tx root).
 
-use fractal_crypto::Hash256;
 use fractal_crypto::hash::keccak256;
+use fractal_crypto::Hash256;
 
 fn hash_pair(left: &Hash256, right: &Hash256) -> Hash256 {
     let mut buf = [0u8; 64];

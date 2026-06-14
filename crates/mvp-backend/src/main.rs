@@ -1,13 +1,12 @@
-//! PRD §18 **M5** — Core MVP **bridge** binary: one `SETTLE_BATCH` then `CLAIM_PAYOUT` per receipt over
-//! `eth_sendRawTransaction` (borsh [`fractal_core::Transaction`]).
+//! PRD §18 **M5** — minimal “Core MVP backend”: push one `SETTLE_BATCH` then `CLAIM_PAYOUT` txs over `eth_sendRawTransaction` (borsh `Transaction`).
 //!
 //! Anchored on **`docs/prd.md` M5**, not `docs/wallet.md`.
 //!
+//! Usage:
 //! ```text
 //! FRACTAL_RPC_URL=http://127.0.0.1:8545 cargo run -p fractal-mvp-backend --bin fractal-mvp-bridge
 //! MVP_RECEIPT_COUNT=100   # optional; default 100 for PRD exit scale (synthetic receipts)
 //! MVP_RECEIPTS_JSON=/path/to/export.json   # optional; real off-chain receipts (see testdata/mvp_receipts_sample.json)
-//! cargo run -p fractal-mvp-backend --bin fractal-mvp-bridge -- --help
 //! ```
 
 use fractal_mvp_backend::receipt_json;
@@ -18,26 +17,6 @@ use fractal_core::{Address, Transaction, HARDHAT_DEFAULT_SIGNER_0, HARDHAT_DEFAU
 
 fn addr_hex(a: &Address) -> String {
     format!("0x{}", hex::encode(a))
-}
-
-fn usage() -> &'static str {
-    "\
-fractal-mvp-bridge — PRD M5 Core MVP bridge
-
-Submits one SETTLE_BATCH then one CLAIM_PAYOUT per receipt via JSON-RPC
-(eth_sendRawTransaction with borsh-encoded native Transaction).
-
-Environment:
-  FRACTAL_RPC_URL       JSON-RPC HTTP endpoint (default: http://127.0.0.1:8545)
-  MVP_RECEIPT_COUNT     Synthetic receipt count (default: 100). Ignored when MVP_RECEIPTS_JSON is set.
-  MVP_RECEIPTS_JSON     Path to operator receipt export JSON (see crates/mvp-backend/testdata/mvp_receipts_sample.json)
-
-Examples:
-  FRACTAL_RPC_URL=http://127.0.0.1:8545 cargo run -p fractal-mvp-backend --bin fractal-mvp-bridge
-  MVP_RECEIPT_COUNT=3 cargo run -p fractal-mvp-backend --bin fractal-mvp-bridge
-  MVP_RECEIPTS_JSON=./crates/mvp-backend/testdata/mvp_receipts_sample.json \\
-    cargo run -p fractal-mvp-backend --bin fractal-mvp-bridge
-"
 }
 
 fn rpc(url: &str, method: &str, params: serde_json::Value) -> Result<serde_json::Value, String> {
@@ -86,23 +65,10 @@ fn eth_get_balance(rpc_url: &str, who: &Address) -> Result<String, String> {
 fn send_borsh_tx(rpc_url: &str, tx: &Transaction) -> Result<String, String> {
     let raw = borsh::to_vec(tx).map_err(|e| format!("borsh: {e}"))?;
     let hex = format!("0x{}", hex::encode(raw));
-    let h = rpc(
-        rpc_url,
-        "eth_sendRawTransaction",
-        serde_json::json!([hex]),
-    )?;
+    let h = rpc(rpc_url, "eth_sendRawTransaction", serde_json::json!([hex]))?;
     h.as_str()
         .map(std::string::ToString::to_string)
         .ok_or_else(|| "tx hash not string".to_string())
-}
-
-fn preflight_rpc(rpc_url: &str) -> Result<serde_json::Value, String> {
-    let chain_id = rpc(rpc_url, "eth_chainId", serde_json::json!([]))?;
-    let block = rpc(rpc_url, "eth_blockNumber", serde_json::json!([]))?;
-    Ok(serde_json::json!({
-        "eth_chainId": chain_id,
-        "eth_blockNumber": block,
-    }))
 }
 
 fn main() {
@@ -119,13 +85,8 @@ fn main() {
 }
 
 fn run() -> Result<(), String> {
-    if std::env::args().any(|a| a == "--help" || a == "-h") {
-        eprint!("{}", usage());
-        return Ok(());
-    }
-
-    let rpc_url = std::env::var("FRACTAL_RPC_URL").unwrap_or_else(|_| "http://127.0.0.1:8545".into());
-    let preflight = preflight_rpc(&rpc_url)?;
+    let rpc_url =
+        std::env::var("FRACTAL_RPC_URL").unwrap_or_else(|_| "http://127.0.0.1:8545".into());
 
     let (settle, claims, operator, claim_agent, total_payout, receipt_count, batch_hex, mode) =
         if let Ok(path) = std::env::var("MVP_RECEIPTS_JSON") {
@@ -172,14 +133,7 @@ fn run() -> Result<(), String> {
             let op_nonce = get_nonce(&rpc_url, &operator)?;
             let ag_nonce = get_nonce(&rpc_url, &agent)?;
             let (settle, claims) = fractal_sdk::m5::build_settle_then_claim_txs(
-                operator,
-                op_nonce,
-                agent,
-                ag_nonce,
-                batch_id,
-                count,
-                1,
-                ts,
+                operator, op_nonce, agent, ag_nonce, batch_id, count, 1, ts,
             );
             let total = count as u128;
             let batch_hex = format!("0x{}", hex::encode(batch_id));
@@ -202,7 +156,6 @@ fn run() -> Result<(), String> {
         serde_json::json!({
             "step": "mvp_bridge_start",
             "rpcUrl": rpc_url,
-            "preflight": preflight,
             "mode": mode,
             "operator": addr_hex(&operator),
             "claimAgent": addr_hex(&claim_agent),

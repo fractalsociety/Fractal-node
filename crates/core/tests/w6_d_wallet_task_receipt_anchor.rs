@@ -34,7 +34,10 @@ fn wallet_task_receipt_anchor_stores_commitment() {
         state.wallet_task_receipt_anchors.get(&commitment),
         Some(&HARDHAT_DEFAULT_SIGNER_0)
     );
-    assert_eq!(state.accounts.get(&HARDHAT_DEFAULT_SIGNER_0).unwrap().nonce, 1);
+    assert_eq!(
+        state.accounts.get(&HARDHAT_DEFAULT_SIGNER_0).unwrap().nonce,
+        1
+    );
 }
 
 #[test]

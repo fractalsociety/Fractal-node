@@ -58,9 +58,11 @@ impl CapabilityToken {
     }
 
     pub fn verify(&self) -> Result<(), CapabilityVerifyError> {
-        let vk = VerifyingKey::from_bytes(&self.body.issuer).map_err(|_| CapabilityVerifyError::BadIssuerKey)?;
+        let vk = VerifyingKey::from_bytes(&self.body.issuer)
+            .map_err(|_| CapabilityVerifyError::BadIssuerKey)?;
         let sig = Signature::from_bytes(&self.signature);
-        let msg = Self::signing_bytes(&self.body).map_err(|_| CapabilityVerifyError::BadSignature)?;
+        let msg =
+            Self::signing_bytes(&self.body).map_err(|_| CapabilityVerifyError::BadSignature)?;
         vk.verify(&msg, &sig)
             .map_err(|_| CapabilityVerifyError::BadSignature)
     }
@@ -87,13 +89,6 @@ impl CapabilityToken {
         child: &CapabilitySignBody,
         parent: &CapabilitySignBody,
     ) -> bool {
-        if parent
-            .caveats
-            .iter()
-            .any(|c| matches!(c, Caveat::NoRecursion))
-        {
-            return false;
-        }
         if child.parent_cap_id != Some(parent.cap_id) {
             return false;
         }
@@ -169,56 +164,12 @@ mod tests {
             not_after: 500_000,
             nonce: 2,
         };
-        assert!(CapabilityToken::verify_attenuation_from_parent(&child_body, &parent.body));
-        let child = CapabilityToken::sign(child_body, &issuer).unwrap();
-        child.verify().unwrap();
-    }
-
-    #[test]
-    fn verify_attenuation_rejects_parent_with_no_recursion_even_if_caveats_match() {
-        let mut rng = OsRng;
-        let issuer = SigningKey::generate(&mut rng);
-        let subject = SigningKey::generate(&mut rng);
-        let parent_body = CapabilitySignBody {
-            version: 1,
-            cap_id: [1u8; 32],
-            chain_id: 41,
-            issuer: issuer.verifying_key().to_bytes(),
-            subject: subject.verifying_key().to_bytes(),
-            parent_cap_id: None,
-            scope: Scope {
-                workspace_id: None,
-                project_id: None,
-                task_id: None,
-                tool_class_mask: ToolClass::all_phase1_mask(),
-                providers: None,
-            },
-            caveats: vec![Caveat::MaxTotalSpend(100), Caveat::NoRecursion],
-            budget_account: 1,
-            not_before: 0,
-            not_after: 1_000_000,
-            nonce: 1,
-        };
-        let parent = CapabilityToken::sign(parent_body, &issuer).unwrap();
-
-        let child_body = CapabilitySignBody {
-            version: 1,
-            cap_id: [2u8; 32],
-            chain_id: 41,
-            issuer: issuer.verifying_key().to_bytes(),
-            subject: subject.verifying_key().to_bytes(),
-            parent_cap_id: Some(parent.body.cap_id),
-            scope: parent.body.scope.clone(),
-            caveats: vec![Caveat::MaxTotalSpend(50), Caveat::NoRecursion],
-            budget_account: 1,
-            not_before: 0,
-            not_after: 500_000,
-            nonce: 2,
-        };
-        assert!(!CapabilityToken::verify_attenuation_from_parent(
+        assert!(CapabilityToken::verify_attenuation_from_parent(
             &child_body,
             &parent.body
         ));
+        let child = CapabilityToken::sign(child_body, &issuer).unwrap();
+        child.verify().unwrap();
     }
 }
 

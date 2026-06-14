@@ -55,64 +55,8 @@ fn native_base_gas(call: &NativeCall) -> u64 {
         NativeCall::Slash { .. } => 10_000,
         NativeCall::Delegate { .. } => 8_000,
         NativeCall::WithdrawRewards { .. } => 8_000,
-        NativeCall::NoOp => 100,
         NativeCall::WalletTaskReceiptAnchorV1 { .. } => 6_000,
-        NativeCall::DepositConsensusStake { .. } => 8_000,
-        NativeCall::WithdrawConsensusStake { .. } => 8_000,
-        NativeCall::CommitSlashingEvidence { .. } => 6_000,
-        NativeCall::SlashConsensusStake { .. } => 12_000,
-        NativeCall::SlashConsensusStakeVerified { .. } => 48_000,
-        NativeCall::WalletReputationSnapshotV1 { summary_borsh, .. } => {
-            8_000u64.saturating_add(PER_BYTE.saturating_mul(summary_borsh.len() as u64))
-        }
-        NativeCall::SetValidatorCommission { .. } => 8_000,
-        NativeCall::RegisterValidator { .. } => 12_000,
-        NativeCall::Redelegate { .. } => 10_000,
-        NativeCall::SetChainEconomics { .. } => 8_000,
-        NativeCall::WalletMintCapabilityV1 {
-            child_token_borsh,
-            revocation_proof_borsh,
-            ..
-        } => 10_000u64
-            .saturating_add(PER_BYTE.saturating_mul(child_token_borsh.len() as u64))
-            .saturating_add(PER_BYTE.saturating_mul(revocation_proof_borsh.len() as u64)),
-        NativeCall::WalletCreateBudgetAccountV1 { .. } => 6_000,
-        NativeCall::WalletFundBudgetAccountV1 { .. } => 6_000,
-        NativeCall::WalletCloseBudgetAccountV1 { .. } => 6_000,
-        NativeCall::WalletRevokeCapabilityV1 { .. } => 8_000,
-        NativeCall::WalletPostTaskV1 { metadata_uri, .. } => {
-            8_000u64.saturating_add(PER_BYTE.saturating_mul(metadata_uri.len() as u64))
-        }
-        NativeCall::WalletCheckoutTaskV1 { .. } => 6_000,
-        NativeCall::WalletRenewCheckoutV1 { evidence_uri, .. } => {
-            6_000u64.saturating_add(PER_BYTE.saturating_mul(evidence_uri.len() as u64))
-        }
-        NativeCall::WalletSubmitTaskV1 {
-            artifact_pointer, ..
-        } => 7_000u64.saturating_add(PER_BYTE.saturating_mul(artifact_pointer.len() as u64)),
-        NativeCall::WalletVerifyTaskV1 { .. } => 7_000,
-        NativeCall::WalletFinalizeTaskV1 { .. } => 6_000,
-        NativeCall::WalletEmergencyStopV1 { .. } => 5_000,
-        NativeCall::WalletBatchSettleV1(p) => {
-            20_000u64.saturating_add(400u64.saturating_mul(p.receipts_borsh.len() as u64))
-        }
-        NativeCall::WalletRegisterProviderV1 { registration } => 12_000u64
-            .saturating_add(PER_BYTE.saturating_mul(registration.metadata_uri.len() as u64))
-            .saturating_add(PER_BYTE.saturating_mul(registration.endpoint_uri.len() as u64))
-            .saturating_add(100u64.saturating_mul(registration.tool_classes.len() as u64)),
-        NativeCall::WalletStakeForClassV1 { .. } => 8_000,
-        NativeCall::WalletProviderUnstakeRequestV1 { .. } => 8_000,
-        NativeCall::WalletProviderUnstakeFinalizeV1 { .. } => 8_000,
-        NativeCall::WalletSlashProviderV1 { .. } => 12_000,
-        NativeCall::WalletUpdateProviderV1 {
-            metadata_uri,
-            endpoint_uri,
-            ..
-        } => 8_000u64
-            .saturating_add(PER_BYTE.saturating_mul(metadata_uri.len() as u64))
-            .saturating_add(PER_BYTE.saturating_mul(endpoint_uri.len() as u64)),
-        NativeCall::WalletDeregisterProviderV1 { .. } => 8_000,
-        NativeCall::WalletScopedEmergencyStopV1 { .. } => 8_000,
+        NativeCall::NoOp => 100,
     }
 }
 

@@ -1,6 +1,6 @@
 //! Block header `gas_used` reflects revm execution gas for `EvmCall`, not only intrinsic gas.
 
-use fractal_consensus::{execute_and_build_block, genesis_parent_qc};
+use fractal_consensus::execute_and_build_block;
 use fractal_core::{Account, State, Transaction, TxBody, VmKind};
 
 fn addr(byte0: u8, byte1: u8) -> fractal_core::Address {
@@ -50,22 +50,18 @@ fn block_header_gas_used_reflects_evm_execution() {
     };
 
     let intrinsic = fractal_core::intrinsic_gas(&tx).expect("intrinsic");
-    let gq = genesis_parent_qc();
     let block = execute_and_build_block(
-            41,
-            0,
-            1,
+        41,
+        1,
         0,
         [7u8; 32],
-        gq,
-        vec![],
+        [0u8; 32],
         [0u8; 32],
         1,
         60_000_000,
         &mut st,
         vec![tx],
         fractal_consensus::eth_signed_raws_for_txs(1),
-        None,
     )
     .expect("block");
 

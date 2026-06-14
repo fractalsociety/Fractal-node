@@ -3,7 +3,7 @@ name = "fractal-mvp-backend"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "PRD M5 Core MVP bridge: SETTLE_BATCH + CLAIM_PAYOUT via JSON-RPC (borsh txs); optional MVP_RECEIPTS_JSON export"
+description = "PRD M5 stub: submit SETTLE_BATCH + CLAIM_PAYOUT via JSON-RPC (borsh native txs)"
 
 [lib]
 name = "fractal_mvp_backend"
