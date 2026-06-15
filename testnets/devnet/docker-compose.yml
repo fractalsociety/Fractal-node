@@ -7,8 +7,13 @@ services:
       dockerfile: testnets/devnet/Dockerfile
     ports:
       - "8545:8545"
+      - "9010:9010/udp"
     environment:
       FRACTAL_RPC_ADDR: "0.0.0.0:8545"
+      FRACTAL_P2P_LISTEN: "/ip4/0.0.0.0/udp/9010/quic-v1"
+      FRACTAL_P2P_IDENTITY_PATH: "/data/p2p.key"
+    volumes:
+      - node-data:/data
 
   faucet:
     build:
@@ -21,3 +26,42 @@ services:
       FAUCET_BIND: "0.0.0.0:8088"
     depends_on:
       - node
+
+  node1:
+    profiles: ["multi"]
+    build:
+      context: ../..
+      dockerfile: testnets/devnet/Dockerfile
+    ports:
+      - "8546:8545"
+      - "9011:9010/udp"
+    environment:
+      FRACTAL_RPC_ADDR: "0.0.0.0:8545"
+      FRACTAL_P2P_LISTEN: "/ip4/0.0.0.0/udp/9010/quic-v1"
+      FRACTAL_P2P_IDENTITY_PATH: "/data/p2p.key"
+      FRACTAL_SHARD_ID: "1"
+      FRACTAL_SHARD_COUNT: "3"
+    volumes:
+      - node1-data:/data
+
+  node2:
+    profiles: ["multi"]
+    build:
+      context: ../..
+      dockerfile: testnets/devnet/Dockerfile
+    ports:
+      - "8547:8545"
+      - "9012:9010/udp"
+    environment:
+      FRACTAL_RPC_ADDR: "0.0.0.0:8545"
+      FRACTAL_P2P_LISTEN: "/ip4/0.0.0.0/udp/9010/quic-v1"
+      FRACTAL_P2P_IDENTITY_PATH: "/data/p2p.key"
+      FRACTAL_SHARD_ID: "2"
+      FRACTAL_SHARD_COUNT: "3"
+    volumes:
+      - node2-data:/data
+
+volumes:
+  node-data:
+  node1-data:
+  node2-data:

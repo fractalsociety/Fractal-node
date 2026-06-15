@@ -50,6 +50,9 @@ Votes use the **same QUIC/libp2p swarm** as block sync (request-response on `/fr
 ## Docker devnet
 
 - `testnets/devnet/docker-compose.yml` builds **node** + **faucet** images from this repo.
+- Run three isolated local node services with distinct host ports:
+  `docker-compose -f testnets/devnet/docker-compose.yml --profile multi up --build node node1 node2`
+  (`8545`, `8546`, `8547` for JSON-RPC; `9010`, `9011`, `9012` for QUIC/UDP).
 - Example multiaddrs for followers: `testnets/devnet/bootnodes.example.txt`.
 
 Community (Discord) and a public status page are **operational** concerns outside this repository.

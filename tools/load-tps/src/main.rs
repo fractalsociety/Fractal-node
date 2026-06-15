@@ -54,7 +54,12 @@ fn fetch_nonce(agent: &ureq::Agent, rpc_url: &str, signer: &[u8; 20]) -> Result<
     parse_hex_u64(s)
 }
 
-fn send_noop(agent: &ureq::Agent, rpc_url: &str, signer: [u8; 20], nonce: u64) -> Result<(), String> {
+fn send_noop(
+    agent: &ureq::Agent,
+    rpc_url: &str,
+    signer: [u8; 20],
+    nonce: u64,
+) -> Result<(), String> {
     let tx = Transaction {
         signer,
         nonce,
@@ -106,14 +111,26 @@ fn submit_pause_micros() -> u64 {
     env_u64("LOAD_SUBMIT_PAUSE_US", 200)
 }
 
-fn main() {
-    let rpc_url = std::env::var("FRACTAL_RPC_URL")
-        .unwrap_or_else(|_| "http://127.0.0.1:8545".into());
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let rpc_url =
+        std::env::var("FRACTAL_RPC_URL").unwrap_or_else(|_| "http://127.0.0.1:8545".into());
     let duration_secs = env_u64("LOAD_DURATION_SECS", 30);
-    let workers = env_usize("LOAD_WORKERS", 8);
+    let requested_workers = env_usize("LOAD_WORKERS", SIGNERS.len());
+    let allow_shared_signer_workers =
+        std::env::var("LOAD_ALLOW_SHARED_SIGNER_WORKERS").as_deref() == Ok("1");
+    let workers = if allow_shared_signer_workers {
+        requested_workers
+    } else {
+        requested_workers.clamp(1, SIGNERS.len())
+    };
     let warmup_secs = env_u64("LOAD_WARMUP_SECS", 3);
 
     println!("fractal-load-tps: rpc={rpc_url} duration={duration_secs}s workers={workers}");
+    if workers != requested_workers {
+        println!(
+            "  requested_workers={requested_workers} capped to {workers}; set LOAD_ALLOW_SHARED_SIGNER_WORKERS=1 to share signers"
+        );
+    }
 
     let agent = ureq::AgentBuilder::new()
         .max_idle_connections_per_host(workers.saturating_add(4))
@@ -139,7 +156,7 @@ fn main() {
         .collect();
 
     let measure_start_height =
-        head_height(&agent, &rpc_url).unwrap_or_else(|e| panic!("head before load: {e}"));
+        head_height(&agent, &rpc_url).map_err(|e| format!("head before load: {e}"))?;
 
     let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
     let stop_workers = stop.clone();
@@ -177,9 +194,11 @@ fn main() {
     thread::sleep(Duration::from_secs(warmup_secs));
     let chain_t0 = Instant::now();
     let chain_start_height =
-        head_height(&agent, &rpc_url).unwrap_or_else(|e| panic!("head at measure start: {e}"));
+        head_height(&agent, &rpc_url).map_err(|e| format!("head at measure start: {e}"))?;
 
-    thread::sleep(Duration::from_secs(duration_secs.saturating_sub(warmup_secs)));
+    thread::sleep(Duration::from_secs(
+        duration_secs.saturating_sub(warmup_secs),
+    ));
     stop.store(true, Ordering::Relaxed);
     for h in submitters {
         let _ = h.join();
@@ -188,7 +207,7 @@ fn main() {
     let total_elapsed = t0.elapsed();
 
     let chain_end_height =
-        head_height(&agent, &rpc_url).unwrap_or_else(|e| panic!("head after load: {e}"));
+        head_height(&agent, &rpc_url).map_err(|e| format!("head after load: {e}"))?;
 
     let mut nonce_confirmed = 0u64;
     for (signer, start) in SIGNERS.iter().zip(start_nonces.iter()) {
@@ -221,13 +240,19 @@ fn main() {
 
     println!();
     println!("=== load-tps results ===");
-    println!("measure window:     {:.1}s (warmup {}s excluded)", secs, warmup_secs);
+    println!(
+        "measure window:     {:.1}s (warmup {}s excluded)",
+        secs, warmup_secs
+    );
     println!(
         "chain heights:      {} -> {} ({} new blocks, started from {})",
         chain_start_height, chain_end_height, blocks_measured, measure_start_height
     );
     println!("submitted (rpc):    {}", submitted.load(Ordering::Relaxed));
-    println!("submit errors:      {}", submit_errors.load(Ordering::Relaxed));
+    println!(
+        "submit errors:      {}",
+        submit_errors.load(Ordering::Relaxed)
+    );
     println!("included in chain:  {included_txs} txs in {blocks_with_txs} nonempty blocks");
     println!("confirmed (nonce):  {nonce_confirmed} txs (signer nonce delta)");
     let nonce_tps = nonce_confirmed as f64 / secs;
@@ -240,4 +265,5 @@ fn main() {
     println!();
     println!("Note: chain TPS is the meaningful ceiling for this node config;");
     println!("submit TPS can be higher if mempool backs up or leader cadence limits inclusion.");
+    Ok(())
 }

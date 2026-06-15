@@ -6,7 +6,7 @@ cd "$ROOT"
 
 export FRACTAL_RPC_URL="${FRACTAL_RPC_URL:-http://127.0.0.1:8545}"
 export LOAD_DURATION_SECS="${LOAD_DURATION_SECS:-30}"
-export LOAD_WORKERS="${LOAD_WORKERS:-8}"
+export LOAD_WORKERS="${LOAD_WORKERS:-2}"
 export LOAD_WARMUP_SECS="${LOAD_WARMUP_SECS:-3}"
 
 echo "load-tps-smoke: building fractal-load-tps"
