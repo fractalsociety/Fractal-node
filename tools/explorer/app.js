@@ -5,6 +5,7 @@ function rpcUrl() {
 
 let nextId = 1;
 const DEV_SIGNER_0 = "0xf39fd6e51aad88f6f4ce6ab8827279cfffb92266";
+const CACHE_KEY = "fractal-explorer.snapshot.v1";
 
 async function rpc(method, params = []) {
   const r = await fetch(rpcUrl(), {
@@ -70,6 +71,87 @@ function finalityLabel(status) {
 function updateHeroStat(id, value) {
   const el = document.getElementById(id);
   if (el) el.textContent = value;
+}
+
+function updateHeroStatIfEmpty(id, value) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  const current = el.textContent.trim();
+  if (!current || current === "—") el.textContent = value;
+}
+
+function readCache() {
+  try {
+    const raw = window.localStorage.getItem(CACHE_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === "object" ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+function writeCache(partial) {
+  try {
+    const next = { ...(readCache() || {}), ...partial, cachedAt: Date.now() };
+    window.localStorage.setItem(CACHE_KEY, JSON.stringify(next));
+  } catch {
+    // Cache is an optimization only.
+  }
+}
+
+function renderMetricRows(el, rows) {
+  el.innerHTML = "";
+  const dl = document.createElement("dl");
+  dl.className = "metric-grid";
+  for (const [k, v] of rows) {
+    const row = document.createElement("div");
+    row.className = "metric-row";
+    const dt = document.createElement("dt");
+    dt.textContent = k;
+    const dd = document.createElement("dd");
+    dd.textContent = typeof v === "string" ? v : String(v);
+    row.appendChild(dt);
+    row.appendChild(dd);
+    dl.appendChild(row);
+  }
+  el.appendChild(dl);
+}
+
+function renderCachedSnapshot() {
+  const cache = readCache();
+  if (!cache) return false;
+  if (cache.hero) {
+    updateHeroStat("heroHead", cache.hero.head ?? "—");
+    updateHeroStat("heroFinality", cache.hero.finality ?? "—");
+    updateHeroStat("heroTxs", cache.hero.txs ?? "—");
+  }
+  const summary = document.getElementById("summary");
+  if (summary && Array.isArray(cache.summaryRows)) renderMetricRows(summary, cache.summaryRows);
+  const blocks = document.getElementById("blocks");
+  if (blocks && Array.isArray(cache.blockRows)) renderBlockRows(blocks, cache.blockRows, cache.blockCaption || "Cached recent activity.");
+  return true;
+}
+
+function renderInitialSnapshot() {
+  updateHeroStatIfEmpty("heroHead", "—");
+  updateHeroStatIfEmpty("heroFinality", "—");
+  updateHeroStatIfEmpty("heroTxs", "—");
+
+  const summary = document.getElementById("summary");
+  if (summary && !summary.children.length) {
+    renderMetricRows(summary, [
+      ["Chain ID", "—"],
+      ["Head block", "—"],
+      ["Head finality", "—"],
+      ["Confirmed dev signer txs", "—"],
+    ]);
+  }
+
+  const blocks = document.getElementById("blocks");
+  if (blocks && !blocks.children.length) {
+    renderBlockRows(blocks, [], "Recent activity will appear here as the explorer syncs in the background.");
+  }
 }
 
 function finalityBadge(status) {
@@ -181,11 +263,12 @@ async function loadSummary(el) {
   const finality = finalityStatus(block);
   updateHeroStat("heroHead", hexToBigInt(bnHex).toString());
   updateHeroStat("heroFinality", finalityLabel(finality));
-  if (typeof signerNonce === "string") updateHeroStat("heroTxs", hexToBigInt(signerNonce).toString());
-
-  el.innerHTML = "";
-  const dl = document.createElement("dl");
-  dl.className = "metric-grid";
+  const hero = {
+    head: hexToBigInt(bnHex).toString(),
+    finality: finalityLabel(finality),
+    txs: typeof signerNonce === "string" ? hexToBigInt(signerNonce).toString() : "—",
+  };
+  if (typeof signerNonce === "string") updateHeroStat("heroTxs", hero.txs);
   const rows = [
     ["Chain ID", chainId],
     ["net_version", netVer],
@@ -199,18 +282,8 @@ async function loadSummary(el) {
     ["Txs in head", String(block?.transactions?.length ?? 0)],
     ["Confirmed dev signer txs", typeof signerNonce === "string" ? hexToBigInt(signerNonce).toString() : "—"],
   ];
-  for (const [k, v] of rows) {
-    const row = document.createElement("div");
-    row.className = "metric-row";
-    const dt = document.createElement("dt");
-    dt.textContent = k;
-    const dd = document.createElement("dd");
-    dd.textContent = typeof v === "string" ? v : String(v);
-    row.appendChild(dt);
-    row.appendChild(dd);
-    dl.appendChild(row);
-  }
-  el.appendChild(dl);
+  renderMetricRows(el, rows);
+  writeCache({ hero, summaryRows: rows });
 }
 
 function wireBlockRowClicks(tbody) {
@@ -251,12 +324,30 @@ async function loadBlocks(el) {
     .filter(({ block }) => Array.isArray(block?.transactions) && block.transactions.length > 0);
   const rows = (nonempty.length ? nonempty : scanned.slice(0, displayCount).map((block, index) => ({ block, tag: scanTags[index] })))
     .slice(0, displayCount);
-  el.innerHTML = "";
   const caption = document.createElement("p");
   caption.className = "muted";
   caption.textContent = nonempty.length
     ? `Showing ${rows.length} newest transaction-bearing block${rows.length === 1 ? "" : "s"} from the last ${scannedTags.length} scanned blocks.`
     : `No transactions found in the last ${scannedTags.length} scanned blocks; showing the latest ${rows.length} head blocks.`;
+  const blockRows = rows.map(({ block, tag }) => ({
+    tag,
+    number: block?.number ?? tag,
+    hash: block?.hash || "—",
+    finality: finalityStatus(block),
+    gasUsed: block?.gasUsed ?? "—",
+    timestamp: block?.timestamp ?? "—",
+    txCount: Array.isArray(block?.transactions) ? block.transactions.length : 0,
+    missing: !block,
+  }));
+  renderBlockRows(el, blockRows, caption.textContent);
+  writeCache({ blockRows, blockCaption: caption.textContent });
+}
+
+function renderBlockRows(el, rows, captionText) {
+  el.innerHTML = "";
+  const caption = document.createElement("p");
+  caption.className = "muted";
+  caption.textContent = captionText;
   el.appendChild(caption);
   const wrap = document.createElement("div");
   wrap.className = "table-wrap";
@@ -266,13 +357,22 @@ async function loadBlocks(el) {
   table.appendChild(thead);
   const tbody = document.createElement("tbody");
   wireBlockRowClicks(tbody);
+  if (!rows.length) {
+    const tr = document.createElement("tr");
+    const td = document.createElement("td");
+    td.colSpan = 6;
+    td.className = "muted";
+    td.textContent = "—";
+    tr.appendChild(td);
+    tbody.appendChild(tr);
+  }
   for (let i = 0; i < rows.length; i++) {
-    const b = rows[i].block;
+    const row = rows[i];
     const tr = document.createElement("tr");
     tr.className = "block-row";
-    tr.setAttribute("data-block-tag", rows[i].tag);
+    tr.setAttribute("data-block-tag", row.tag);
     tr.title = "Show transactions in this block";
-    if (!b) {
+    if (row.missing) {
       const td = document.createElement("td");
       td.colSpan = 6;
       td.className = "muted";
@@ -281,15 +381,13 @@ async function loadBlocks(el) {
       tbody.appendChild(tr);
       continue;
     }
-    const n = b.number ?? rows[i].tag;
-    const txc = Array.isArray(b.transactions) ? b.transactions.length : 0;
     const cells = [
-      { text: n, cls: "mono" },
-      { text: shortHash(b.hash, 8), cls: "mono" },
-      { badge: finalityBadge(finalityStatus(b)) },
-      { text: b.gasUsed ?? "—" },
-      { text: b.timestamp ?? "—", cls: "mono" },
-      { text: String(txc) },
+      { text: row.number, cls: "mono" },
+      { text: shortHash(row.hash, 8), cls: "mono" },
+      { badge: finalityBadge(row.finality) },
+      { text: row.gasUsed },
+      { text: row.timestamp, cls: "mono" },
+      { text: String(row.txCount) },
     ];
     for (const cell of cells) {
       const td = document.createElement("td");
@@ -311,7 +409,7 @@ async function loadBlocks(el) {
 async function showBlockDetail(blockTag) {
   const detail = document.getElementById("blockDetail");
   if (!detail) return;
-  detail.textContent = "Loading block…";
+  detail.textContent = "Fetching block…";
   try {
     const b = await rpc("eth_getBlockByNumber", [blockTag, false]);
     const txs = Array.isArray(b.transactions) ? b.transactions : [];
@@ -412,23 +510,28 @@ async function showBlockDetail(blockTag) {
   }
 }
 
-async function refresh() {
+async function refresh(options = {}) {
+  const { silent = false } = options;
   const sum = document.getElementById("summary");
   const blk = document.getElementById("blocks");
-  sum.textContent = "Loading…";
-  blk.textContent = "Loading blocks…";
+  const button = document.getElementById("refresh");
+  if (button && !silent) button.disabled = true;
   try {
     await Promise.all([loadSummary(sum), loadBlocks(blk)]);
   } catch (e) {
-    updateHeroStat("heroHead", "Offline");
-    updateHeroStat("heroFinality", "Unavailable");
-    updateHeroStat("heroTxs", "0");
-    sum.innerHTML = "";
-    const p = document.createElement("p");
-    p.className = "err";
-    p.textContent = String(e);
-    sum.appendChild(p);
-    blk.textContent = "";
+    if (!readCache()) {
+      updateHeroStat("heroHead", "Offline");
+      updateHeroStat("heroFinality", "Unavailable");
+      updateHeroStat("heroTxs", "—");
+      sum.innerHTML = "";
+      const p = document.createElement("p");
+      p.className = "err";
+      p.textContent = String(e);
+      sum.appendChild(p);
+      blk.textContent = "";
+    }
+  } finally {
+    if (button && !silent) button.disabled = false;
   }
 }
 
@@ -511,7 +614,7 @@ async function lookupTx() {
   await lookupTxWithHash(raw);
 }
 
-document.getElementById("refresh").onclick = refresh;
+document.getElementById("refresh").onclick = () => refresh();
 document.getElementById("lookupAcct").onclick = lookupAccount;
 document.getElementById("lookupTx").onclick = lookupTx;
 const fillH = document.getElementById("fillHardhat0");
@@ -522,4 +625,8 @@ if (fillH) {
     lookupAccount();
   });
 }
-window.addEventListener("load", refresh);
+window.addEventListener("load", () => {
+  renderCachedSnapshot();
+  renderInitialSnapshot();
+  void refresh({ silent: true });
+});
