@@ -1,6 +1,6 @@
 function rpcUrl() {
   const p = new URLSearchParams(window.location.search);
-  return p.get("rpc") || "http://192.3.47.245:8545";
+  return p.get("rpc") || window.FRACTAL_RPC_URL || "/rpc";
 }
 
 let nextId = 1;

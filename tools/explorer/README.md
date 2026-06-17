@@ -14,7 +14,7 @@ Deploy the contents of this folder as a static site:
 - `app.js`
 - `assets/fractal-explorer-hero.png`
 
-The page defaults to `http://192.3.47.245:8545`. Public deployments can pass a different RPC endpoint with:
+The page defaults to a same-origin `/rpc` route so deployments can keep the upstream RPC target in infrastructure config instead of the static repo. Public deployments can pass a different RPC endpoint with:
 
 ```text
 https://blockexplorer.fractalsociety.org/?rpc=https://YOUR_RPC_HOST
@@ -35,7 +35,7 @@ cd tools/explorer
 python3 -m http.server 3333
 ```
 
-Open **`http://127.0.0.1:3333/`**. It defaults to **`http://192.3.47.245:8545`**; change `rpc` if your node is elsewhere, e.g. **`http://127.0.0.1:3333/?rpc=http://127.0.0.1:8545`**.
+Open **`http://127.0.0.1:3333/?rpc=http://127.0.0.1:8545`** when testing against a local node. Without the `rpc` query parameter, the explorer uses the same-origin **`/rpc`** route expected in production.
 
 Override port: **`EXPLORER_PORT=4000 ./scripts/serve-explorer.sh`**
 
