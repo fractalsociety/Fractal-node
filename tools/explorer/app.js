@@ -4,6 +4,8 @@ function rpcUrl() {
 }
 
 let nextId = 1;
+const DEV_SIGNER_0 = "0xf39fd6e51aad88f6f4ce6ab8827279cfffb92266";
+
 async function rpc(method, params = []) {
   const r = await fetch(rpcUrl(), {
     method: "POST",
@@ -167,18 +169,19 @@ function codeByteLen(hex) {
 }
 
 async function loadSummary(el) {
-  const [chainId, netVer, bnHex, gasPrice, client] = await Promise.all([
+  const [chainId, netVer, bnHex, gasPrice, client, signerNonce] = await Promise.all([
     rpc("eth_chainId"),
     rpc("net_version"),
     rpc("eth_blockNumber"),
     rpc("eth_gasPrice"),
     rpc("web3_clientVersion"),
+    rpc("eth_getTransactionCount", [DEV_SIGNER_0, "latest"]).catch(() => null),
   ]);
   const block = await rpc("eth_getBlockByNumber", [bnHex, false]);
   const finality = finalityStatus(block);
   updateHeroStat("heroHead", hexToBigInt(bnHex).toString());
   updateHeroStat("heroFinality", finalityLabel(finality));
-  updateHeroStat("heroTxs", String(block?.transactions?.length ?? 0));
+  if (typeof signerNonce === "string") updateHeroStat("heroTxs", hexToBigInt(signerNonce).toString());
 
   el.innerHTML = "";
   const dl = document.createElement("dl");
@@ -194,6 +197,7 @@ async function loadSummary(el) {
     ["Head gas used", block?.gasUsed ?? "—"],
     ["Head timestamp", block?.timestamp ?? "—"],
     ["Txs in head", String(block?.transactions?.length ?? 0)],
+    ["Confirmed dev signer txs", typeof signerNonce === "string" ? hexToBigInt(signerNonce).toString() : "—"],
   ];
   for (const [k, v] of rows) {
     const row = document.createElement("div");
@@ -225,13 +229,13 @@ async function loadBlocks(el) {
   const bnHex = await rpc("eth_blockNumber");
   const head = hexToBigInt(bnHex);
   const displayCount = 10;
-  const scanCount = 256n;
+  const scanCount = 512n;
   const low = head + 1n > scanCount ? head - (scanCount - 1n) : 0n;
   const scanTags = [];
   for (let h = head; h >= low; h--) scanTags.push(numToHex(h));
 
   const scanned = [];
-  const batchSize = 32;
+  const batchSize = 64;
   for (let i = 0; i < scanTags.length; i += batchSize) {
     const batchTags = scanTags.slice(i, i + batchSize);
     const batch = await Promise.all(
@@ -247,7 +251,6 @@ async function loadBlocks(el) {
     .filter(({ block }) => Array.isArray(block?.transactions) && block.transactions.length > 0);
   const rows = (nonempty.length ? nonempty : scanned.slice(0, displayCount).map((block, index) => ({ block, tag: scanTags[index] })))
     .slice(0, displayCount);
-
   el.innerHTML = "";
   const caption = document.createElement("p");
   caption.className = "muted";
