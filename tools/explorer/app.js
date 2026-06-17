@@ -6,14 +6,30 @@ function rpcUrl() {
 let nextId = 1;
 const DEV_SIGNER_0 = "0xf39fd6e51aad88f6f4ce6ab8827279cfffb92266";
 const CACHE_KEY = "fractal-explorer.snapshot.v1";
+const RPC_TIMEOUT_MS = 8000;
 
 async function rpc(method, params = []) {
-  const r = await fetch(rpcUrl(), {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ jsonrpc: "2.0", id: nextId++, method, params }),
-  });
-  const j = await r.json();
+  const controller = new AbortController();
+  const timer = window.setTimeout(() => controller.abort(), RPC_TIMEOUT_MS);
+  let r;
+  try {
+    r = await fetch(rpcUrl(), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ jsonrpc: "2.0", id: nextId++, method, params }),
+      signal: controller.signal,
+    });
+  } finally {
+    window.clearTimeout(timer);
+  }
+  const text = await r.text();
+  if (!r.ok) throw new Error(`RPC HTTP ${r.status}: ${text.slice(0, 180)}`);
+  let j;
+  try {
+    j = JSON.parse(text);
+  } catch {
+    throw new Error(`RPC returned non-JSON for ${method}: ${text.slice(0, 180)}`);
+  }
   if (j.error) throw new Error(JSON.stringify(j.error, null, 2));
   return j.result;
 }
@@ -302,13 +318,13 @@ async function loadBlocks(el) {
   const bnHex = await rpc("eth_blockNumber");
   const head = hexToBigInt(bnHex);
   const displayCount = 10;
-  const scanCount = 512n;
+  const scanCount = 160n;
   const low = head + 1n > scanCount ? head - (scanCount - 1n) : 0n;
   const scanTags = [];
   for (let h = head; h >= low; h--) scanTags.push(numToHex(h));
 
   const scanned = [];
-  const batchSize = 64;
+  const batchSize = 6;
   for (let i = 0; i < scanTags.length; i += batchSize) {
     const batchTags = scanTags.slice(i, i + batchSize);
     const batch = await Promise.all(
