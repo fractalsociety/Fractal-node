@@ -2,271 +2,972 @@
 <html lang="en">
 <head>
   <meta charset="utf-8" />
-  <title>FractalChain explorer (dev)</title>
+  <title>Fractal Society Block Explorer</title>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta
+    name="description"
+    content="Fractal Society block explorer for FractalChain blocks, finality, accounts, and transactions."
+  />
   <style>
-    /* Explicit palettes — avoids UA “dark scheme” light text on our pale .mono/table rows. */
     :root {
-      color-scheme: light;
-      --bg: #ffffff;
-      --fg: #0f172a;
-      --fg-muted: #475569;
-      --border: #cbd5e1;
-      --surface: #f8fafc;
-      --mono-bg: #e2e8f0;
-      --mono-fg: #0f172a;
-      --row-hover: #dbeafe;
-      --link: #1d4ed8;
-      --link-hover: #1e40af;
-      --err: #b91c1c;
-      --pre-bg: #f1f5f9;
-      --proof-bg: #dcfce7;
-      --proof-fg: #166534;
-      --soft-bg: #fef3c7;
-      --soft-fg: #92400e;
-      --unknown-bg: #e2e8f0;
-      --unknown-fg: #334155;
+      color-scheme: dark;
+      --bg: #05070a;
+      --ink: #fff7ea;
+      --muted: #bdb3a4;
+      --faint: rgba(255, 247, 234, 0.62);
+      --line: rgba(255, 247, 234, 0.14);
+      --line-strong: rgba(255, 247, 234, 0.24);
+      --surface: rgba(255, 247, 234, 0.07);
+      --surface-strong: rgba(255, 247, 234, 0.12);
+      --black-glass: rgba(5, 7, 10, 0.7);
+      --gold: #f2b35d;
+      --gold-soft: rgba(242, 179, 93, 0.18);
+      --cyan: #73d3ff;
+      --cyan-soft: rgba(115, 211, 255, 0.16);
+      --plum: #38162d;
+      --green: #8ef5bf;
+      --amber: #ffe08a;
+      --red: #ff8f8f;
+      --mono-bg: rgba(255, 247, 234, 0.09);
+      --shadow: 0 34px 110px rgba(0, 0, 0, 0.48);
     }
-    @media (prefers-color-scheme: dark) {
-      :root {
-        color-scheme: dark;
-        --bg: #0f172a;
-        --fg: #f1f5f9;
-        --fg-muted: #94a3b8;
-        --border: #334155;
-        --surface: #1e293b;
-        --mono-bg: #334155;
-        --mono-fg: #f8fafc;
-        --row-hover: #1e3a5f;
-        --link: #93c5fd;
-        --link-hover: #bfdbfe;
-        --err: #f87171;
-        --pre-bg: #1e293b;
-        --proof-bg: #14532d;
-        --proof-fg: #bbf7d0;
-        --soft-bg: #78350f;
-        --soft-fg: #fde68a;
-        --unknown-bg: #334155;
-        --unknown-fg: #cbd5e1;
-      }
+
+    * {
+      box-sizing: border-box;
     }
+
+    html {
+      scroll-behavior: smooth;
+    }
+
     body {
-      font-family: system-ui, sans-serif;
-      max-width: 52rem;
-      margin: 0 auto;
-      padding: 1rem 1.25rem 2rem;
+      min-height: 100vh;
+      margin: 0;
+      background:
+        radial-gradient(circle at 12% 16%, rgba(115, 211, 255, 0.12), transparent 28%),
+        radial-gradient(circle at 84% 0%, rgba(242, 179, 93, 0.16), transparent 26%),
+        linear-gradient(180deg, #08080d 0%, #05070a 46%, #07080b 100%);
+      color: var(--ink);
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
       line-height: 1.45;
-      color: var(--fg);
-      background: var(--bg);
+      letter-spacing: 0;
     }
-    h1 { font-size: 1.35rem; margin-bottom: 0.25rem; color: var(--fg); }
-    h2 {
-      font-size: 1.05rem;
-      margin: 1.5rem 0 0.5rem;
-      border-bottom: 1px solid var(--border);
-      padding-bottom: 0.2rem;
-      color: var(--fg);
+
+    body::before {
+      position: fixed;
+      inset: 0;
+      z-index: -2;
+      content: "";
+      background:
+        linear-gradient(rgba(255, 247, 234, 0.035) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(255, 247, 234, 0.032) 1px, transparent 1px);
+      background-size: 42px 42px;
+      mask-image: linear-gradient(180deg, black, transparent 78%);
     }
-    code, .mono {
-      font-family: ui-monospace, monospace;
-      font-size: 0.85rem;
-      background: var(--mono-bg);
-      color: var(--mono-fg);
-      padding: 0.12rem 0.35rem;
-      border-radius: 4px;
+
+    body::after {
+      position: fixed;
+      inset: 0;
+      z-index: -1;
+      pointer-events: none;
+      content: "";
+      background: linear-gradient(180deg, rgba(5, 7, 10, 0) 0%, rgba(5, 7, 10, 0.76) 82%);
     }
+
+    a {
+      color: inherit;
+      text-decoration: none;
+    }
+
+    button,
+    input {
+      font: inherit;
+    }
+
     button {
-      margin: 0.35rem 0.35rem 0 0;
-      padding: 0.4rem 0.85rem;
       cursor: pointer;
-      color: var(--fg);
-      background: var(--surface);
-      border: 1px solid var(--border);
-      border-radius: 6px;
     }
-    button:hover { background: var(--row-hover); }
-    input[type="text"] {
-      width: 100%;
-      max-width: 32rem;
-      padding: 0.35rem 0.5rem;
-      font-family: ui-monospace, monospace;
-      color: var(--fg);
-      background: var(--bg);
-      border: 1px solid var(--border);
-      border-radius: 6px;
+
+    .explorer-nav {
+      position: fixed;
+      top: 18px;
+      left: 50%;
+      z-index: 20;
+      display: grid;
+      grid-template-columns: auto 1fr auto;
+      gap: 16px;
+      align-items: center;
+      width: min(1180px, calc(100% - 32px));
+      min-height: 58px;
+      padding: 8px;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      background: rgba(5, 7, 10, 0.58);
+      backdrop-filter: blur(18px);
+      transform: translateX(-50%);
     }
-    table {
-      width: 100%;
-      border-collapse: collapse;
-      font-size: 0.88rem;
-      margin-top: 0.35rem;
-      color: var(--fg);
-      background: var(--surface);
-      border: 1px solid var(--border);
-      border-radius: 8px;
+
+    .brand {
+      display: inline-flex;
+      gap: 10px;
+      align-items: center;
+      padding-left: 6px;
+      min-width: 0;
+    }
+
+    .brand-mark {
+      display: grid;
+      place-items: center;
+      width: 38px;
+      height: 38px;
+      border: 1px solid rgba(242, 179, 93, 0.44);
+      border-radius: 50%;
+      background: rgba(242, 179, 93, 0.12);
+      color: #ffd99c;
+      font-size: 12px;
+      font-weight: 900;
+    }
+
+    .brand strong {
+      display: block;
+      color: #fff9ef;
+      font-size: 14px;
+      line-height: 1;
+      white-space: nowrap;
+    }
+
+    .brand span:last-child {
+      display: block;
+      margin-top: 4px;
+      color: var(--muted);
+      font-size: 11px;
+      font-weight: 750;
+      text-transform: uppercase;
+    }
+
+    .nav-links {
+      display: flex;
+      justify-content: center;
+      gap: 4px;
+    }
+
+    .nav-links a,
+    .nav-action {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 40px;
+      padding: 0 13px;
+      border-radius: 999px;
+      color: rgba(255, 247, 234, 0.78);
+      font-size: 13px;
+      font-weight: 750;
+    }
+
+    .nav-links a:hover,
+    .nav-action:hover {
+      background: rgba(255, 247, 234, 0.1);
+      color: #fff9ef;
+    }
+
+    .nav-action {
+      border: 1px solid rgba(242, 179, 93, 0.3);
+      background: rgba(242, 179, 93, 0.12);
+    }
+
+    .page {
       overflow: hidden;
     }
-    th, td {
-      text-align: left;
-      padding: 0.35rem 0.5rem;
-      border-bottom: 1px solid var(--border);
-      color: var(--fg);
+
+    .hero {
+      position: relative;
+      min-height: 760px;
+      display: grid;
+      align-items: end;
+      padding: 132px 24px 84px;
     }
-    th { font-weight: 600; background: var(--mono-bg); color: var(--mono-fg); }
-    tr:last-child td { border-bottom: none; }
-    .muted { color: var(--fg-muted); font-size: 0.88rem; }
-    .err { color: var(--err); white-space: pre-wrap; }
+
+    .hero-art {
+      position: absolute;
+      inset: 0;
+      z-index: -1;
+      background:
+        linear-gradient(90deg, rgba(5, 7, 10, 0.94) 0%, rgba(5, 7, 10, 0.78) 34%, rgba(5, 7, 10, 0.08) 72%),
+        linear-gradient(180deg, rgba(5, 7, 10, 0) 55%, #05070a 96%),
+        url("assets/fractal-explorer-hero.png") center right / cover no-repeat;
+      transform: translateY(calc(var(--scroll, 0) * 0.08px)) scale(1.03);
+      transform-origin: center;
+    }
+
+    .hero-inner,
+    .section-inner {
+      width: min(1180px, 100%);
+      margin: 0 auto;
+    }
+
+    .eyebrow {
+      display: inline-flex;
+      gap: 8px;
+      align-items: center;
+      min-height: 34px;
+      padding: 0 12px;
+      border: 1px solid rgba(115, 211, 255, 0.22);
+      border-radius: 999px;
+      background: rgba(115, 211, 255, 0.09);
+      color: #c4edff;
+      font-size: 12px;
+      font-weight: 850;
+      text-transform: uppercase;
+    }
+
+    .pulse {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: var(--green);
+      box-shadow: 0 0 18px rgba(142, 245, 191, 0.78);
+    }
+
+    h1 {
+      max-width: 860px;
+      margin: 22px 0 18px;
+      color: #fff9ef;
+      font-size: clamp(56px, 8.6vw, 118px);
+      line-height: 0.88;
+      letter-spacing: 0;
+    }
+
+    .hero-copy {
+      max-width: 650px;
+      margin: 0 0 30px;
+      color: var(--faint);
+      font-size: clamp(17px, 2vw, 21px);
+    }
+
+    .hero-controls {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 10px;
+      width: min(760px, 100%);
+      padding: 8px;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      background: rgba(5, 7, 10, 0.58);
+      backdrop-filter: blur(16px);
+      box-shadow: var(--shadow);
+    }
+
+    .rpc-chip {
+      display: flex;
+      align-items: center;
+      min-width: 0;
+      padding: 0 16px;
+      border-radius: 999px;
+      background: rgba(255, 247, 234, 0.07);
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    .rpc-chip code {
+      margin-left: 8px;
+    }
+
+    .primary-button,
+    .secondary-button,
+    .addr-jump {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 44px;
+      border: 1px solid rgba(242, 179, 93, 0.34);
+      border-radius: 999px;
+      background: linear-gradient(135deg, rgba(242, 179, 93, 0.94), rgba(255, 219, 153, 0.9));
+      color: #17100a;
+      font-size: 13px;
+      font-weight: 850;
+      transition: transform 160ms ease, border-color 160ms ease, background 160ms ease;
+    }
+
+    .primary-button {
+      padding: 0 18px;
+    }
+
+    .primary-button:hover,
+    .secondary-button:hover,
+    .addr-jump:hover {
+      transform: translateY(-1px);
+    }
+
+    .secondary-button {
+      min-height: 42px;
+      padding: 0 14px;
+      border-color: rgba(255, 247, 234, 0.16);
+      background: rgba(255, 247, 234, 0.08);
+      color: #fff9ef;
+    }
+
+    .hero-stats {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 10px;
+      width: min(780px, 100%);
+      margin-top: 18px;
+    }
+
+    .stat-card,
+    .panel,
+    .detail-card {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: linear-gradient(145deg, rgba(255, 247, 234, 0.1), rgba(255, 247, 234, 0.045));
+      box-shadow: 0 20px 60px rgba(0, 0, 0, 0.28);
+      backdrop-filter: blur(18px);
+    }
+
+    .stat-card {
+      min-height: 104px;
+      padding: 16px;
+    }
+
+    .stat-card span {
+      display: block;
+      color: var(--muted);
+      font-size: 11px;
+      font-weight: 850;
+      text-transform: uppercase;
+    }
+
+    .stat-card strong {
+      display: block;
+      margin-top: 10px;
+      color: #fff9ef;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      font-size: clamp(18px, 2vw, 24px);
+      overflow-wrap: anywhere;
+    }
+
+    .section {
+      padding: 34px 24px 84px;
+    }
+
+    .section-header {
+      display: flex;
+      align-items: end;
+      justify-content: space-between;
+      gap: 20px;
+      margin-bottom: 20px;
+    }
+
+    h2 {
+      margin: 0;
+      color: #fff9ef;
+      font-size: clamp(30px, 4vw, 56px);
+      line-height: 0.96;
+      letter-spacing: 0;
+    }
+
+    .section-header p,
+    .muted {
+      color: var(--muted);
+    }
+
+    .section-header p {
+      max-width: 520px;
+      margin: 0;
+    }
+
+    .dashboard-grid {
+      display: grid;
+      grid-template-columns: minmax(280px, 0.74fr) minmax(420px, 1fr);
+      gap: 18px;
+      align-items: start;
+    }
+
+    .panel {
+      padding: 22px;
+    }
+
+    .panel-title {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      margin-bottom: 16px;
+    }
+
+    .panel-title h3 {
+      margin: 0;
+      color: #fff9ef;
+      font-size: 17px;
+    }
+
+    .pill {
+      display: inline-flex;
+      align-items: center;
+      min-height: 28px;
+      padding: 0 9px;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      background: rgba(255, 247, 234, 0.08);
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 800;
+      white-space: nowrap;
+    }
+
+    .mono,
+    code {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      font-size: 0.86em;
+    }
+
+    code,
+    .mono {
+      padding: 0.12rem 0.34rem;
+      border-radius: 5px;
+      background: var(--mono-bg);
+      color: #fff1d8;
+      overflow-wrap: anywhere;
+    }
+
+    .metric-grid {
+      display: grid;
+      gap: 10px;
+    }
+
+    .metric-row {
+      display: grid;
+      grid-template-columns: minmax(108px, 0.42fr) minmax(0, 1fr);
+      gap: 10px;
+      align-items: center;
+      min-height: 44px;
+      padding: 10px 12px;
+      border: 1px solid rgba(255, 247, 234, 0.09);
+      border-radius: 8px;
+      background: rgba(255, 247, 234, 0.045);
+    }
+
+    .metric-row dt {
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 850;
+      text-transform: uppercase;
+    }
+
+    .metric-row dd {
+      min-width: 0;
+      margin: 0;
+      color: #fff9ef;
+      overflow-wrap: anywhere;
+    }
+
+    .table-wrap {
+      overflow-x: auto;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: rgba(5, 7, 10, 0.36);
+    }
+
+    table {
+      width: 100%;
+      min-width: 680px;
+      border-collapse: collapse;
+      color: var(--ink);
+      font-size: 0.9rem;
+    }
+
+    th,
+    td {
+      padding: 13px 14px;
+      border-bottom: 1px solid rgba(255, 247, 234, 0.1);
+      text-align: left;
+      vertical-align: middle;
+    }
+
+    th {
+      color: var(--muted);
+      font-size: 11px;
+      font-weight: 900;
+      text-transform: uppercase;
+      background: rgba(255, 247, 234, 0.05);
+    }
+
+    tr:last-child td {
+      border-bottom: none;
+    }
+
+    tr.block-row {
+      cursor: pointer;
+      transition: background 160ms ease;
+    }
+
+    tr.block-row:hover {
+      background: rgba(115, 211, 255, 0.08);
+    }
+
+    .finality-badge {
+      display: inline-flex;
+      align-items: center;
+      min-height: 28px;
+      padding: 0 9px;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      font-size: 11px;
+      font-weight: 900;
+      white-space: nowrap;
+    }
+
+    .finality-proof {
+      border-color: rgba(142, 245, 191, 0.38);
+      background: rgba(142, 245, 191, 0.12);
+      color: #baf8d4;
+    }
+
+    .finality-soft {
+      border-color: rgba(255, 224, 138, 0.34);
+      background: rgba(255, 224, 138, 0.12);
+      color: #ffe2a2;
+    }
+
+    .finality-unknown {
+      background: rgba(255, 247, 234, 0.08);
+      color: var(--muted);
+    }
+
+    #blockDetail {
+      margin-top: 16px;
+    }
+
+    #blockDetail h3 {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      align-items: center;
+      margin: 0 0 12px;
+      color: #fff9ef;
+      font-size: 18px;
+    }
+
+    .block-hash-line,
     pre {
       overflow: auto;
-      max-height: 22rem;
-      background: var(--pre-bg);
-      color: var(--fg);
-      padding: 0.75rem;
-      border-radius: 6px;
-      font-size: 0.8rem;
-      border: 1px solid var(--border);
-      /* Long 0x… strings are one token; default `pre` clips visually without a clear x-scroll. */
+      max-height: 26rem;
+      margin: 0;
+      padding: 16px;
+      border: 1px solid rgba(255, 247, 234, 0.12);
+      border-radius: 8px;
+      background: rgba(5, 7, 10, 0.68);
+      color: #fff1d8;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      font-size: 0.82rem;
       white-space: pre-wrap;
       overflow-wrap: anywhere;
       word-break: break-word;
+    }
+
+    .block-hash-line {
+      margin-bottom: 12px;
+    }
+
+    .lookup-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 18px;
+    }
+
+    .lookup-copy {
+      min-height: 76px;
+      margin: 0 0 16px;
+      color: var(--muted);
+    }
+
+    .control-row {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 10px;
+      align-items: center;
+      margin-bottom: 16px;
+    }
+
+    input[type="text"] {
+      width: 100%;
+      min-height: 46px;
       min-width: 0;
-    }
-    .row { display: flex; flex-wrap: wrap; gap: 0.5rem 1.25rem; align-items: baseline; }
-    .pill {
-      display: inline-block;
-      padding: 0.15rem 0.5rem;
+      padding: 0 14px;
+      border: 1px solid rgba(255, 247, 234, 0.15);
       border-radius: 999px;
-      background: var(--mono-bg);
-      color: var(--mono-fg);
-      font-size: 0.8rem;
-      border: 1px solid var(--border);
+      outline: none;
+      background: rgba(5, 7, 10, 0.48);
+      color: #fff9ef;
     }
-    .finality-badge {
-      display: inline-block;
-      padding: 0.12rem 0.45rem;
-      border-radius: 999px;
-      font-size: 0.76rem;
-      font-weight: 700;
-      white-space: nowrap;
-      border: 1px solid var(--border);
+
+    input[type="text"]:focus {
+      border-color: rgba(115, 211, 255, 0.48);
+      box-shadow: 0 0 0 4px rgba(115, 211, 255, 0.1);
     }
-    .finality-proof {
-      background: var(--proof-bg);
-      color: var(--proof-fg);
-    }
-    .finality-soft {
-      background: var(--soft-bg);
-      color: var(--soft-fg);
-    }
-    .finality-unknown {
-      background: var(--unknown-bg);
-      color: var(--unknown-fg);
-    }
-    tr.block-row { cursor: pointer; }
-    tr.block-row:hover { background: var(--row-hover); }
-    tr.block-row:hover td { color: var(--fg); }
-    tr.block-row td:last-child { font-weight: 600; }
-    #blockDetail { margin-top: 0.75rem; color: var(--fg); }
-    #blockDetail h3 { color: var(--fg); }
-    #blockDetail .block-hash-line {
-      font-family: ui-monospace, monospace;
-      font-size: 0.78rem;
-      word-break: break-all;
-      overflow-wrap: anywhere;
-      margin: 0 0 0.5rem;
-      padding: 0.35rem 0.5rem;
-      background: var(--pre-bg);
-      border: 1px solid var(--border);
-      border-radius: 6px;
-      color: var(--fg);
-    }
-    .tx-link {
-      background: transparent;
-      border: none;
-      color: var(--link);
-      text-decoration: underline;
-      cursor: pointer;
-      font-family: ui-monospace, monospace;
-      font-size: inherit;
+
+    .ghost-link {
+      display: inline-flex;
+      align-items: center;
+      min-height: 32px;
       padding: 0;
-      margin: 0.15rem 0;
-      display: block;
-      text-align: left;
+      border: 0;
+      background: transparent;
+      color: #c4edff;
+      font-weight: 800;
+      text-decoration: underline;
+      text-underline-offset: 4px;
     }
-    .tx-link:hover { color: var(--link-hover); }
+
     .tx-address-strip {
-      margin: 0 0 0.75rem;
-      padding: 0.65rem 0.75rem;
-      background: var(--surface);
-      border: 1px solid var(--border);
+      margin: 0 0 14px;
+      padding: 14px;
+      border: 1px solid rgba(255, 247, 234, 0.11);
       border-radius: 8px;
+      background: rgba(255, 247, 234, 0.055);
     }
-    .tx-address-strip .strip-title { font-size: 0.82rem; color: var(--fg-muted); margin-bottom: 0.4rem; }
-    .addr-chip-row { display: flex; flex-wrap: wrap; gap: 0.35rem 0.5rem; align-items: center; }
-    .addr-pair { display: inline-flex; align-items: center; gap: 0.25rem; flex-wrap: wrap; font-size: 0.8rem; }
-    .addr-pair span.lbl { color: var(--fg-muted); }
-    button.addr-jump {
-      font-family: ui-monospace, monospace;
-      font-size: 0.78rem;
-      padding: 0.2rem 0.5rem;
-      margin: 0;
+
+    .tx-address-strip .strip-title {
+      margin-bottom: 10px;
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 850;
+      text-transform: uppercase;
     }
-    .tx-list-item { margin: 0.35rem 0; list-style: disc; }
-    .tx-list-item .tx-from-line { font-size: 0.8rem; margin: 0.2rem 0 0 0; color: var(--fg-muted); }
-    button.ghost-link {
-      background: transparent;
-      border: none;
-      color: var(--link);
-      text-decoration: underline;
+
+    .addr-chip-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      align-items: center;
+    }
+
+    .addr-pair {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 850;
+      text-transform: uppercase;
+    }
+
+    .addr-jump {
+      min-height: 32px;
+      padding: 0 10px;
+      border-color: rgba(115, 211, 255, 0.28);
+      background: rgba(115, 211, 255, 0.12);
+      color: #d4f3ff;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      font-size: 12px;
+      text-transform: none;
+    }
+
+    .tx-link {
+      display: block;
+      max-width: 100%;
+      margin: 4px 0;
       padding: 0;
-      margin: 0;
-      font-size: 0.82rem;
-      cursor: pointer;
+      border: 0;
+      background: transparent;
+      color: #c4edff;
+      text-align: left;
+      text-decoration: underline;
+      text-underline-offset: 4px;
+      overflow-wrap: anywhere;
     }
-    button.ghost-link:hover { color: var(--link-hover); }
+
+    .tx-list-item {
+      margin: 9px 0;
+      color: var(--muted);
+    }
+
+    .tx-from-line {
+      margin-top: 7px;
+    }
+
+    .err {
+      color: var(--red);
+      white-space: pre-wrap;
+    }
+
+    .explainer {
+      padding: 72px 24px 90px;
+      border-top: 1px solid rgba(255, 247, 234, 0.08);
+      background:
+        radial-gradient(circle at 12% 40%, rgba(56, 22, 45, 0.45), transparent 30%),
+        rgba(255, 247, 234, 0.025);
+    }
+
+    .explainer-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 14px;
+      margin-top: 24px;
+    }
+
+    .explainer-card {
+      min-height: 190px;
+      padding: 20px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: rgba(255, 247, 234, 0.055);
+    }
+
+    .explainer-card span {
+      color: var(--gold);
+      font-size: 12px;
+      font-weight: 900;
+      text-transform: uppercase;
+    }
+
+    .explainer-card h3 {
+      margin: 16px 0 10px;
+      color: #fff9ef;
+      font-size: 20px;
+    }
+
+    .explainer-card p {
+      margin: 0;
+      color: var(--muted);
+    }
+
+    @media (max-width: 860px) {
+      .explorer-nav {
+        grid-template-columns: 1fr auto;
+        border-radius: 24px;
+      }
+
+      .nav-links {
+        display: none;
+      }
+
+      .hero {
+        min-height: 720px;
+        padding-top: 112px;
+      }
+
+      .hero-art {
+        background:
+          linear-gradient(180deg, rgba(5, 7, 10, 0.72), rgba(5, 7, 10, 0.92) 66%, #05070a 100%),
+          url("assets/fractal-explorer-hero.png") center top / cover no-repeat;
+      }
+
+      .hero-controls,
+      .control-row {
+        grid-template-columns: 1fr;
+        border-radius: 18px;
+      }
+
+      .rpc-chip {
+        min-height: 44px;
+      }
+
+      .hero-stats,
+      .dashboard-grid,
+      .lookup-grid,
+      .explainer-grid {
+        grid-template-columns: 1fr;
+      }
+
+      .section-header {
+        display: grid;
+      }
+
+      .lookup-copy {
+        min-height: auto;
+      }
+    }
+
+    @media (max-width: 560px) {
+      .explorer-nav {
+        width: calc(100% - 20px);
+      }
+
+      .brand span:last-child,
+      .nav-action {
+        display: none;
+      }
+
+      .hero,
+      .section,
+      .explainer {
+        padding-left: 16px;
+        padding-right: 16px;
+      }
+
+      h1 {
+        font-size: clamp(48px, 15vw, 66px);
+      }
+
+      .panel {
+        padding: 16px;
+      }
+
+      .metric-row {
+        grid-template-columns: 1fr;
+      }
+    }
   </style>
 </head>
 <body>
-  <h1>FractalChain — dev explorer</h1>
-  <p class="muted">PRD M6 slice · JSON-RPC read-only · <code>?rpc=http://host:8545</code></p>
-  <p>RPC <span class="pill mono" id="rpcshow"></span>
-    <button type="button" id="refresh">Refresh all</button>
-  </p>
+  <nav class="explorer-nav" aria-label="Fractal explorer navigation">
+    <a class="brand" href="#top" aria-label="Fractal Society Explorer home">
+      <span class="brand-mark">FS</span>
+      <span>
+        <strong>Fractal Society</strong>
+        <span>Block Explorer</span>
+      </span>
+    </a>
+    <div class="nav-links" aria-label="Explorer sections">
+      <a href="#chain">Chain</a>
+      <a href="#blocks">Blocks</a>
+      <a href="#lookup">Lookup</a>
+      <a href="#finality">Finality</a>
+    </div>
+    <a class="nav-action" href="https://fractalsociety.org">Main site</a>
+  </nav>
 
-  <h2>Chain</h2>
-  <div id="summary"></div>
+  <main id="top" class="page">
+    <section class="hero" aria-labelledby="hero-title">
+      <div class="hero-art" aria-hidden="true"></div>
+      <div class="hero-inner">
+        <span class="eyebrow"><span class="pulse"></span> Live read-only JSON-RPC</span>
+        <h1 id="hero-title">FractalChain Explorer</h1>
+        <p class="hero-copy">
+          Inspect blocks, proof finality, accounts, bytecode, and transactions on the Fractal Society network.
+          Built for operators, builders, and agent economy auditors.
+        </p>
+        <div class="hero-controls">
+          <div class="rpc-chip">
+            RPC
+            <code id="rpcshow"></code>
+          </div>
+          <button type="button" id="refresh" class="primary-button">Refresh network</button>
+        </div>
+        <div class="hero-stats" aria-label="Current network highlights">
+          <div class="stat-card">
+            <span>Head block</span>
+            <strong id="heroHead">Loading</strong>
+          </div>
+          <div class="stat-card">
+            <span>Finality</span>
+            <strong id="heroFinality">Loading</strong>
+          </div>
+          <div class="stat-card">
+            <span>Transactions</span>
+            <strong id="heroTxs">Loading</strong>
+          </div>
+        </div>
+      </div>
+    </section>
 
-  <h2>Recent blocks</h2>
-  <p class="muted">Up to 10 blocks ending at head — finality is <strong>Soft-final</strong> until the settlement proof is accepted, then <strong>Proof-final</strong>. Click a row to list transaction hashes.</p>
-  <div id="blocks"></div>
-  <div id="blockDetail"></div>
+    <section id="chain" class="section" aria-labelledby="chain-title">
+      <div class="section-inner">
+        <div class="section-header">
+          <h2 id="chain-title">Network State</h2>
+          <p>Realtime chain metadata from the selected RPC endpoint, including client, head hash, gas data, and finality status.</p>
+        </div>
+        <div class="dashboard-grid">
+          <article class="panel">
+            <div class="panel-title">
+              <h3>Chain summary</h3>
+              <span class="pill">Read only</span>
+            </div>
+            <div id="summary"></div>
+          </article>
+          <article class="panel">
+            <div class="panel-title">
+              <h3>Recent blocks</h3>
+              <span class="pill">Latest 10</span>
+            </div>
+            <p class="muted">Click a block row to reveal header metadata and transaction hashes.</p>
+            <div id="blocks"></div>
+            <div id="blockDetail"></div>
+          </article>
+        </div>
+      </div>
+    </section>
 
-  <h2>Address lookup</h2>
-  <p class="muted">Paste a 20-byte account / contract address. Balance, nonce, and bytecode length use <code>eth_getBalance</code>, <code>eth_getTransactionCount</code>, and <code>eth_getCode</code>. You can omit the <code>0x</code> prefix; use a transaction lookup below, then click <strong>From</strong> / <strong>To</strong> to jump here.</p>
-  <p class="muted"><button type="button" class="ghost-link" id="fillHardhat0">Fill Hardhat dev signer #0</button> (common prefund key on devnet)</p>
-  <div class="row">
-    <input type="text" id="acct" placeholder="0x + 40 hex chars (or 40 hex without 0x)" autocomplete="off" spellcheck="false" />
-    <button type="button" id="lookupAcct">Look up address</button>
-  </div>
-  <div id="accountOut"></div>
+    <section id="lookup" class="section" aria-labelledby="lookup-title">
+      <div class="section-inner">
+        <div class="section-header">
+          <h2 id="lookup-title">Lookup Console</h2>
+          <p>Resolve accounts, contracts, and submitted transactions without leaving the explorer.</p>
+        </div>
+        <div class="lookup-grid">
+          <article class="panel">
+            <div class="panel-title">
+              <h3>Address lookup</h3>
+              <span class="pill">Account / contract</span>
+            </div>
+            <p class="lookup-copy">
+              Paste a 20-byte address. Balance, nonce, bytecode length, and contract detection use
+              <code>eth_getBalance</code>, <code>eth_getTransactionCount</code>, and <code>eth_getCode</code>.
+            </p>
+            <p class="muted">
+              <button type="button" class="ghost-link" id="fillHardhat0">Fill Hardhat dev signer #0</button>
+            </p>
+            <div class="control-row">
+              <input type="text" id="acct" placeholder="0x + 40 hex chars" autocomplete="off" spellcheck="false" />
+              <button type="button" id="lookupAcct" class="secondary-button">Look up address</button>
+            </div>
+            <div id="accountOut"></div>
+          </article>
 
-  <h2>Transaction lookup</h2>
-  <p class="muted"><code>eth_getTransactionByHash</code> + receipt. After lookup, use the address buttons to inspect an account.</p>
-  <div class="row">
-    <input type="text" id="txhash" placeholder="0x + 64 hex tx hash (or 64 hex without 0x)" autocomplete="off" spellcheck="false" />
-    <button type="button" id="lookupTx">Look up transaction</button>
-  </div>
-  <div id="txOut"></div>
+          <article class="panel">
+            <div class="panel-title">
+              <h3>Transaction lookup</h3>
+              <span class="pill">Hash + receipt</span>
+            </div>
+            <p class="lookup-copy">
+              Query <code>eth_getTransactionByHash</code> and its receipt. Returned sender, recipient, and contract
+              addresses can jump directly into account lookup.
+            </p>
+            <div class="control-row">
+              <input type="text" id="txhash" placeholder="0x + 64 hex tx hash" autocomplete="off" spellcheck="false" />
+              <button type="button" id="lookupTx" class="secondary-button">Look up transaction</button>
+            </div>
+            <div id="txOut"></div>
+          </article>
+        </div>
+      </div>
+    </section>
 
-  <h2>About transaction hashes</h2>
-  <p class="muted">Block lists show whatever hash the RPC returns — often <code>keccak256(EIP-1559 raw)</code> for MetaMask txs, sometimes <code>keccak256(borsh)</code> for native-only paths. Use the <strong>same</strong> JSON-RPC endpoint you submitted on (usually the producer). Details: <code>docs/explorer.md</code> in this repo.</p>
-
-  <h2>Devnet links</h2>
-  <p class="muted">Faucet (if running): <code>http://127.0.0.1:8088</code> — see <code>docs/devnet.md</code>.</p>
+    <section id="finality" class="explainer" aria-labelledby="finality-title">
+      <div class="section-inner">
+        <div class="section-header">
+          <h2 id="finality-title">Finality Intelligence</h2>
+          <p>Blocks are marked soft-final while the committee or sequencer has accepted them, then proof-final after the validity proof is accepted.</p>
+        </div>
+        <div class="explainer-grid">
+          <article class="explainer-card">
+            <span>01</span>
+            <h3>Soft-final</h3>
+            <p>Useful for monitoring live execution and low-risk flows while proof settlement is still pending.</p>
+          </article>
+          <article class="explainer-card">
+            <span>02</span>
+            <h3>Proof-final</h3>
+            <p>Suitable for high-value settlement, bridges, and agent commerce that depends on accepted validity proofs.</p>
+          </article>
+          <article class="explainer-card">
+            <span>03</span>
+            <h3>Hash modes</h3>
+            <p>RPC may return Ethereum-style or native transaction hashes depending on the submission path and producer.</p>
+          </article>
+        </div>
+      </div>
+    </section>
+  </main>
 
   <script>
     document.getElementById("rpcshow").textContent =
       new URLSearchParams(window.location.search).get("rpc") || "http://127.0.0.1:8545";
+
+    window.addEventListener("scroll", () => {
+      document.documentElement.style.setProperty("--scroll", String(window.scrollY));
+    }, { passive: true });
   </script>
   <script src="app.js"></script>
 </body>

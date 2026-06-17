@@ -65,6 +65,11 @@ function finalityLabel(status) {
   return "Unknown finality";
 }
 
+function updateHeroStat(id, value) {
+  const el = document.getElementById(id);
+  if (el) el.textContent = value;
+}
+
 function finalityBadge(status) {
   const badge = document.createElement("span");
   badge.className = `finality-badge finality-${status}`;
@@ -170,8 +175,14 @@ async function loadSummary(el) {
     rpc("web3_clientVersion"),
   ]);
   const block = await rpc("eth_getBlockByNumber", [bnHex, false]);
+  const finality = finalityStatus(block);
+  updateHeroStat("heroHead", hexToBigInt(bnHex).toString());
+  updateHeroStat("heroFinality", finalityLabel(finality));
+  updateHeroStat("heroTxs", String(block?.transactions?.length ?? 0));
+
   el.innerHTML = "";
   const dl = document.createElement("dl");
+  dl.className = "metric-grid";
   const rows = [
     ["Chain ID", chainId],
     ["net_version", netVer],
@@ -185,17 +196,16 @@ async function loadSummary(el) {
     ["Txs in head", String(block?.transactions?.length ?? 0)],
   ];
   for (const [k, v] of rows) {
+    const row = document.createElement("div");
+    row.className = "metric-row";
     const dt = document.createElement("dt");
     dt.textContent = k;
     const dd = document.createElement("dd");
     dd.textContent = typeof v === "string" ? v : String(v);
-    dl.appendChild(dt);
-    dl.appendChild(dd);
+    row.appendChild(dt);
+    row.appendChild(dd);
+    dl.appendChild(row);
   }
-  dl.style.display = "grid";
-  dl.style.gridTemplateColumns = "auto 1fr";
-  dl.style.columnGap = "1rem";
-  dl.style.rowGap = "0.35rem";
   el.appendChild(dl);
 }
 
@@ -224,6 +234,8 @@ async function loadBlocks(el) {
   );
 
   el.innerHTML = "";
+  const wrap = document.createElement("div");
+  wrap.className = "table-wrap";
   const table = document.createElement("table");
   const thead = document.createElement("thead");
   thead.innerHTML = "<tr><th>#</th><th>Hash</th><th>Finality</th><th>Gas used</th><th>Time</th><th>Txs</th></tr>";
@@ -268,7 +280,8 @@ async function loadBlocks(el) {
     tbody.appendChild(tr);
   }
   table.appendChild(tbody);
-  el.appendChild(table);
+  wrap.appendChild(table);
+  el.appendChild(wrap);
 }
 
 async function showBlockDetail(blockTag) {
@@ -281,8 +294,6 @@ async function showBlockDetail(blockTag) {
     detail.innerHTML = "";
 
     const h3 = document.createElement("h3");
-    h3.style.fontSize = "1rem";
-    h3.style.margin = "0 0 0.5rem";
     h3.textContent = `Block ${b.number ?? blockTag} `;
     h3.appendChild(finalityBadge(finalityStatus(b)));
     detail.appendChild(h3);
@@ -296,7 +307,6 @@ async function showBlockDetail(blockTag) {
 
     const explain = document.createElement("p");
     explain.className = "muted";
-    explain.style.margin = "0 0 0.5rem";
     explain.innerHTML =
       "This is <strong>block header</strong> data (identifiers + state roots). It is not a wallet “address.” " +
       "<strong>Account addresses</strong> (20-byte <code>0x…</code>) appear on <strong>transactions</strong> " +
@@ -341,8 +351,6 @@ async function showBlockDetail(blockTag) {
     );
 
     const ul = document.createElement("ul");
-    ul.style.margin = "0.5rem 0 0";
-    ul.style.paddingLeft = "1.1rem";
     for (let i = 0; i < txs.length; i++) {
       const th = txs[i];
       const txo = txObjs[i];
@@ -384,10 +392,13 @@ async function refresh() {
   const sum = document.getElementById("summary");
   const blk = document.getElementById("blocks");
   sum.textContent = "Loading…";
-  blk.textContent = "…";
+  blk.textContent = "Loading blocks…";
   try {
     await Promise.all([loadSummary(sum), loadBlocks(blk)]);
   } catch (e) {
+    updateHeroStat("heroHead", "Offline");
+    updateHeroStat("heroFinality", "Unavailable");
+    updateHeroStat("heroTxs", "0");
     sum.innerHTML = "";
     const p = document.createElement("p");
     p.className = "err";

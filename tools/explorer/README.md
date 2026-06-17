@@ -1,6 +1,24 @@
-# FractalChain dev explorer (PRD M6)
+# Fractal Society Block Explorer
 
-Static read-only UI over JSON-RPC (**CORS** is enabled on `fractal-rpc::serve_http` for dev).
+Static read-only UI over JSON-RPC (**CORS** is enabled on `fractal-rpc::serve_http` for dev). The redesigned explorer is intended for the public subdomain:
+
+**`https://blockexplorer.fractalsociety.org`**
+
+If DNS is intentionally configured as `blockexpleor.fractalsociety.org`, point that host at the same static files or add it as an alias.
+
+## Deploy
+
+Deploy the contents of this folder as a static site:
+
+- `index.html`
+- `app.js`
+- `assets/fractal-explorer-hero.png`
+
+The page defaults to `http://127.0.0.1:8545` for local development. Public deployments can pass the RPC endpoint with:
+
+```text
+https://blockexplorer.fractalsociety.org/?rpc=https://YOUR_RPC_HOST
+```
 
 ## Run
 
