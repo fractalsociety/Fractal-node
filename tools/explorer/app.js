@@ -224,16 +224,37 @@ async function loadBlocks(el) {
 
   const bnHex = await rpc("eth_blockNumber");
   const head = hexToBigInt(bnHex);
-  const count = 10n;
-  const low = head + 1n > count ? head - (count - 1n) : 0n;
-  const tags = [];
-  for (let h = head; h >= low; h--) tags.push(numToHex(h));
+  const displayCount = 10;
+  const scanCount = 256n;
+  const low = head + 1n > scanCount ? head - (scanCount - 1n) : 0n;
+  const scanTags = [];
+  for (let h = head; h >= low; h--) scanTags.push(numToHex(h));
 
-  const blocks = await Promise.all(
-    tags.map((tag) => rpc("eth_getBlockByNumber", [tag, false]).catch(() => null)),
-  );
+  const scanned = [];
+  const batchSize = 32;
+  for (let i = 0; i < scanTags.length; i += batchSize) {
+    const batchTags = scanTags.slice(i, i + batchSize);
+    const batch = await Promise.all(
+      batchTags.map((tag) => rpc("eth_getBlockByNumber", [tag, false]).catch(() => null)),
+    );
+    scanned.push(...batch);
+    const found = scanned.filter((block) => Array.isArray(block?.transactions) && block.transactions.length > 0).length;
+    if (found >= displayCount) break;
+  }
+  const scannedTags = scanTags.slice(0, scanned.length);
+  const nonempty = scanned
+    .map((block, index) => ({ block, tag: scanTags[index] }))
+    .filter(({ block }) => Array.isArray(block?.transactions) && block.transactions.length > 0);
+  const rows = (nonempty.length ? nonempty : scanned.slice(0, displayCount).map((block, index) => ({ block, tag: scanTags[index] })))
+    .slice(0, displayCount);
 
   el.innerHTML = "";
+  const caption = document.createElement("p");
+  caption.className = "muted";
+  caption.textContent = nonempty.length
+    ? `Showing ${rows.length} newest transaction-bearing block${rows.length === 1 ? "" : "s"} from the last ${scannedTags.length} scanned blocks.`
+    : `No transactions found in the last ${scannedTags.length} scanned blocks; showing the latest ${rows.length} head blocks.`;
+  el.appendChild(caption);
   const wrap = document.createElement("div");
   wrap.className = "table-wrap";
   const table = document.createElement("table");
@@ -242,11 +263,11 @@ async function loadBlocks(el) {
   table.appendChild(thead);
   const tbody = document.createElement("tbody");
   wireBlockRowClicks(tbody);
-  for (let i = 0; i < blocks.length; i++) {
-    const b = blocks[i];
+  for (let i = 0; i < rows.length; i++) {
+    const b = rows[i].block;
     const tr = document.createElement("tr");
     tr.className = "block-row";
-    tr.setAttribute("data-block-tag", tags[i]);
+    tr.setAttribute("data-block-tag", rows[i].tag);
     tr.title = "Show transactions in this block";
     if (!b) {
       const td = document.createElement("td");
@@ -257,7 +278,7 @@ async function loadBlocks(el) {
       tbody.appendChild(tr);
       continue;
     }
-    const n = b.number ?? tags[i];
+    const n = b.number ?? rows[i].tag;
     const txc = Array.isArray(b.transactions) ? b.transactions.length : 0;
     const cells = [
       { text: n, cls: "mono" },
