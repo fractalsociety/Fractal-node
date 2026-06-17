@@ -245,31 +245,17 @@
     }
 
     .hero-controls {
-      display: grid;
-      grid-template-columns: minmax(0, 1fr) auto;
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
       gap: 10px;
-      width: min(760px, 100%);
+      width: min(520px, 100%);
       padding: 8px;
       border: 1px solid var(--line);
       border-radius: 999px;
       background: rgba(5, 7, 10, 0.58);
       backdrop-filter: blur(16px);
       box-shadow: var(--shadow);
-    }
-
-    .rpc-chip {
-      display: flex;
-      align-items: center;
-      min-width: 0;
-      padding: 0 16px;
-      border-radius: 999px;
-      background: rgba(255, 247, 234, 0.07);
-      color: var(--muted);
-      font-size: 13px;
-    }
-
-    .rpc-chip code {
-      margin-left: 8px;
     }
 
     .primary-button,
@@ -759,10 +745,6 @@
         border-radius: 18px;
       }
 
-      .rpc-chip {
-        min-height: 44px;
-      }
-
       .hero-stats,
       .dashboard-grid,
       .lookup-grid,
@@ -832,17 +814,13 @@
     <section class="hero" aria-labelledby="hero-title">
       <div class="hero-art" aria-hidden="true"></div>
       <div class="hero-inner">
-        <span class="eyebrow"><span class="pulse"></span> Live read-only JSON-RPC</span>
+        <span class="eyebrow"><span class="pulse"></span> Live FractalChain explorer</span>
         <h1 id="hero-title">FractalChain Explorer</h1>
         <p class="hero-copy">
           Inspect blocks, proof finality, accounts, bytecode, and transactions on the Fractal Society network.
           Built for operators, builders, and agent economy auditors.
         </p>
         <div class="hero-controls">
-          <div class="rpc-chip">
-            RPC
-            <code id="rpcshow"></code>
-          </div>
           <button type="button" id="refresh" class="primary-button">Refresh network</button>
         </div>
         <div class="hero-stats" aria-label="Current network highlights">
@@ -866,7 +844,7 @@
       <div class="section-inner">
         <div class="section-header">
           <h2 id="chain-title">Network State</h2>
-          <p>Realtime chain metadata from the selected RPC endpoint, including client, head hash, gas data, and finality status.</p>
+          <p>Realtime chain metadata, including client, head hash, gas data, finality status, and confirmed transaction activity.</p>
         </div>
         <div class="dashboard-grid">
           <article class="panel">
@@ -962,9 +940,6 @@
   </main>
 
   <script>
-    document.getElementById("rpcshow").textContent =
-      new URLSearchParams(window.location.search).get("rpc") || "http://192.3.47.245:8545";
-
     window.addEventListener("scroll", () => {
       document.documentElement.style.setProperty("--scroll", String(window.scrollY));
     }, { passive: true });
