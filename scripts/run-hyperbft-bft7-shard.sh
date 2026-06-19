@@ -141,13 +141,54 @@ rpc_height() {
   echo $((16#${h:-0}))
 }
 
+rpc_call() {
+  local port="$1"
+  local method="$2"
+  curl -sf -X POST "http://127.0.0.1:${port}" -H 'Content-Type: application/json' \
+    --data "{\"jsonrpc\":\"2.0\",\"method\":\"${method}\",\"params\":[],\"id\":1}" || true
+}
+
+capture_consensus_diagnostics() {
+  local reason="$1"
+  local stamp
+  stamp="$(date +%Y%m%d-%H%M%S)"
+  local out="${PID_DIR}/consensus-diagnostics-${stamp}.log"
+  {
+    echo "hyperbft-bft7-shard diagnostics"
+    echo "reason=${reason}"
+    echo "time=${stamp}"
+    echo "validators=${VALIDATORS}"
+    echo "shard=${SHARD_ID}/${SHARD_COUNT}"
+    echo "min_height=${MIN_HEIGHT}"
+    echo ""
+    for idx in $(seq 0 $((VALIDATORS - 1))); do
+      local port=$((BASE_RPC + idx))
+      local log="${PID_DIR}/validator-${idx}.log"
+      echo "===== validator-${idx} rpc eth_blockNumber ====="
+      rpc_call "$port" "eth_blockNumber"
+      echo ""
+      echo "===== validator-${idx} rpc fractal_consensusDiagnostics ====="
+      rpc_call "$port" "fractal_consensusDiagnostics"
+      echo ""
+      echo "===== validator-${idx} full log ====="
+      if [[ -f "$log" ]]; then
+        cat "$log"
+      else
+        echo "missing log: $log"
+      fi
+      echo ""
+    done
+  } >"$out"
+  echo "Diagnostics captured: $out" >&2
+}
+
 smoke_nodes() {
   for idx in $(seq 0 $((VALIDATORS - 1))); do
     local f="${PID_DIR}/validator-${idx}.pid"
-    [[ -f "$f" ]] || { echo "ERROR: missing $f" >&2; return 1; }
+    [[ -f "$f" ]] || { echo "ERROR: missing $f" >&2; capture_consensus_diagnostics "missing-pid-${idx}"; return 1; }
     local pid
     pid="$(cat "$f")"
-    kill -0 "$pid" 2>/dev/null || { echo "ERROR: validator $idx not running" >&2; return 1; }
+    kill -0 "$pid" 2>/dev/null || { echo "ERROR: validator $idx not running" >&2; capture_consensus_diagnostics "validator-${idx}-not-running"; return 1; }
   done
   local max_h=0
   for _ in $(seq 1 120); do
@@ -167,6 +208,7 @@ smoke_nodes() {
     sleep 0.5
   done
   echo "ERROR: cluster max_height=$max_h below $MIN_HEIGHT after 60s" >&2
+  capture_consensus_diagnostics "height-timeout-max-${max_h}"
   return 1
 }
 

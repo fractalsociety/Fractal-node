@@ -10,7 +10,7 @@ pub use gateway::{
 };
 pub use module::{
     build_module, evm_log_matches_topic_filters, logs_bloom_256, logs_bloom_hex, make_rpc_log,
-    serve_http, ChainInteraction, LogsFilter, RpcChainConfig, RpcDaMetrics, RpcLog,
-    RpcMempoolLaneMetrics, RpcProofMetrics, RpcProofRejectionMetric, RpcProofSubmission,
-    RpcSettlementBlock, SharedChain, TopicMatch,
+    serve_http, ChainInteraction, LogsFilter, RpcChainConfig, RpcConsensusDiagnostics,
+    RpcDaMetrics, RpcLog, RpcMempoolLaneMetrics, RpcProofMetrics, RpcProofRejectionMetric,
+    RpcProofSubmission, RpcSettlementBlock, SharedChain, TopicMatch,
 };

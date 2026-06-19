@@ -93,7 +93,11 @@ pub fn finalize_block_hooks(
         if bal < ctx.block_reward_wei {
             return Err(ExecError::InsufficientBalance);
         }
-        state.accounts.get_mut(&treasury).expect("treasury").balance -= ctx.block_reward_wei;
+        state
+            .accounts
+            .get_mut(&treasury)
+            .ok_or(ExecError::InsufficientBalance)?
+            .balance -= ctx.block_reward_wei;
     }
 
     let mut idxs: std::collections::BTreeSet<u32> =
@@ -142,4 +146,28 @@ pub fn finalize_block_hooks(
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn missing_treasury_returns_error_instead_of_panicking() {
+        let mut state = State::default();
+        let ctx = BlockFinalizeContext {
+            block_timestamp_ms: 1,
+            unbonding_period_ms: 1,
+            proposer: [1u8; 32],
+            parent_qc_signer_indices: &[],
+            validator_fingerprints: &[[1u8; 32]],
+            treasury: [9u8; 20],
+            block_reward_wei: 1,
+            base_fee_per_gas: 0,
+            evm_gas_used: 0,
+        };
+
+        let err = finalize_block_hooks(&mut state, &ctx).unwrap_err();
+        assert_eq!(err, ExecError::InsufficientBalance);
+    }
 }

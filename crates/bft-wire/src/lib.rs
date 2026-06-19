@@ -23,6 +23,4 @@ pub use timeout::{
     TimeoutSignBody,
 };
 pub use validators::{ValidatorEntry, ValidatorId, ValidatorSet};
-pub use vote::{
-    verify_formed_qc, FormedQc, Vote, VoteError, VotePool, VoteSignBody,
-};
+pub use vote::{verify_formed_qc, FormedQc, Vote, VoteError, VotePool, VoteSignBody};

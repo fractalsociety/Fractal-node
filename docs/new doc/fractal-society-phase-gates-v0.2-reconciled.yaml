@@ -1,0 +1,2229 @@
+schema_version: 1.1.0
+product: Fractal Society
+program: Train in Simulation. Prove in Public. Deploy with Confidence.
+generated_from: fractal-society-simulation-proof-deployment-prd-v0.2-reconciled.md
+legacy_baseline:
+  source: mater-june-19th.md
+  source_date: '2026-06-19'
+  reported_total_items: 1666
+  parsed_checkbox_lines: 1682
+  manual_review_placeholders: 16
+  checked_items: 650
+  reported_open_items: 1016
+  parsed_open_checkbox_lines: 1032
+  policy: Legacy checkmarks are implementation claims. They remain verification_required until current code, tests, runtime
+    evidence, and founder review pass.
+  source_status:
+  - name: Fractal Website Blockchain Integration PRD
+    total: 7
+    checked: 0
+    open: 7
+    percent: 0.0
+  - name: Repository Feature Graph PRD
+    total: 6
+    checked: 0
+    open: 6
+    percent: 0.0
+  - name: FractalWork Core MVP Implementation Plan
+    total: 1
+    checked: 0
+    open: 1
+    percent: 0.0
+  - name: 'PRD: Forge - Train, Deploy, and Rent Specialist Agents'
+    total: 1
+    checked: 0
+    open: 1
+    percent: 0.0
+  - name: 'PRD: Forge Router - Route Work to Specialized Monetized Agents'
+    total: 1
+    checked: 0
+    open: 1
+    percent: 0.0
+  - name: 'Implementation Checklist: Forge Specialist Agent Router'
+    total: 189
+    checked: 32
+    open: 157
+    percent: 16.9
+  - name: 'PRD Checklist: RL Gyms and Verifiers Marketplace'
+    total: 343
+    checked: 238
+    open: 105
+    percent: 69.4
+  - name: 'PRD: Fractal Forge Local Engine, Headless CLI, and Dashboard Integration'
+    total: 365
+    checked: 112
+    open: 253
+    percent: 30.7
+  - name: 'PRD: Hermes and OpenClaw Agent Integration for Forge and FractalWork'
+    total: 185
+    checked: 173
+    open: 12
+    percent: 93.5
+  - name: 'PRD: Digital Employee Skills, RAG Memory, and Codex Offload Layer'
+    total: 241
+    checked: 95
+    open: 146
+    percent: 39.4
+  - name: 'PRD: Fractal Society Graph Operating System'
+    total: 343
+    checked: 0
+    open: 343
+    percent: 0.0
+gate_policy:
+  founder_review_required: true
+  no_automatic_approval: true
+  approval_must_be_signed: true
+  next_phase_blocked_until_approval: true
+  legacy_checkmarks_do_not_equal_pass: true
+  critical_security_checks_not_waivable: true
+  live_capital_requires_decision: APPROVE_LIVE_CANARY
+check_schema:
+  required_fields:
+  - id
+  - description
+  - work_type
+  - mandatory
+  - status
+  - legacy_refs
+  - evidence
+  - waiver_allowed
+  allowed_work_types:
+  - reuse_verify
+  - extend
+  - new
+  - decision
+  - deferred_guard
+  allowed_statuses:
+  - not_started
+  - verification_required
+  - in_progress
+  - passed
+  - failed
+  - blocked
+  - waived
+  - superseded
+  status_rules:
+    reuse_verify: starts as verification_required and can become passed only with fresh regression evidence
+    extend: starts as not_started
+    new: starts as not_started
+    decision: starts as not_started and requires signed founder evidence
+    deferred_guard: starts blocked and cannot change without separate authorization
+phase_order:
+- PHASE-00
+- PHASE-00R
+- PHASE-01
+- PHASE-02
+- PHASE-03
+- PHASE-04
+- PHASE-05
+- PHASE-06
+- PHASE-07
+- PHASE-08
+- PHASE-09
+- PHASE-10
+- PHASE-11
+- PHASE-12
+phases:
+- id: PHASE-00
+  title: Founder alignment and reconciled product constitution
+  objective: Approve the trading wedge, domain-neutral architecture, legacy-evidence policy, MVP boundary, and founder review
+    process before implementation changes begin.
+  reuse_level: decision_only
+  legacy_summary: The master PRDs already define the broad mission, safety principles, Forge/FractalWork roles, and simulation-first
+    direction. These are product claims, not implementation evidence.
+  reuse_without_rebuilding:
+  - Existing mission, product thesis, privacy principles, and simulation-first non-goals.
+  remaining_implementation:
+  - Approve the reconciled scope and the rule that legacy checkmarks require regression evidence.
+  - Freeze the narrow first market and non-token reward policy.
+  review_required: true
+  allowed_states:
+  - draft
+  - in_progress
+  - auto_checks_failed
+  - auto_checks_passed
+  - awaiting_founder_review
+  - approved
+  - changes_requested
+  - rejected
+  - complete
+  - blocked
+  complete_when:
+  - all_mandatory_checks_pass
+  - founder_decision_approved
+  automated_commands: []
+  checks:
+  - id: P00-01
+    description: "Approve \u201CTrain in Simulation. Prove in Public. Deploy with Confidence.\u201D as the first-use-case\
+      \ promise."
+    work_type: decision
+    mandatory: true
+    status: not_started
+    legacy_refs: []
+    evidence: null
+    waiver_allowed: false
+  - id: P00-02
+    description: Approve an MVP that excludes real-money order submission and custody.
+    work_type: decision
+    mandatory: true
+    status: not_started
+    legacy_refs: []
+    evidence: null
+    waiver_allowed: false
+  - id: P00-03
+    description: Approve the generic research kernel plus domain-adapter architecture.
+    work_type: decision
+    mandatory: true
+    status: not_started
+    legacy_refs: []
+    evidence: null
+    waiver_allowed: false
+  - id: P00-04
+    description: Approve BTC and ETH perpetuals, $100,000 simulated USDC, and a default 2x leverage ceiling as initial defaults.
+    work_type: decision
+    mandatory: true
+    status: not_started
+    legacy_refs: []
+    evidence: null
+    waiver_allowed: false
+  - id: P00-05
+    description: Approve using an existing low-cost chain adapter and deferring a custom chain.
+    work_type: decision
+    mandatory: true
+    status: not_started
+    legacy_refs: []
+    evidence: null
+    waiver_allowed: false
+  - id: P00-06
+    description: Approve non-transferable compute/evaluation credits before any token.
+    work_type: decision
+    mandatory: true
+    status: not_started
+    legacy_refs: []
+    evidence: null
+    waiver_allowed: false
+  - id: P00-07
+    description: Approve that the 650 checked legacy items are reuse claims only until code, tests, and runtime evidence pass
+      PHASE-00R.
+    work_type: decision
+    mandatory: true
+    status: not_started
+    legacy_refs:
+    - mater-june-19th.md
+    evidence: null
+    waiver_allowed: false
+  - id: P00-08
+    description: Approve mandatory founder review after every phase and separate APPROVE_LIVE_CANARY authorization for PHASE-12.
+    work_type: decision
+    mandatory: true
+    status: not_started
+    legacy_refs: []
+    evidence: null
+    waiver_allowed: false
+  founder_demo: Review the revised scope map, legacy source summary, deferred work, and phase-gate state machine.
+  founder_review_questions:
+  - Do you approve the reconciled scope and the distinction between legacy claims and verified completion?
+  - Are any legacy systems required as MVP blockers that this revision has deferred?
+  exit_criteria: All P00 decisions are signed and the baseline audit is authorized.
+  evidence_packet: &id001
+  - gate-manifest.json
+  - requirements-traceability.json
+  - automated-checks.json
+  - test-results.xml
+  - coverage.json
+  - metrics.json
+  - security-report.json
+  - screenshots/
+  - demo-notes.md
+  - known-issues.md
+  - risk-delta.md
+  - founder-review.md
+  - signatures.json
+- id: PHASE-00R
+  title: Legacy baseline verification and gap lock
+  objective: Convert the old checklist into trustworthy evidence, identify stale or false checkmarks, and freeze exactly what
+    will be reused rather than rebuilt.
+  reuse_level: audit_all_existing
+  legacy_summary: 'The legacy tracker reports 1,666 items: 650 checked and 1,016 open. Completion is concentrated in RL gyms/verifiers
+    and Hermes/OpenClaw; graph and blockchain layers are not evidenced by the checkbox tracker.'
+  reuse_without_rebuilding:
+  - All checked legacy capabilities that can be tied to current code, tests, and an executable runtime.
+  remaining_implementation:
+  - Build a machine-readable capability inventory.
+  - Downgrade unsupported checkmarks.
+  - Review manual PRDs that had no checkbox-formatted implementation evidence.
+  review_required: true
+  allowed_states:
+  - draft
+  - in_progress
+  - auto_checks_failed
+  - auto_checks_passed
+  - awaiting_founder_review
+  - approved
+  - changes_requested
+  - rejected
+  - complete
+  - blocked
+  complete_when:
+  - all_mandatory_checks_pass
+  - founder_decision_approved
+  automated_commands:
+  - pnpm fractal:audit:legacy -- --source mater-june-19th.md
+  - pnpm test:legacy:rl-gym-smoke
+  - pnpm test:legacy:forge-smoke
+  - pnpm test:legacy:external-agent-smoke
+  - pnpm test:legacy:skills-smoke
+  - pnpm test:legacy:router-smoke
+  - pnpm test:legacy:security-scan
+  checks:
+  - id: P00R-01
+    description: Tracker parser reproduces the legacy header totals (1,666 implementation items, 650 checked, 1,016 open)
+      and also reports 1,682 parsed checkbox lines, including 16 manual-review placeholders.
+    work_type: reuse_verify
+    mandatory: true
+    status: verification_required
+    legacy_refs:
+    - mater-june-19th.md
+    evidence: null
+    waiver_allowed: false
+  - id: P00R-02
+    description: Every checked legacy item is mapped to a code path, test, migration, route, UI surface, or an explicit stale/false
+      classification.
+    work_type: reuse_verify
+    mandatory: true
+    status: verification_required
+    legacy_refs:
+    - mater-june-19th.md
+    evidence: null
+    waiver_allowed: false
+  - id: P00R-03
+    description: RL gym/verifier smoke tests prove package validation, seeded replay, attached verifiers, scorecards, signed
+      digests, and sandbox execution.
+    work_type: reuse_verify
+    mandatory: true
+    status: verification_required
+    legacy_refs:
+    - docs/plans/2026-06-15-rl-gyms-and-verifiers-prd-checklist.md:64-84
+    - docs/plans/2026-06-15-rl-gyms-and-verifiers-prd-checklist.md:88-111
+    - docs/plans/2026-06-15-rl-gyms-and-verifiers-prd-checklist.md:219-231
+    - docs/plans/2026-06-15-rl-gyms-and-verifiers-prd-checklist.md:417-426
+    evidence: null
+    waiver_allowed: false
+  - id: P00R-04
+    description: Forge smoke tests prove dashboard access, model registry, trainer abstraction, evaluation, event streaming,
+      and artifact export where claimed.
+    work_type: reuse_verify
+    mandatory: true
+    status: verification_required
+    legacy_refs:
+    - docs/plans/2026-06-17-fractal-forge-local-engine-prd.md:22-32
+    - docs/plans/2026-06-17-fractal-forge-local-engine-prd.md:195-208
+    - docs/plans/2026-06-17-fractal-forge-local-engine-prd.md:353-381
+    - docs/plans/2026-06-17-fractal-forge-local-engine-prd.md:387-405
+    evidence: null
+    waiver_allowed: false
+  - id: P00R-05
+    description: Hermes/OpenClaw smoke tests prove connection, health checks, permission denial, verifier/gym execution, fallback,
+      and secret isolation.
+    work_type: reuse_verify
+    mandatory: true
+    status: verification_required
+    legacy_refs:
+    - docs/plans/2026-06-17-hermes-openclaw-agent-integration-prd.md:27-36
+    - docs/plans/2026-06-17-hermes-openclaw-agent-integration-prd.md:279-290
+    - docs/plans/2026-06-17-hermes-openclaw-agent-integration-prd.md:296-323
+    evidence: null
+    waiver_allowed: false
+  - id: P00R-06
+    description: Skill/RAG smoke tests prove stable skill schemas, ingestion, retrieval, context bundles, and PRD/API/dashboard
+      auditing where claimed.
+    work_type: reuse_verify
+    mandatory: true
+    status: verification_required
+    legacy_refs:
+    - docs/plans/2026-06-19-digital-employee-skills-rag-prd.md:76-102
+    - docs/plans/2026-06-19-digital-employee-skills-rag-prd.md:125-130
+    - docs/plans/2026-06-19-digital-employee-skills-rag-prd.md:151-243
+    evidence: null
+    waiver_allowed: false
+  - id: P00R-07
+    description: Router smoke tests prove only the claimed data model, index, classifier, outcome capture, and privacy controls;
+      open filters, ranker, route API, and explanations remain open.
+    work_type: reuse_verify
+    mandatory: true
+    status: verification_required
+    legacy_refs:
+    - docs/plans/2026-06-14-forge-specialist-agent-router-checklist.md:27-105
+    - docs/plans/2026-06-14-forge-specialist-agent-router-checklist.md:109-188
+    - docs/plans/2026-06-14-forge-specialist-agent-router-checklist.md:253-283
+    evidence: null
+    waiver_allowed: false
+  - id: P00R-08
+    description: FractalWork core, blockchain integration, repository feature graph, and marketplace PRDs receive a manual
+      code-evidence review because their source documents did not expose reliable checkbox status.
+    work_type: extend
+    mandatory: true
+    status: not_started
+    legacy_refs:
+    - mater-june-19th.md
+    evidence: null
+    waiver_allowed: false
+  - id: P00R-09
+    description: A capability-inventory.json records capability id, implementation path, test command, runtime owner, evidence
+      freshness, and status.
+    work_type: new
+    mandatory: true
+    status: not_started
+    legacy_refs: []
+    evidence: null
+    waiver_allowed: false
+  - id: P00R-10
+    description: Duplicate, superseded, demo-only, scaffold-only, and production-ready states are distinguished explicitly.
+    work_type: new
+    mandatory: true
+    status: not_started
+    legacy_refs: []
+    evidence: null
+    waiver_allowed: false
+  - id: P00R-11
+    description: Critical secret, permission, and sandbox regressions are fixed or block reuse.
+    work_type: extend
+    mandatory: true
+    status: not_started
+    legacy_refs: []
+    evidence: null
+    waiver_allowed: false
+  - id: P00R-12
+    description: Founder signs the locked reuse map and remaining-gap map.
+    work_type: decision
+    mandatory: true
+    status: not_started
+    legacy_refs: []
+    evidence: null
+    waiver_allowed: false
+  founder_demo: Open capability-inventory.json, select one checked item from each legacy source, navigate to its code and
+    test evidence, then show one item downgraded because evidence was insufficient.
+  founder_review_questions:
+  - Do you accept the verified baseline as the only source of implementation truth for later phases?
+  - Should any downgraded capability be repaired now rather than deferred?
+  exit_criteria: Every inherited capability is verified, downgraded, or explicitly excluded; no phase relies on an ambiguous
+    legacy checkbox.
+  evidence_packet: *id001
+- id: PHASE-01
+  title: "Canonical research schema and artifact ledger \u2014 extend existing packages"
+  objective: Unify existing Forge, RL gym, verifier, suite, run, and agent artifacts into one domain-neutral research contract
+    without rebuilding their working implementations.
+  reuse_level: substantial_reuse
+  legacy_summary: Verifier, gym, and suite package schemas are fully checked in the legacy tracker; versioning, signed package
+    digests, immutable versions, run manifests, and scorecards are substantially present.
+  reuse_without_rebuilding:
+  - VerifierPackage, RLGymPackage, SuitePackage, run manifests, package digests, visibility controls, scorecard objects, and
+    agent harness metadata.
+  remaining_implementation:
+  - Add generic research objects and cross-artifact relations.
+  - Standardize canonical serialization, audit events, privacy contracts, and project export/import.
+  - Add changelog and migration rules that were still open.
+  review_required: true
+  allowed_states:
+  - draft
+  - in_progress
+  - auto_checks_failed
+  - auto_checks_passed
+  - awaiting_founder_review
+  - approved
+  - changes_requested
+  - rejected
+  - complete
+  - blocked
+  complete_when:
+  - all_mandatory_checks_pass
+  - founder_decision_approved
+  automated_commands:
+  - pnpm test:schema
+  - pnpm test:canonical-hash
+  - pnpm test:signatures
+  - pnpm test:artifact-registry
+  - pnpm test:privacy-contracts
+  - pnpm test:e2e:project-export-import
+  checks:
+  - id: P01-R01
+    description: Existing verifier, gym, and suite package fixtures validate without schema forks.
+    work_type: reuse_verify
+    mandatory: true
+    status: verification_required
+    legacy_refs:
+    - docs/plans/2026-06-15-rl-gyms-and-verifiers-prd-checklist.md:64-84
+    - docs/plans/2026-06-15-rl-gyms-and-verifiers-prd-checklist.md:88-111
+    - docs/plans/2026-06-15-rl-gyms-and-verifiers-prd-checklist.md:115-127
+    evidence: null
+    waiver_allowed: false
+  - id: P01-R02
+    description: Existing run manifests persist model, prompt, adapter, harness, package versions, and package digests.
+    work_type: reuse_verify
+    mandatory: true
+    status: verification_required
+    legacy_refs:
+    - docs/plans/2026-06-15-rl-gyms-and-verifiers-prd-checklist.md:219-231
+    evidence: null
+    waiver_allowed: false
+  - id: P01-R03
+    description: Existing immutable versions and signed package digests pass tamper and mutation regression tests.
+    work_type: reuse_verify
+    mandatory: true
+    status: verification_required
+    legacy_refs:
+    - docs/plans/2026-06-15-rl-gyms-and-verifiers-prd-checklist.md:163-172
+    evidence: null
+    waiver_allowed: false
+  - id: P01-R04
+    description: Existing public, unlisted, organization-only, and private visibility paths do not leak private payloads.
+    work_type: reuse_verify
+    mandatory: true
+    status: verification_required
+    legacy_refs:
+    - docs/plans/2026-06-15-rl-gyms-and-verifiers-prd-checklist.md:163-172
+    evidence: null
+    waiver_allowed: false
+  - id: P01-N01
+    description: Canonical schemas exist for ResearchProject, Protocol, DatasetSnapshot, Environment, AgentPackage, SkillPackage,
+      ExperimentRun, EvidenceBundle, VerifierRun, Review, Replication, and ProofManifest.
+    work_type: new
+    mandatory: true
+    status: not_started
+    legacy_refs: []
+    evidence: null
+    waiver_allowed: false
+  - id: P01-N02
+    description: Canonical serialization creates identical hashes across supported runtimes.
+    work_type: new
+    mandatory: true
+    status: not_started
+    legacy_refs: []
+    evidence: null
+    waiver_allowed: false
+  - id: P01-N03
+    description: One-byte tampering changes the artifact hash and fails signature verification.
+    work_type: new
+    mandatory: true
+    status: not_started
+    legacy_refs: []
+    evidence: null
+    waiver_allowed: false
+  - id: P01-N04
+    description: State transitions are idempotent and audit events identify actor, action, time, artifact, tenant, and request
+      id.
+    work_type: new
+    mandatory: true
+    status: not_started
+    legacy_refs: []
+    evidence: null
+    waiver_allowed: false
+  - id: P01-N05
+    description: An exported research project bundle imports without semantic changes.
+    work_type: new
+    mandatory: true
+    status: not_started
+    legacy_refs: []
+    evidence: null
+    waiver_allowed: false
+  - id: P01-N06
+    description: Private artifacts never appear in public API, event, log, or scorecard fixtures.
+    work_type: extend
+    mandatory: true
+    status: not_started
+    legacy_refs: []
+    evidence: null
+    waiver_allowed: false
+  - id: P01-N07
+    description: Every immutable package version requires a changelog and compatible migration metadata.
+    work_type: extend
+    mandatory: true
+    status: not_started
+    legacy_refs:
+    - docs/plans/2026-06-15-rl-gyms-and-verifiers-prd-checklist.md:163-172
+    evidence: null
+    waiver_allowed: false
+  - id: P01-N08
+    description: Requirements traceability maps every canonical schema and state transition to PRD check ids.
+    work_type: new
+    mandatory: true
+    status: not_started
+    legacy_refs: []
+    evidence: null
+    waiver_allowed: false
+  founder_demo: Import a legacy gym and verifier package, wrap them in a ResearchProject, export it, alter one byte, and show
+    that verification fails while the unmodified bundle round-trips.
+  founder_review_questions:
+  - Does the unified artifact model preserve existing Forge/RL behavior while remaining clear enough for non-trading research?
+  exit_criteria: The unified schema is backward-compatible with verified legacy artifacts and all new canonical integrity
+    tests pass.
+  evidence_packet: *id001
+- id: PHASE-02
+  title: "Generic simulation kernel \u2014 adapt the existing RL Gym runner"
+  objective: Turn the verified RL Gym runtime into the domain-neutral simulation kernel and prove it works without trading-specific
+    imports.
+  reuse_level: substantial_reuse
+  legacy_summary: The old tracker marks the gym package, episode runner, seeded replay, reward trace viewer, attached verifiers,
+    sandbox limits, run manifests, and scorecards as implemented. Several hardening items remained open.
+  reuse_without_rebuilding:
+  - Episode runner, seeded replay, reward traces, attached verifiers, run manifests, sandbox execution, resource limits, and
+    egress denial.
+  remaining_implementation:
+  - Create the domain adapter contract and deterministic reference adapter.
+  - Close raw-trace policy, flaky-run detection, invalid-action penalties, and safety-hard-failure gaps.
+  review_required: true
+  allowed_states:
+  - draft
+  - in_progress
+  - auto_checks_failed
+  - auto_checks_passed
+  - awaiting_founder_review
+  - approved
+  - changes_requested
+  - rejected
+  - complete
+  - blocked
+  complete_when:
+  - all_mandatory_checks_pass
+  - founder_decision_approved
+  automated_commands:
+  - pnpm test:kernel
+  - pnpm test:determinism --repeat 100
+  - pnpm test:sandbox-limits
+  - pnpm test:reference-adapter:e2e
+  - pnpm test:architecture-boundaries
+  - pnpm test:flaky-environment-detection
+  checks:
+  - id: P02-R01
+    description: Existing episode runner, seeded replay, attached verifier, and reward-trace behavior passes regression tests.
+    work_type: reuse_verify
+    mandatory: true
+    status: verification_required
+    legacy_refs:
+    - docs/plans/2026-06-15-rl-gyms-and-verifiers-prd-checklist.md:417-426
+    evidence: null
+    waiver_allowed: false
+  - id: P02-R02
+    description: Existing sandbox enforces CPU, memory, wall-clock, storage, network, and explicit tool-permission limits.
+    work_type: reuse_verify
+    mandatory: true
+    status: verification_required
+    legacy_refs:
+    - docs/plans/2026-06-15-rl-gyms-and-verifiers-prd-checklist.md:219-231
+    - docs/plans/2026-06-15-rl-gyms-and-verifiers-prd-checklist.md:249-263
+    evidence: null
+    waiver_allowed: false
+  - id: P02-R03
+    description: Existing run manifests and package digests reproduce a completed episode.
+    work_type: reuse_verify
+    mandatory: true
+    status: verification_required
+    legacy_refs:
+    - docs/plans/2026-06-15-rl-gyms-and-verifiers-prd-checklist.md:219-231
+    evidence: null
+    waiver_allowed: false
+  - id: P02-N01
+    description: A versioned DomainAdapter contract defines observation, action, state transition, reward, termination, dataset,
+      and verifier hooks.
+    work_type: new
+    mandatory: true
+    status: not_started
+    legacy_refs: []
+    evidence: null
+    waiver_allowed: false
+  - id: P02-N02
+    description: A deterministic non-trading reference adapter runs through the same public API as trading.
+    work_type: new
+    mandatory: true
+    status: not_started
+    legacy_refs: []
+    evidence: null
+    waiver_allowed: false
+  - id: P02-N03
+    description: Same agent, dataset, environment, configuration, and seed produce byte-equivalent critical outputs across
+      100 runs.
+    work_type: new
+    mandatory: true
+    status: not_started
+    legacy_refs: []
+    evidence: null
+    waiver_allowed: false
+  - id: P02-N04
+    description: Different seeds create controlled variation within declared tolerances.
+    work_type: new
+    mandatory: true
+    status: not_started
+    legacy_refs: []
+    evidence: null
+    waiver_allowed: false
+  - id: P02-N05
+    description: Invalid actions receive explicit penalties or hard failures according to protocol.
+    work_type: extend
+    mandatory: true
+    status: not_started
+    legacy_refs:
+    - docs/plans/2026-06-15-rl-gyms-and-verifiers-prd-checklist.md:235-245
+    evidence: null
+    waiver_allowed: false
+  - id: P02-N06
+    description: Raw traces are persisted or discarded exactly according to the selected privacy policy.
+    work_type: extend
+    mandatory: true
+    status: not_started
+    legacy_refs:
+    - docs/plans/2026-06-15-rl-gyms-and-verifiers-prd-checklist.md:219-231
+    evidence: null
+    waiver_allowed: false
+  - id: P02-N07
+    description: Repeated-seed tests identify flaky verifier or environment behavior and block verified status.
+    work_type: extend
+    mandatory: true
+    status: not_started
+    legacy_refs:
+    - docs/plans/2026-06-15-rl-gyms-and-verifiers-prd-checklist.md:219-231
+    evidence: null
+    waiver_allowed: false
+  - id: P02-N08
+    description: Safety violations can be configured as hard failures independent of reward score.
+    work_type: extend
+    mandatory: true
+    status: not_started
+    legacy_refs:
+    - docs/plans/2026-06-15-rl-gyms-and-verifiers-prd-checklist.md:235-245
+    evidence: null
+    waiver_allowed: false
+  - id: P02-N09
+    description: Architecture tests fail if trading or venue code enters the generic kernel.
+    work_type: new
+    mandatory: true
+    status: not_started
+    legacy_refs: []
+    evidence: null
+    waiver_allowed: false
+  - id: P02-N10
+    description: A completed run exports and replays on a clean environment from its manifest.
+    work_type: new
+    mandatory: true
+    status: not_started
+    legacy_refs: []
+    evidence: null
+    waiver_allowed: false
+  founder_demo: Run the deterministic reference environment twice from a legacy gym package, reproduce it from an exported
+    manifest, then show an architecture test rejecting a trading import in the kernel.
+  founder_review_questions:
+  - Does this phase convincingly prove that the research pipeline is generic before trading is added?
+  exit_criteria: The existing gym runner has become the generic kernel, hardening gaps are closed, and the reference adapter
+    passes all determinism tests.
+  evidence_packet: *id001
+- id: PHASE-03
+  title: Hyperliquid market-data recorder
+  objective: Create a trustworthy, continuously monitored trading dataset adapter without changing the generic research kernel.
+  reuse_level: mostly_new
+  legacy_summary: No Hyperliquid recorder or market-dataset implementation is evidenced in the legacy checklist.
+  reuse_without_rebuilding:
+  - Generic artifact manifests, run event formats, secret handling, observability conventions, and sandbox/network policy.
+  remaining_implementation:
+  - Implement the venue adapter, normalized market schema, gap detection, dataset manifests, rate-limit budgeting, and recorder
+    health operations.
+  review_required: true
+  allowed_states:
+  - draft
+  - in_progress
+  - auto_checks_failed
+  - auto_checks_passed
+  - awaiting_founder_review
+  - approved
+  - changes_requested
+  - rejected
+  - complete
+  - blocked
+  complete_when:
+  - all_mandatory_checks_pass
+  - founder_decision_approved
+  automated_commands:
+  - pnpm test:hyperliquid:fixtures
+  - pnpm test:recorder:reconnect
+  - pnpm test:recorder:idempotency
+  - pnpm test:data-gap-detection
+  - pnpm test:dataset-manifest
+  - pnpm test:rate-limit-budget
+  checks:
+  - id: P03-N01
+    description: Recorded trade, book, mark, funding, status, and instrument events validate against normalized schemas.
+    work_type: new
+    mandatory: true
+    status: not_started
+    legacy_refs: []
+    evidence: null
+    waiver_allowed: false
+  - id: P03-N02
+    description: The recorder reconnects after forced disconnect without silent loss or duplicate critical events.
+    work_type: new
+    mandatory: true
+    status: not_started
+    legacy_refs: []
+    evidence: null
+    waiver_allowed: false
+  - id: P03-N03
+    description: Duplicate upstream messages do not create duplicate normalized records.
+    work_type: new
+    mandatory: true
+    status: not_started
+    legacy_refs: []
+    evidence: null
+    waiver_allowed: false
+  - id: P03-N04
+    description: Sequence or time gaps create explicit data-quality events.
+    work_type: new
+    mandatory: true
+    status: not_started
+    legacy_refs: []
+    evidence: null
+    waiver_allowed: false
+  - id: P03-N05
+    description: Every normalized record can trace back to raw source evidence.
+    work_type: new
+    mandatory: true
+    status: not_started
+    legacy_refs: []
+    evidence: null
+    waiver_allowed: false
+  - id: P03-N06
+    description: Dataset manifests include source, time range, schema version, missingness, transformations, and content hash.
+    work_type: new
+    mandatory: true
+    status: not_started
+    legacy_refs: []
+    evidence: null
+    waiver_allowed: false
+  - id: P03-N07
+    description: REST and WebSocket use remains below configured safety margins.
+    work_type: new
+    mandatory: true
+    status: not_started
+    legacy_refs: []
+    evidence: null
+    waiver_allowed: false
+  - id: P03-N08
+    description: Seven continuous days of recording meet the founder-approved completeness threshold.
+    work_type: new
+    mandatory: true
+    status: not_started
+    legacy_refs: []
+    evidence: null
+    waiver_allowed: false
+  - id: P03-N09
+    description: Secrets and private user streams are absent from public market datasets.
+    work_type: new
+    mandatory: true
+    status: not_started
+    legacy_refs: []
+    evidence: null
+    waiver_allowed: false
+  - id: P03-N10
+    description: Recorder health, lag, gap, reconnect, throughput, and storage metrics alert correctly.
+    work_type: new
+    mandatory: true
+    status: not_started
+    legacy_refs: []
+    evidence: null
+    waiver_allowed: false
+  founder_demo: Inspect a forced data gap, trace a normalized event to raw evidence, and generate a signed dataset manifest
+    from a continuous capture window.
+  founder_review_questions:
+  - Is the captured dataset honest enough about gaps and transformations to support public proof?
+  exit_criteria: The recorder passes functional tests and the seven-day soak evidence is approved.
+  evidence_packet: *id001
+- id: PHASE-04
+  title: Trading simulator and portfolio accounting on the generic kernel
+  objective: Implement realistic fake-money perpetual trading as a domain adapter using the generic episode runner, evidence
+    model, and verifier hooks.
+  reuse_level: generic_runtime_reuse_domain_new
+  legacy_summary: The generic gym runner and score/reward traces can be reused, but trading accounting, fills, funding, margin,
+    liquidation, and execution realism are new.
+  reuse_without_rebuilding:
+  - Generic episode lifecycle, seed control, reward traces, artifact manifests, verifier hooks, and sandboxing.
+  remaining_implementation:
+  - Trading state/action schemas, portfolio ledger, fill models, fees, funding, margin, liquidation, baselines, and simulation
+    disclosures.
+  review_required: true
+  allowed_states:
+  - draft
+  - in_progress
+  - auto_checks_failed
+  - auto_checks_passed
+  - awaiting_founder_review
+  - approved
+  - changes_requested
+  - rejected
+  - complete
+  - blocked
+  complete_when:
+  - all_mandatory_checks_pass
+  - founder_decision_approved
+  automated_commands:
+  - pnpm test:portfolio-ledger
+  - pnpm test:orders
+  - pnpm test:funding-fees
+  - pnpm test:liquidation
+  - pnpm test:fill-model
+  - pnpm test:golden-scenarios
+  - pnpm test:trading-replay:e2e
+  checks:
+  - id: P04-R01
+    description: Trading episodes run through the generic DomainAdapter and existing episode runner rather than a parallel
+      orchestrator.
+    work_type: reuse_verify
+    mandatory: true
+    status: verification_required
+    legacy_refs:
+    - docs/plans/2026-06-15-rl-gyms-and-verifiers-prd-checklist.md:417-426
+    evidence: null
+    waiver_allowed: false
+  - id: P04-R02
+    description: Trading runs emit the same canonical run manifest, reward trace, and evidence-bundle structures as the reference
+      adapter.
+    work_type: reuse_verify
+    mandatory: true
+    status: verification_required
+    legacy_refs:
+    - docs/plans/2026-06-15-rl-gyms-and-verifiers-prd-checklist.md:219-231
+    evidence: null
+    waiver_allowed: false
+  - id: P04-N01
+    description: Cash, collateral, positions, realized PnL, unrealized PnL, fees, and funding reconcile at every step.
+    work_type: new
+    mandatory: true
+    status: not_started
+    legacy_refs: []
+    evidence: null
+    waiver_allowed: false
+  - id: P04-N02
+    description: Tick, lot, minimum-notional, leverage, margin, and reduce-only constraints are enforced.
+    work_type: new
+    mandatory: true
+    status: not_started
+    legacy_refs: []
+    evidence: null
+    waiver_allowed: false
+  - id: P04-N03
+    description: No fill occurs at a price unavailable under the selected fill model.
+    work_type: new
+    mandatory: true
+    status: not_started
+    legacy_refs: []
+    evidence: null
+    waiver_allowed: false
+  - id: P04-N04
+    description: Partial fills, cancellations, and order expiry behave deterministically.
+    work_type: new
+    mandatory: true
+    status: not_started
+    legacy_refs: []
+    evidence: null
+    waiver_allowed: false
+  - id: P04-N05
+    description: Liquidation and margin fixtures match hand-calculated expected outcomes.
+    work_type: new
+    mandatory: true
+    status: not_started
+    legacy_refs: []
+    evidence: null
+    waiver_allowed: false
+  - id: P04-N06
+    description: Data outages pause or reject actions according to protocol.
+    work_type: new
+    mandatory: true
+    status: not_started
+    legacy_refs: []
+    evidence: null
+    waiver_allowed: false
+  - id: P04-N07
+    description: Cost-free and cost-inclusive results differ as expected for golden scenarios.
+    work_type: new
+    mandatory: true
+    status: not_started
+    legacy_refs: []
+    evidence: null
+    waiver_allowed: false
+  - id: P04-N08
+    description: Cash, buy-and-hold, random, and simple moving-average baselines reproduce from frozen manifests.
+    work_type: new
+    mandatory: true
+    status: not_started
+    legacy_refs: []
+    evidence: null
+    waiver_allowed: false
+  - id: P04-N09
+    description: Candidates cannot change the fill, fee, data-quality, or risk model during evaluation.
+    work_type: new
+    mandatory: true
+    status: not_started
+    legacy_refs: []
+    evidence: null
+    waiver_allowed: false
+  - id: P04-N10
+    description: Scorecards label simulation tier, capital, leverage, fees, funding, slippage, latency, and data quality.
+    work_type: new
+    mandatory: true
+    status: not_started
+    legacy_refs: []
+    evidence: null
+    waiver_allowed: false
+  - id: P04-N11
+    description: Simulation and hypothetical-result disclosures appear beside every performance view.
+    work_type: new
+    mandatory: true
+    status: not_started
+    legacy_refs: []
+    evidence: null
+    waiver_allowed: false
+  founder_demo: Run a hand-calculated BTC scenario, inspect every ledger entry, then switch to a more conservative fill model
+    and show the score change.
+  founder_review_questions:
+  - Are the trading assumptions conservative and understandable enough for public competition?
+  exit_criteria: Golden accounting, execution, and liquidation tests pass and the founder approves the default simulation
+    assumptions.
+  evidence_packet: *id001
+- id: PHASE-05
+  title: Trading Agent Studio on existing Forge, skills, and agent runtimes
+  objective: Compose the already-built Forge, imported-agent, skill, package, and sandbox capabilities into a simple trading-agent
+    workflow instead of rebuilding an agent platform.
+  reuse_level: substantial_reuse
+  legacy_summary: Forge dashboard/model/training/eval surfaces, Hermes/OpenClaw adapters, normalized agent harnesses, secret
+    controls, marketplace gates, skill schemas, and many sandbox controls are strongly represented as complete in the legacy
+    tracker.
+  reuse_without_rebuilding:
+  - Forge dashboard and packaging, model registry, trainer abstraction, base-vs-adapter evaluation, imported-agent harnesses,
+    connector health, permission denial, secret isolation, skill registry, and sandbox runtime.
+  remaining_implementation:
+  - Add the trading agent manifest/action contract and starter templates.
+  - Unify native/imported-agent permissions with skill tool scopes.
+  - Complete a first-run UX and evidence-compatible local/hosted execution path.
+  - Do not make the unfinished generic router a blocker.
+  review_required: true
+  allowed_states:
+  - draft
+  - in_progress
+  - auto_checks_failed
+  - auto_checks_passed
+  - awaiting_founder_review
+  - approved
+  - changes_requested
+  - rejected
+  - complete
+  - blocked
+  complete_when:
+  - all_mandatory_checks_pass
+  - founder_decision_approved
+  automated_commands:
+  - pnpm test:agent-manifest
+  - pnpm test:action-schema
+  - pnpm test:sandbox-security
+  - pnpm test:permissions
+  - pnpm test:local-hosted-compatibility
+  - pnpm test:malicious-agent-fixtures
+  - pnpm test:trading-agent-starter:e2e
+  checks:
+  - id: P05-R01
+    description: Verified Forge dashboard, model registry, training backend, evaluation, and export capabilities pass regression
+      smoke tests.
+    work_type: reuse_verify
+    mandatory: true
+    status: verification_required
+    legacy_refs:
+    - docs/plans/2026-06-17-fractal-forge-local-engine-prd.md:22-32
+    - docs/plans/2026-06-17-fractal-forge-local-engine-prd.md:195-208
+    - docs/plans/2026-06-17-fractal-forge-local-engine-prd.md:353-381
+    - docs/plans/2026-06-17-fractal-forge-local-engine-prd.md:387-405
+    evidence: null
+    waiver_allowed: false
+  - id: P05-R02
+    description: Verified Hermes/OpenClaw agent registration, harness mapping, permission denial, verifier/gym execution,
+      and fallback pass regression tests.
+    work_type: reuse_verify
+    mandatory: true
+    status: verification_required
+    legacy_refs:
+    - docs/plans/2026-06-17-hermes-openclaw-agent-integration-prd.md:27-36
+    - docs/plans/2026-06-17-hermes-openclaw-agent-integration-prd.md:137-190
+    - docs/plans/2026-06-17-hermes-openclaw-agent-integration-prd.md:279-290
+    evidence: null
+    waiver_allowed: false
+  - id: P05-R03
+    description: Verified skill schemas, skill packs, ingestion, and retrieval work without trading-specific forks.
+    work_type: reuse_verify
+    mandatory: true
+    status: verification_required
+    legacy_refs:
+    - docs/plans/2026-06-19-digital-employee-skills-rag-prd.md:76-102
+    - docs/plans/2026-06-19-digital-employee-skills-rag-prd.md:125-130
+    - docs/plans/2026-06-19-digital-employee-skills-rag-prd.md:151-243
+    evidence: null
+    waiver_allowed: false
+  - id: P05-R04
+    description: Verified sandbox defaults deny network and undeclared side effects while enforcing quotas.
+    work_type: reuse_verify
+    mandatory: true
+    status: verification_required
+    legacy_refs:
+    - docs/plans/2026-06-15-rl-gyms-and-verifiers-prd-checklist.md:219-231
+    - docs/plans/2026-06-15-rl-gyms-and-verifiers-prd-checklist.md:249-263
+    evidence: null
+    waiver_allowed: false
+  - id: P05-N01
+    description: TradingAgentManifest extends the canonical AgentPackage/AgentHarness instead of defining a duplicate agent
+      model.
+    work_type: extend
+    mandatory: true
+    status: not_started
+    legacy_refs: []
+    evidence: null
+    waiver_allowed: false
+  - id: P05-N02
+    description: Agents can emit only the declared trading action schema and invalid fields are rejected before simulation.
+    work_type: new
+    mandatory: true
+    status: not_started
+    legacy_refs: []
+    evidence: null
+    waiver_allowed: false
+  - id: P05-N03
+    description: 'At least three starter agents run: no-trade, moving-average, and risk-guardian.'
+    work_type: new
+    mandatory: true
+    status: not_started
+    legacy_refs: []
+    evidence: null
+    waiver_allowed: false
+  - id: P05-N04
+    description: Native, Hermes, OpenClaw, and local-model agents use one permission decision format and one denied-event
+      schema.
+    work_type: extend
+    mandatory: true
+    status: not_started
+    legacy_refs:
+    - docs/plans/2026-06-17-hermes-openclaw-agent-integration-prd.md:194-203
+    - docs/plans/2026-06-19-digital-employee-skills-rag-prd.md:294-325
+    evidence: null
+    waiver_allowed: false
+  - id: P05-N05
+    description: Local and hosted runs produce evidence bundles that are semantically compatible.
+    work_type: extend
+    mandatory: true
+    status: not_started
+    legacy_refs: []
+    evidence: null
+    waiver_allowed: false
+  - id: P05-N06
+    description: Agent, prompt, model, skill, tool, dataset, and dependency versions freeze at candidate submission.
+    work_type: new
+    mandatory: true
+    status: not_started
+    legacy_refs: []
+    evidence: null
+    waiver_allowed: false
+  - id: P05-N07
+    description: A malicious fixture cannot modify protocol, verifier, risk policy, or hidden evaluation state.
+    work_type: new
+    mandatory: true
+    status: not_started
+    legacy_refs: []
+    evidence: null
+    waiver_allowed: false
+  - id: P05-N08
+    description: A first-time user modifies and runs a starter agent, then interprets its scorecard in under 20 minutes without
+      staff control.
+    work_type: new
+    mandatory: true
+    status: not_started
+    legacy_refs: []
+    evidence: null
+    waiver_allowed: false
+  - id: P05-N09
+    description: Full specialist-router filters, ranker, route API, and explanations are explicitly deferred from the first
+      trading thin slice unless a user journey requires them.
+    work_type: decision
+    mandatory: true
+    status: not_started
+    legacy_refs:
+    - docs/plans/2026-06-14-forge-specialist-agent-router-checklist.md:109-188
+    evidence: null
+    waiver_allowed: false
+  founder_demo: Import one external agent and one native starter, deny an undeclared tool, run both through the same simulation
+    contract, and export comparable evidence bundles.
+  founder_review_questions:
+  - Is agent creation simple enough while clearly reusing the existing Forge and agent-runtime systems?
+  - Do you approve deferring the unfinished general router from the trading MVP?
+  exit_criteria: The first-run trading-agent journey works for native and imported agents and all permission/sandbox regressions
+    pass.
+  evidence_packet: *id001
+- id: PHASE-06
+  title: Trading verifier pack and hidden evaluation on the existing verifier engine
+  objective: Reuse the existing verifier/gym/scorecard infrastructure and add only the trading-specific adversarial evaluations
+    required for credible public proof.
+  reuse_level: substantial_reuse_hardening_required
+  legacy_summary: Verifier packages, suites, scorecards, baseline runs, public/private controls, hidden holdout definitions,
+    score provenance, and training-loop use are substantially checked. Launch acceptance, isolation, dry-run UX, flaky detection,
+    and several hard-failure controls remain open.
+  reuse_without_rebuilding:
+  - Verifier runtime, suite packaging, baseline comparisons, scorecards, public/private disclosure, hidden episode metadata,
+    calibration, score provenance, batch runs, and improvement feedback.
+  remaining_implementation:
+  - Implement trading-specific verifiers and leakage attacks.
+  - Harden holdout isolation and probing defenses.
+  - Close launch-level privacy and sandbox acceptance criteria.
+  review_required: true
+  allowed_states:
+  - draft
+  - in_progress
+  - auto_checks_failed
+  - auto_checks_passed
+  - awaiting_founder_review
+  - approved
+  - changes_requested
+  - rejected
+  - complete
+  - blocked
+  complete_when:
+  - all_mandatory_checks_pass
+  - founder_decision_approved
+  automated_commands:
+  - pnpm test:verifiers
+  - pnpm test:leakage-adversarial
+  - pnpm test:hidden-holdout-isolation
+  - pnpm test:scorecard-reproduction
+  - pnpm test:ranking
+  - pnpm test:overfit-strategy
+  - pnpm test:public-scorecard-privacy
+  checks:
+  - id: P06-R01
+    description: Existing verifier packages, suite execution, baseline runs, scorecards, and score provenance pass regression
+      tests.
+    work_type: reuse_verify
+    mandatory: true
+    status: verification_required
+    legacy_refs:
+    - docs/plans/2026-06-15-rl-gyms-and-verifiers-prd-checklist.md:64-84
+    - docs/plans/2026-06-15-rl-gyms-and-verifiers-prd-checklist.md:115-127
+    - docs/plans/2026-06-15-rl-gyms-and-verifiers-prd-checklist.md:235-245
+    evidence: null
+    waiver_allowed: false
+  - id: P06-R02
+    description: Existing public/private scorecard controls and immutable package versions pass disclosure regression tests.
+    work_type: reuse_verify
+    mandatory: true
+    status: verification_required
+    legacy_refs:
+    - docs/plans/2026-06-15-rl-gyms-and-verifiers-prd-checklist.md:163-172
+    evidence: null
+    waiver_allowed: false
+  - id: P06-R03
+    description: Existing hidden holdout episode metadata remains hidden from the candidate and seller interfaces.
+    work_type: reuse_verify
+    mandatory: true
+    status: verification_required
+    legacy_refs:
+    - docs/plans/2026-06-15-rl-gyms-and-verifiers-prd-checklist.md:88-111
+    evidence: null
+    waiver_allowed: false
+  - id: P06-R04
+    description: Existing base-vs-adapter and agent-version comparison flows can compare trading-agent versions without special-case
+      UI.
+    work_type: reuse_verify
+    mandatory: true
+    status: verification_required
+    legacy_refs:
+    - docs/plans/2026-06-17-fractal-forge-local-engine-prd.md:387-405
+    - docs/plans/2026-06-15-rl-gyms-and-verifiers-prd-checklist.md:430-436
+    evidence: null
+    waiver_allowed: false
+  - id: P06-N01
+    description: Every required trading verifier has known-positive, known-negative, and adversarial fixtures.
+    work_type: new
+    mandatory: true
+    status: not_started
+    legacy_refs: []
+    evidence: null
+    waiver_allowed: false
+  - id: P06-N02
+    description: Look-ahead, survivorship, label, overlap, and parameter-selection leakage fixtures are detected.
+    work_type: new
+    mandatory: true
+    status: not_started
+    legacy_refs: []
+    evidence: null
+    waiver_allowed: false
+  - id: P06-N03
+    description: Accounting corruption, impossible fills, omitted fees/funding, and stale-data trading fail verified status.
+    work_type: new
+    mandatory: true
+    status: not_started
+    legacy_refs: []
+    evidence: null
+    waiver_allowed: false
+  - id: P06-N04
+    description: Private evaluation datasets and answers are inaccessible to candidate code, logs, errors, and timing channels
+      within the threat model.
+    work_type: new
+    mandatory: true
+    status: not_started
+    legacy_refs: []
+    evidence: null
+    waiver_allowed: false
+  - id: P06-N05
+    description: Scorecard calculations reproduce from the evidence bundle and pinned verifier versions.
+    work_type: extend
+    mandatory: true
+    status: not_started
+    legacy_refs: []
+    evidence: null
+    waiver_allowed: false
+  - id: P06-N06
+    description: Multiple windows and regimes, confidence limits, sample size, turnover, drawdown, and capacity warnings are
+      visible.
+    work_type: new
+    mandatory: true
+    status: not_started
+    legacy_refs: []
+    evidence: null
+    waiver_allowed: false
+  - id: P06-N07
+    description: Leaderboard ranking uses risk, robustness, costs, uncertainty, and violations rather than raw PnL alone.
+    work_type: new
+    mandatory: true
+    status: not_started
+    legacy_refs: []
+    evidence: null
+    waiver_allowed: false
+  - id: P06-N08
+    description: Submission quotas, cooldowns, attempt history, and delayed feedback reduce holdout probing.
+    work_type: new
+    mandatory: true
+    status: not_started
+    legacy_refs: []
+    evidence: null
+    waiver_allowed: false
+  - id: P06-N09
+    description: A deliberately overfit strategy passes public training data but fails private promotion.
+    work_type: new
+    mandatory: true
+    status: not_started
+    legacy_refs: []
+    evidence: null
+    waiver_allowed: false
+  - id: P06-N10
+    description: Internal adversarial tests report zero sandbox escapes before public launch.
+    work_type: extend
+    mandatory: true
+    status: not_started
+    legacy_refs:
+    - docs/plans/2026-06-15-rl-gyms-and-verifiers-prd-checklist.md:440-447
+    evidence: null
+    waiver_allowed: false
+  - id: P06-N11
+    description: Public scorecards include versions, manifests, cost, latency, privacy status, assumptions, and no private
+      traces or hidden answers.
+    work_type: extend
+    mandatory: true
+    status: not_started
+    legacy_refs:
+    - docs/plans/2026-06-15-rl-gyms-and-verifiers-prd-checklist.md:440-447
+    evidence: null
+    waiver_allowed: false
+  founder_demo: Submit a profitable but leaked strategy, show its preliminary score, then show the hidden-evaluation rejection
+    and the exact non-secret reason.
+  founder_review_questions:
+  - Would a skeptical builder understand and be able to challenge why an agent passed or failed?
+  exit_criteria: Trading verifier and holdout hardening tests pass, public-card privacy passes, and founder accepts the ranking
+    policy.
+  evidence_packet: *id001
+- id: PHASE-07
+  title: Proof registry and minimal chain commitments around existing digests
+  objective: Wrap existing immutable package digests and artifact cards in a portable research proof manifest and minimal
+    chain adapter, without implementing the full Graph OS or a custom chain.
+  reuse_level: partial_reuse
+  legacy_summary: Signed package digests, immutable versions, artifact cards/catalog, public/private controls, and scorecard
+    attachments are present. The graph, proof registry, chain commitments, reward settlement, and explorer are not evidenced
+    as implemented.
+  reuse_without_rebuilding:
+  - Package hashes, signed digests, artifact cards, visibility tiers, scorecard rendering, and agent listing metadata.
+  remaining_implementation:
+  - Proof manifest, Merkle commitment, reviewer grants, chain adapter, finality monitor, verification CLI, and minimal proof
+    explorer.
+  - Keep graph projection minimal and relational until PHASE-10.
+  review_required: true
+  allowed_states:
+  - draft
+  - in_progress
+  - auto_checks_failed
+  - auto_checks_passed
+  - awaiting_founder_review
+  - approved
+  - changes_requested
+  - rejected
+  - complete
+  - blocked
+  complete_when:
+  - all_mandatory_checks_pass
+  - founder_decision_approved
+  automated_commands:
+  - pnpm test:proof-manifest
+  - pnpm test:merkle-integrity
+  - pnpm test:chain-adapter
+  - pnpm test:disclosure-boundaries
+  - pnpm test:proof-cli:e2e
+  - pnpm test:chain-outage-recovery
+  checks:
+  - id: P07-R01
+    description: Existing package digests, immutable versions, artifact cards, and public/private controls pass regression
+      tests.
+    work_type: reuse_verify
+    mandatory: true
+    status: verification_required
+    legacy_refs:
+    - docs/plans/2026-06-15-rl-gyms-and-verifiers-prd-checklist.md:163-172
+    evidence: null
+    waiver_allowed: false
+  - id: P07-N01
+    description: Every public proof resolves to a signed ProofManifest that references immutable evidence and verifier versions.
+    work_type: new
+    mandatory: true
+    status: not_started
+    legacy_refs: []
+    evidence: null
+    waiver_allowed: false
+  - id: P07-N02
+    description: Changing any committed artifact is detected by the independent verification CLI.
+    work_type: new
+    mandatory: true
+    status: not_started
+    legacy_refs: []
+    evidence: null
+    waiver_allowed: false
+  - id: P07-N03
+    description: A chain receipt maps to the correct proof manifest and network/finality metadata.
+    work_type: new
+    mandatory: true
+    status: not_started
+    legacy_refs: []
+    evidence: null
+    waiver_allowed: false
+  - id: P07-N04
+    description: Private artifacts are not leaked through metadata, URLs, logs, events, cache keys, or error messages.
+    work_type: new
+    mandatory: true
+    status: not_started
+    legacy_refs: []
+    evidence: null
+    waiver_allowed: false
+  - id: P07-N05
+    description: Reviewer-access grants can be issued, audited, expired, and revoked without altering the original commitment.
+    work_type: new
+    mandatory: true
+    status: not_started
+    legacy_refs: []
+    evidence: null
+    waiver_allowed: false
+  - id: P07-N06
+    description: Proof level is calculated from evidence and review state rather than chosen by the author.
+    work_type: new
+    mandatory: true
+    status: not_started
+    legacy_refs: []
+    evidence: null
+    waiver_allowed: false
+  - id: P07-N07
+    description: Public proof cards show assumptions, limitations, disclosure tier, and reproduction status.
+    work_type: extend
+    mandatory: true
+    status: not_started
+    legacy_refs: []
+    evidence: null
+    waiver_allowed: false
+  - id: P07-N08
+    description: Explorer shows protocol, run, verifier, proof, review, challenge, replication, and version relationships
+      using a minimal projection.
+    work_type: new
+    mandatory: true
+    status: not_started
+    legacy_refs: []
+    evidence: null
+    waiver_allowed: false
+  - id: P07-N09
+    description: A proof can be exported and verified without trusting the web UI or hosted API.
+    work_type: new
+    mandatory: true
+    status: not_started
+    legacy_refs: []
+    evidence: null
+    waiver_allowed: false
+  - id: P07-N10
+    description: Chain outages queue commitments without losing signed local evidence or changing proof order.
+    work_type: new
+    mandatory: true
+    status: not_started
+    legacy_refs: []
+    evidence: null
+    waiver_allowed: false
+  - id: P07-D01
+    description: A custom layer-one chain remains out of scope; only an adapter to an established chain is authorized.
+    work_type: decision
+    mandatory: true
+    status: not_started
+    legacy_refs: []
+    evidence: null
+    waiver_allowed: false
+  founder_demo: Publish a committed-private proof, verify it locally, grant and revoke reviewer access, then queue a commitment
+    during a simulated chain outage.
+  founder_review_questions:
+  - Does public proof create verifiability without forcing builders to reveal proprietary strategies?
+  exit_criteria: Portable proof verification works, disclosure tests pass, and founder approves the commitment chain and proof-card
+    defaults.
+  evidence_packet: *id001
+- id: PHASE-08
+  title: Agent Arena and first-user launch using existing cards and scorecards
+  objective: Compose existing agent cards, scorecards, package freezes, and evaluation runs into a credible fake-money season
+    that attracts real builders.
+  reuse_level: partial_reuse
+  legacy_summary: Artifact catalogs, cards, scorecard attachment, sandbox trials, imported-agent listing gates, outcome records,
+    and privacy controls exist. Season state, robust ranking, external launch acceptance, and contribution rewards are new.
+  reuse_without_rebuilding:
+  - Agent/artifact cards, scorecard renderer, evaluation runner, package freezing, imported-agent support, outcome records,
+    metering records, and privacy controls.
+  remaining_implementation:
+  - Season rules/state machine, submission freeze, private final, robust leaderboard, appeals, research credits, postmortems,
+    and launch operations.
+  review_required: true
+  allowed_states:
+  - draft
+  - in_progress
+  - auto_checks_failed
+  - auto_checks_passed
+  - awaiting_founder_review
+  - approved
+  - changes_requested
+  - rejected
+  - complete
+  - blocked
+  complete_when:
+  - all_mandatory_checks_pass
+  - founder_decision_approved
+  automated_commands:
+  - pnpm test:season-state-machine
+  - pnpm test:submission-freeze
+  - pnpm test:leaderboard
+  - pnpm test:reward-allocation
+  - pnpm test:share-card-disclosures
+  - pnpm test:arena:e2e
+  checks:
+  - id: P08-R01
+    description: Existing agent/artifact cards render verified suite scorecards for both native and imported agents.
+    work_type: reuse_verify
+    mandatory: true
+    status: verification_required
+    legacy_refs:
+    - docs/plans/2026-06-15-rl-gyms-and-verifiers-prd-checklist.md:163-172
+    - docs/plans/2026-06-17-hermes-openclaw-agent-integration-prd.md:296-323
+    evidence: null
+    waiver_allowed: false
+  - id: P08-R02
+    description: Existing outcome and privacy records attach to arena submissions without retaining raw private prompts by
+      default.
+    work_type: reuse_verify
+    mandatory: true
+    status: verification_required
+    legacy_refs:
+    - docs/plans/2026-06-14-forge-specialist-agent-router-checklist.md:253-283
+    evidence: null
+    waiver_allowed: false
+  - id: P08-N01
+    description: Season rules are immutable after submission opens except through a visible, signed emergency amendment.
+    work_type: new
+    mandatory: true
+    status: not_started
+    legacy_refs: []
+    evidence: null
+    waiver_allowed: false
+  - id: P08-N02
+    description: Candidate submissions freeze all material dependencies and attempt history.
+    work_type: new
+    mandatory: true
+    status: not_started
+    legacy_refs: []
+    evidence: null
+    waiver_allowed: false
+  - id: P08-N03
+    description: Private holdout access is isolated and audited.
+    work_type: new
+    mandatory: true
+    status: not_started
+    legacy_refs: []
+    evidence: null
+    waiver_allowed: false
+  - id: P08-N04
+    description: Leaderboard exposes return, drawdown, tail risk, costs, robustness, uncertainty, capacity, and policy violations.
+    work_type: new
+    mandatory: true
+    status: not_started
+    legacy_refs: []
+    evidence: null
+    waiver_allowed: false
+  - id: P08-N05
+    description: Disqualified agents receive a non-secret reason and appeal path.
+    work_type: new
+    mandatory: true
+    status: not_started
+    legacy_refs: []
+    evidence: null
+    waiver_allowed: false
+  - id: P08-N06
+    description: Rewards can go to agent, verifier, replication, security, dataset, and useful negative-result contributions.
+    work_type: new
+    mandatory: true
+    status: not_started
+    legacy_refs: []
+    evidence: null
+    waiver_allowed: false
+  - id: P08-N07
+    description: At least 20 external builders submit a valid candidate.
+    work_type: new
+    mandatory: true
+    status: not_started
+    legacy_refs: []
+    evidence: null
+    waiver_allowed: false
+  - id: P08-N08
+    description: At least 70% of accepted submissions complete automated evaluation.
+    work_type: new
+    mandatory: true
+    status: not_started
+    legacy_refs: []
+    evidence: null
+    waiver_allowed: false
+  - id: P08-N09
+    description: At least five users publish a proof card or postmortem.
+    work_type: new
+    mandatory: true
+    status: not_started
+    legacy_refs: []
+    evidence: null
+    waiver_allowed: false
+  - id: P08-N10
+    description: No unresolved critical security or data-integrity incident exists at launch review.
+    work_type: new
+    mandatory: true
+    status: not_started
+    legacy_refs: []
+    evidence: null
+    waiver_allowed: false
+  - id: P08-N11
+    description: Moderated interviews show users view the scorecard as more credible than a PnL screenshot.
+    work_type: new
+    mandatory: true
+    status: not_started
+    legacy_refs: []
+    evidence: null
+    waiver_allowed: false
+  - id: P08-N12
+    description: Simulation limitations are visible in every shareable performance view.
+    work_type: new
+    mandatory: true
+    status: not_started
+    legacy_refs: []
+    evidence: null
+    waiver_allowed: false
+  founder_demo: Run a miniature season from creation through frozen submission, hidden evaluation, robust ranking, proof publication,
+    appeal, and credit allocation.
+  founder_review_questions:
+  - Is the Arena credible enough to attract serious builders without encouraging reckless or misleading behavior?
+  exit_criteria: Season 0 acceptance metrics pass and founder approves public launch.
+  evidence_packet: *id001
+- id: PHASE-09
+  title: Live shadow mode and Hyperliquid testnet connector using the existing runtime-adapter pattern
+  objective: Reuse the normalized external-runtime, health, secret, permission, and fallback patterns to add venue connectivity
+    without exposing order submission in shadow mode.
+  reuse_level: runtime_pattern_reuse_domain_new
+  legacy_summary: External agent connector contracts, secret encryption, read-only health checks, permission denial, fallback,
+    and default no-wallet-spend behavior are strongly checked. Hyperliquid market/account reconciliation and shadow/testnet
+    execution are new.
+  reuse_without_rebuilding:
+  - Connector interface pattern, encrypted secrets, server-side invocation, health checks, permission events, fallback status,
+    runtime telemetry, and default no wallet spend.
+  remaining_implementation:
+  - Venue adapter, live shadow portfolio, testnet order path, reconciliation, stale-data stops, emergency controls, and nonce/order
+    lifecycle handling.
+  review_required: true
+  allowed_states:
+  - draft
+  - in_progress
+  - auto_checks_failed
+  - auto_checks_passed
+  - awaiting_founder_review
+  - approved
+  - changes_requested
+  - rejected
+  - complete
+  - blocked
+  complete_when:
+  - all_mandatory_checks_pass
+  - founder_decision_approved
+  automated_commands:
+  - pnpm test:shadow-mainnet-isolation
+  - pnpm test:stale-data-stop
+  - pnpm test:connector-secrets
+  - pnpm test:testnet-orders
+  - pnpm test:reconciliation
+  - pnpm test:emergency-stop
+  checks:
+  - id: P09-R01
+    description: Venue connector uses the verified runtime-adapter health, secret, permission, and fallback conventions rather
+      than a separate secret path.
+    work_type: reuse_verify
+    mandatory: true
+    status: verification_required
+    legacy_refs:
+    - docs/plans/2026-06-17-hermes-openclaw-agent-integration-prd.md:137-190
+    - docs/plans/2026-06-17-hermes-openclaw-agent-integration-prd.md:194-203
+    - docs/plans/2026-06-17-hermes-openclaw-agent-integration-prd.md:279-290
+    evidence: null
+    waiver_allowed: false
+  - id: P09-R02
+    description: Shadow mode retains the verified default of no wallet spend and no state-changing venue calls.
+    work_type: reuse_verify
+    mandatory: true
+    status: verification_required
+    legacy_refs:
+    - docs/plans/2026-06-17-hermes-openclaw-agent-integration-prd.md:194-203
+    evidence: null
+    waiver_allowed: false
+  - id: P09-N01
+    description: Shadow mode consumes live public market data but cannot submit, sign, or simulate submitting a mainnet order.
+    work_type: new
+    mandatory: true
+    status: not_started
+    legacy_refs: []
+    evidence: null
+    waiver_allowed: false
+  - id: P09-N02
+    description: Shadow decisions record observation, proposed action, rejection reason, simulated fill, and market outcome.
+    work_type: new
+    mandatory: true
+    status: not_started
+    legacy_refs: []
+    evidence: null
+    waiver_allowed: false
+  - id: P09-N03
+    description: Stale, gapped, or degraded data pauses decision and execution paths.
+    work_type: new
+    mandatory: true
+    status: not_started
+    legacy_refs: []
+    evidence: null
+    waiver_allowed: false
+  - id: P09-N04
+    description: Testnet credentials and signing material never reach browser or model processes.
+    work_type: new
+    mandatory: true
+    status: not_started
+    legacy_refs: []
+    evidence: null
+    waiver_allowed: false
+  - id: P09-N05
+    description: Testnet order create, cancel, reduce-only, and status flows pass fixtures and integration tests.
+    work_type: new
+    mandatory: true
+    status: not_started
+    legacy_refs: []
+    evidence: null
+    waiver_allowed: false
+  - id: P09-N06
+    description: Local state reconciles with venue account and open-order state after reconnect and restart.
+    work_type: new
+    mandatory: true
+    status: not_started
+    legacy_refs: []
+    evidence: null
+    waiver_allowed: false
+  - id: P09-N07
+    description: Rate-limit, nonce, retry, duplicate, and rejected-order behavior is explicit and idempotent.
+    work_type: new
+    mandatory: true
+    status: not_started
+    legacy_refs: []
+    evidence: null
+    waiver_allowed: false
+  - id: P09-N08
+    description: Emergency stop prevents new actions and cancels eligible outstanding test orders.
+    work_type: new
+    mandatory: true
+    status: not_started
+    legacy_refs: []
+    evidence: null
+    waiver_allowed: false
+  - id: P09-N09
+    description: Shadow/testnet scorecards remain separate from historical simulation and any future live results.
+    work_type: new
+    mandatory: true
+    status: not_started
+    legacy_refs: []
+    evidence: null
+    waiver_allowed: false
+  - id: P09-N10
+    description: Seven continuous days of shadow operation complete without an unauthorized state-changing call.
+    work_type: new
+    mandatory: true
+    status: not_started
+    legacy_refs: []
+    evidence: null
+    waiver_allowed: false
+  - id: P09-N11
+    description: Incident and rollback runbooks are tested in a game day.
+    work_type: new
+    mandatory: true
+    status: not_started
+    legacy_refs: []
+    evidence: null
+    waiver_allowed: false
+  founder_demo: Run live shadow decisions, induce stale data, show the pause, then execute and reconcile a bounded testnet
+    order while proving mainnet submission is impossible.
+  founder_review_questions:
+  - Is the connector operationally trustworthy enough to proceed to full research-network features, while still prohibiting
+    real capital?
+  exit_criteria: Shadow soak, testnet integration, reconciliation, secret, and emergency-stop tests pass.
+  evidence_packet: *id001
+- id: PHASE-10
+  title: Minimal research graph, review, replication, reputation, and rewards
+  objective: Build the smallest domain-neutral graph and reputation layer needed to turn proofs, reviews, replications, and
+    downstream reuse into explainable reputation.
+  reuse_level: mostly_new
+  legacy_summary: The Graph Operating System tracker is 0/343 checked. Some supporting outcome records, human adjudication,
+    privacy controls, and reward-submission skills exist and can be reused, but graph storage, reputation, fraud analysis,
+    replication, and on-chain checkpoints are new.
+  reuse_without_rebuilding:
+  - Routing outcome records, privacy controls, human-review capability, score provenance, reward-submission-preparer skill,
+    and proof manifests.
+  remaining_implementation:
+  - Minimal graph schema/storage, review/conflict rules, replication, reputation events, fraud checks, reward gates, explainability,
+    and checkpoint commitments.
+  - Defer advanced centrality dashboards, DeSci views, and full graph analytics.
+  review_required: true
+  allowed_states:
+  - draft
+  - in_progress
+  - auto_checks_failed
+  - auto_checks_passed
+  - awaiting_founder_review
+  - approved
+  - changes_requested
+  - rejected
+  - complete
+  - blocked
+  complete_when:
+  - all_mandatory_checks_pass
+  - founder_decision_approved
+  automated_commands:
+  - pnpm test:reputation-events
+  - pnpm test:review-conflicts
+  - pnpm test:sybil-fixtures
+  - pnpm test:replication
+  - pnpm test:reward-gates
+  - pnpm test:reputation-explainability
+  - pnpm test:graph-minimal:e2e
+  checks:
+  - id: P10-R01
+    description: Verified run/routing outcome records can link agent, request, run, verifier, and delayed outcome without
+      exposing raw private requests.
+    work_type: reuse_verify
+    mandatory: true
+    status: verification_required
+    legacy_refs:
+    - docs/plans/2026-06-14-forge-specialist-agent-router-checklist.md:253-283
+    evidence: null
+    waiver_allowed: false
+  - id: P10-R02
+    description: Verified reward-submission and human-adjudication components can package evidence for review.
+    work_type: reuse_verify
+    mandatory: true
+    status: verification_required
+    legacy_refs:
+    - docs/plans/2026-06-19-digital-employee-skills-rag-prd.md:76-102
+    - docs/plans/2026-06-15-rl-gyms-and-verifiers-prd-checklist.md:235-245
+    evidence: null
+    waiver_allowed: false
+  - id: P10-N01
+    description: Minimal graph nodes cover Person, Agent, Skill, Dataset, Protocol, Run, Evidence, VerifierRun, Proof, Review,
+      Replication, Reward, and ReputationCheckpoint.
+    work_type: new
+    mandatory: true
+    status: not_started
+    legacy_refs:
+    - docs/plans/2026-06-19-fractal-society-graph-operating-system-prd.md:26-569
+    evidence: null
+    waiver_allowed: false
+  - id: P10-N02
+    description: Minimal graph edges cover created, used, trained_on, evaluated_by, verified_by, reviewed_by, challenged_by,
+      replicated_by, reused_by, rewarded, and signed_by.
+    work_type: new
+    mandatory: true
+    status: not_started
+    legacy_refs:
+    - docs/plans/2026-06-19-fractal-society-graph-operating-system-prd.md:26-569
+    evidence: null
+    waiver_allowed: false
+  - id: P10-N03
+    description: Graph writes are idempotent, tenant-scoped, auditable, and projected from canonical events.
+    work_type: new
+    mandatory: true
+    status: not_started
+    legacy_refs: []
+    evidence: null
+    waiver_allowed: false
+  - id: P10-N04
+    description: Review conflict-of-interest rules reject self-review, direct financial conflict, and configured collusion
+      patterns.
+    work_type: new
+    mandatory: true
+    status: not_started
+    legacy_refs: []
+    evidence: null
+    waiver_allowed: false
+  - id: P10-N05
+    description: A replication references the exact protocol, datasets, environment, agent, and verifier versions it reproduces.
+    work_type: new
+    mandatory: true
+    status: not_started
+    legacy_refs: []
+    evidence: null
+    waiver_allowed: false
+  - id: P10-N06
+    description: Reputation is event-based, explainable by graph paths, reversible after successful challenges, and independent
+      of token balance.
+    work_type: new
+    mandatory: true
+    status: not_started
+    legacy_refs: []
+    evidence: null
+    waiver_allowed: false
+  - id: P10-N07
+    description: Sybil, circular-review, repeated-collaborator, and suspicious reward-loop fixtures trigger warnings or blocks.
+    work_type: new
+    mandatory: true
+    status: not_started
+    legacy_refs: []
+    evidence: null
+    waiver_allowed: false
+  - id: P10-N08
+    description: Rewards release only after configured verifier, review, and challenge-window conditions pass.
+    work_type: new
+    mandatory: true
+    status: not_started
+    legacy_refs: []
+    evidence: null
+    waiver_allowed: false
+  - id: P10-N09
+    description: Useful failed experiments, verifier catches, replications, and downstream protections can earn bounded credit.
+    work_type: new
+    mandatory: true
+    status: not_started
+    legacy_refs: []
+    evidence: null
+    waiver_allowed: false
+  - id: P10-N10
+    description: A public reputation profile reveals evidence paths without leaking private graph content.
+    work_type: new
+    mandatory: true
+    status: not_started
+    legacy_refs: []
+    evidence: null
+    waiver_allowed: false
+  - id: P10-N11
+    description: Graph/reputation checkpoint commitments verify against the off-chain graph snapshot.
+    work_type: new
+    mandatory: true
+    status: not_started
+    legacy_refs: []
+    evidence: null
+    waiver_allowed: false
+  - id: P10-D01
+    description: Advanced graph analytics, DeSci claim views, and a full learned router are deferred until the minimal graph
+      proves useful.
+    work_type: decision
+    mandatory: true
+    status: not_started
+    legacy_refs:
+    - docs/plans/2026-06-19-fractal-society-graph-operating-system-prd.md:26-569
+    evidence: null
+    waiver_allowed: false
+  founder_demo: Trace a proof through review and replication to a reputation update and credit release, then reverse it after
+    a successful challenge and show the explanation path.
+  founder_review_questions:
+  - Is the minimal graph understandable and useful enough to justify expanding toward the full research blockchain?
+  exit_criteria: Minimal graph, review, replication, reputation, fraud, and reward gates pass; founder approves deferred/full
+    graph scope.
+  evidence_packet: *id001
+- id: PHASE-11
+  title: Second-domain portability proof using existing coding gyms and repo skills
+  objective: Prove the pipeline is genuinely general by running software issue repair through the same kernel, artifacts,
+    verifiers, proofs, reviews, and reputation path.
+  reuse_level: partial_reuse
+  legacy_summary: Coding/tool-use gym templates, external-agent evaluation, core repo skills, PRD/API/dashboard auditors,
+    and context-building components are checked. The end-to-end second-domain proof and repository graph implementation are
+    not fully evidenced.
+  reuse_without_rebuilding:
+  - Coding gym template, tool-use runner, repo-map/file-finder/test-selector/change-summary skills, imported agents, sandbox,
+    scorecards, and proof registry.
+  remaining_implementation:
+  - Software-domain adapter, repository fixture, hidden tests, patch evidence, proof-card rendering, and cross-domain architecture
+    enforcement.
+  review_required: true
+  allowed_states:
+  - draft
+  - in_progress
+  - auto_checks_failed
+  - auto_checks_passed
+  - awaiting_founder_review
+  - approved
+  - changes_requested
+  - rejected
+  - complete
+  - blocked
+  complete_when:
+  - all_mandatory_checks_pass
+  - founder_decision_approved
+  automated_commands:
+  - pnpm test:software-adapter
+  - pnpm test:cross-domain-kernel
+  - pnpm test:generic-ui-rendering
+  - pnpm test:software-proof:e2e
+  - pnpm test:coding-gym-regression
+  checks:
+  - id: P11-R01
+    description: Existing coding/tool-use gym templates and seeded runner pass regression tests.
+    work_type: reuse_verify
+    mandatory: true
+    status: verification_required
+    legacy_refs:
+    - docs/plans/2026-06-15-rl-gyms-and-verifiers-prd-checklist.md:417-426
+    evidence: null
+    waiver_allowed: false
+  - id: P11-R02
+    description: Existing repo skills and imported-agent evaluation paths solve a simple fixture without trading dependencies.
+    work_type: reuse_verify
+    mandatory: true
+    status: verification_required
+    legacy_refs:
+    - docs/plans/2026-06-19-digital-employee-skills-rag-prd.md:76-102
+    - docs/plans/2026-06-17-hermes-openclaw-agent-integration-prd.md:27-36
+    evidence: null
+    waiver_allowed: false
+  - id: P11-N01
+    description: Software adapter uses the same DomainAdapter, Protocol, Run, EvidenceBundle, VerifierRun, ProofManifest,
+      Review, and Replication contracts.
+    work_type: new
+    mandatory: true
+    status: not_started
+    legacy_refs: []
+    evidence: null
+    waiver_allowed: false
+  - id: P11-N02
+    description: Architecture tests fail if trading types leak into generic schemas, services, UI components, or gate logic.
+    work_type: new
+    mandatory: true
+    status: not_started
+    legacy_refs: []
+    evidence: null
+    waiver_allowed: false
+  - id: P11-N03
+    description: A seeded repository issue can be solved in a sandbox and checked with public plus hidden tests.
+    work_type: new
+    mandatory: true
+    status: not_started
+    legacy_refs: []
+    evidence: null
+    waiver_allowed: false
+  - id: P11-N04
+    description: Software scorecard reports correctness, test coverage, regression risk, cost, latency, reproducibility, and
+      permission violations.
+    work_type: new
+    mandatory: true
+    status: not_started
+    legacy_refs: []
+    evidence: null
+    waiver_allowed: false
+  - id: P11-N05
+    description: A software proof card publishes and verifies through the same proof registry and chain adapter.
+    work_type: new
+    mandatory: true
+    status: not_started
+    legacy_refs: []
+    evidence: null
+    waiver_allowed: false
+  - id: P11-N06
+    description: A reviewer can challenge and independently replicate the software result.
+    work_type: new
+    mandatory: true
+    status: not_started
+    legacy_refs: []
+    evidence: null
+    waiver_allowed: false
+  - id: P11-N07
+    description: At least one software result creates a valid reputation and downstream-reuse event.
+    work_type: new
+    mandatory: true
+    status: not_started
+    legacy_refs: []
+    evidence: null
+    waiver_allowed: false
+  - id: P11-N08
+    description: A second domain is added through adapter/package registration without modifying the generic kernel.
+    work_type: new
+    mandatory: true
+    status: not_started
+    legacy_refs: []
+    evidence: null
+    waiver_allowed: false
+  founder_demo: Run a hidden-test software issue through an imported agent, publish a proof, replicate it, and show that no
+    trading service was invoked.
+  founder_review_questions:
+  - Does this demonstration justify claiming Fractal Society is a general research pipeline rather than a trading product?
+  exit_criteria: The software adapter passes the same proof path and architecture boundaries as trading.
+  evidence_packet: *id001
+- id: PHASE-12
+  title: "Guarded real-capital canary \u2014 disabled until separately authorized"
+  objective: Permit a tightly bounded live-capital experiment only after a separate signed decision, legal/security review,
+    and all safety preconditions pass.
+  reuse_level: permission_reuse_execution_new
+  legacy_summary: Imported-agent sub-wallet, spend-limit, revocation, permission-denial, and secret-encryption features are
+    claimed complete. Live exchange signing, independent risk firewalls, canary capital controls, and operational authorization
+    are new and remain disabled.
+  reuse_without_rebuilding:
+  - Verified wallet/tool permission records, sub-wallet assignment, spending limits, revocation, denied events, secret isolation,
+    and incident telemetry.
+  remaining_implementation:
+  - Legal review, isolated signer, dedicated venue account/subaccount, risk firewall, canary policy, withdrawals disabled,
+    kill switches, monitoring, and postmortem.
+  review_required: true
+  allowed_states:
+  - draft
+  - in_progress
+  - auto_checks_failed
+  - auto_checks_passed
+  - awaiting_founder_review
+  - approved
+  - changes_requested
+  - rejected
+  - complete
+  - blocked
+  complete_when:
+  - all_mandatory_checks_pass
+  - founder_decision_approved
+  automated_commands: []
+  checks:
+  - id: P12-R01
+    description: Existing sub-wallet, spend-limit, revocation, denial-event, and secret-isolation behavior passes a fresh
+      security regression.
+    work_type: reuse_verify
+    mandatory: true
+    status: verification_required
+    legacy_refs:
+    - docs/plans/2026-06-17-hermes-openclaw-agent-integration-prd.md:194-203
+    - docs/plans/2026-06-17-hermes-openclaw-agent-integration-prd.md:279-290
+    evidence: null
+    waiver_allowed: false
+  - id: P12-D01
+    description: Founder signs APPROVE_LIVE_CANARY for an exact agent, account, venue, jurisdiction, capital limit, time window,
+      and risk policy.
+    work_type: deferred_guard
+    mandatory: true
+    status: blocked
+    legacy_refs: []
+    evidence: null
+    waiver_allowed: false
+  - id: P12-N01
+    description: Specialized legal and compliance review approves the exact product and user flow.
+    work_type: deferred_guard
+    mandatory: true
+    status: blocked
+    legacy_refs: []
+    evidence: null
+    waiver_allowed: false
+  - id: P12-N02
+    description: The model runtime cannot access private keys or submit arbitrary transactions.
+    work_type: deferred_guard
+    mandatory: true
+    status: blocked
+    legacy_refs: []
+    evidence: null
+    waiver_allowed: false
+  - id: P12-N03
+    description: An independent deterministic risk firewall enforces asset allowlist, notional, leverage, daily loss, order
+      rate, and expiry.
+    work_type: deferred_guard
+    mandatory: true
+    status: blocked
+    legacy_refs: []
+    evidence: null
+    waiver_allowed: false
+  - id: P12-N04
+    description: The canary uses a dedicated bounded account or subaccount with no withdrawal or transfer permission.
+    work_type: deferred_guard
+    mandatory: true
+    status: blocked
+    legacy_refs: []
+    evidence: null
+    waiver_allowed: false
+  - id: P12-N05
+    description: User and platform kill switches work during a game day.
+    work_type: deferred_guard
+    mandatory: true
+    status: blocked
+    legacy_refs: []
+    evidence: null
+    waiver_allowed: false
+  - id: P12-N06
+    description: Stale data, venue degradation, reconciliation failure, or policy mismatch pauses all new orders.
+    work_type: deferred_guard
+    mandatory: true
+    status: blocked
+    legacy_refs: []
+    evidence: null
+    waiver_allowed: false
+  - id: P12-N07
+    description: Every signed intent, policy decision, order, fill, rejection, state transition, and incident is auditable.
+    work_type: deferred_guard
+    mandatory: true
+    status: blocked
+    legacy_refs: []
+    evidence: null
+    waiver_allowed: false
+  - id: P12-N08
+    description: Champion/challenger promotion cannot change live code or policy without a new gate.
+    work_type: deferred_guard
+    mandatory: true
+    status: blocked
+    legacy_refs: []
+    evidence: null
+    waiver_allowed: false
+  - id: P12-N09
+    description: Live results are displayed separately from simulation, holdout, shadow, and testnet results.
+    work_type: deferred_guard
+    mandatory: true
+    status: blocked
+    legacy_refs: []
+    evidence: null
+    waiver_allowed: false
+  - id: P12-N10
+    description: A post-canary review decides stop, repeat, expand, or roll back; expansion is never automatic.
+    work_type: deferred_guard
+    mandatory: true
+    status: blocked
+    legacy_refs: []
+    evidence: null
+    waiver_allowed: false
+  founder_demo: Disabled. A future authorized demo must show isolated signing, forced policy rejection, kill switch, reconciliation,
+    and complete audit replay.
+  founder_review_questions:
+  - Do not review for approval until every precondition is evidenced and the exact live canary is specified.
+  exit_criteria: No exit is possible without the separate APPROVE_LIVE_CANARY decision and all blocked checks becoming passed.
+  evidence_packet: *id001

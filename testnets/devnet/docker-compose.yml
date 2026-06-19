@@ -6,7 +6,7 @@ services:
       context: ../..
       dockerfile: testnets/devnet/Dockerfile
     ports:
-      - "8545:8545"
+      - "127.0.0.1:18545:8545"
       - "9010:9010/udp"
     environment:
       FRACTAL_RPC_ADDR: "0.0.0.0:8545"
@@ -20,7 +20,7 @@ services:
       context: ../..
       dockerfile: testnets/devnet/Dockerfile.faucet
     ports:
-      - "8088:8088"
+      - "127.0.0.1:18088:8088"
     environment:
       FRACTAL_RPC_URL: "http://node:8545"
       FAUCET_BIND: "0.0.0.0:8088"

@@ -235,8 +235,7 @@ impl TimeoutPool {
     }
 
     pub fn prune_views_before(&mut self, min_keep_view: u64) {
-        self.entries
-            .retain(|(v, _), _| *v >= min_keep_view);
+        self.entries.retain(|(v, _), _| *v >= min_keep_view);
     }
 }
 
@@ -273,9 +272,7 @@ pub fn verify_formed_timeout_cert(
         view: formed.view,
         high_qc: formed.high_qc.clone(),
     };
-    formed
-        .aggregate_sig
-        .verify(&body.sign_bytes(), &pubkeys)?;
+    formed.aggregate_sig.verify(&body.sign_bytes(), &pubkeys)?;
     Ok(())
 }
 
@@ -334,7 +331,10 @@ mod tests {
             0,
             &sk,
         );
-        assert_eq!(pool.record(t.clone(), &vset), RecordTimeoutOutcome::Accepted);
+        assert_eq!(
+            pool.record(t.clone(), &vset),
+            RecordTimeoutOutcome::Accepted
+        );
         assert_eq!(
             pool.record(t, &vset),
             RecordTimeoutOutcome::DuplicateValidator

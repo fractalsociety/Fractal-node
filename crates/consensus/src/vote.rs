@@ -234,6 +234,30 @@ impl VotePool {
             .unwrap_or_default()
     }
 
+    /// Best vote slot observed for `height`, returning
+    /// `(view, header_hash, vote_count, signer_indices)` for diagnostics.
+    ///
+    /// The pool is keyed by `(view, header_hash)`, so height-level diagnostics
+    /// must inspect the contained votes. Ties are resolved deterministically by
+    /// the `BTreeMap` iteration order.
+    #[must_use]
+    pub fn best_slot_for_height(&self, height: u64) -> Option<(u64, Hash256, usize, Vec<u32>)> {
+        self.entries
+            .iter()
+            .filter_map(|((view, header_hash), slot)| {
+                let first = slot.values().next()?;
+                (first.height == height).then(|| {
+                    (
+                        *view,
+                        *header_hash,
+                        slot.len(),
+                        slot.keys().copied().collect::<Vec<_>>(),
+                    )
+                })
+            })
+            .max_by_key(|(view, header_hash, count, _)| (*count, *view, *header_hash))
+    }
+
     /// Aggregate the pool's signatures into a [`FormedQc`] if `(view, header_hash)`
     /// has reached `validators.quorum_threshold()`. Returns `None` otherwise.
     ///
@@ -502,6 +526,26 @@ mod tests {
             assert_eq!(out, RecordVoteOutcome::Accepted, "idx={idx}");
         }
         assert_eq!(pool.count(2, hh), 7);
+    }
+
+    #[test]
+    fn best_slot_for_height_reports_largest_height_slot() {
+        let set = ValidatorSet::phase2_bft7_fixture();
+        let mut pool = VotePool::new();
+        for idx in 0u32..3 {
+            let _ = pool.record(sign_for(&set, idx, body(3, 2, 0x44)), &set);
+        }
+        for idx in 0u32..5 {
+            let _ = pool.record(sign_for(&set, idx, body(4, 2, 0x55)), &set);
+        }
+
+        let (view, header_hash, count, signers) =
+            pool.best_slot_for_height(2).expect("height 2 slot");
+        assert_eq!(view, 4);
+        assert_eq!(header_hash, [0x55; 32]);
+        assert_eq!(count, 5);
+        assert_eq!(signers, vec![0, 1, 2, 3, 4]);
+        assert!(pool.best_slot_for_height(99).is_none());
     }
 
     #[test]

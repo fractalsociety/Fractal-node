@@ -6,6 +6,7 @@ pub mod p2p;
 pub use fractal_consensus::ValidatorSet;
 
 use std::collections::BTreeMap;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -23,8 +24,8 @@ use fractal_crypto::hash::keccak256;
 use fractal_crypto::BlsSecretKey;
 use fractal_mempool::{next_base_fee, BaseFeeParams, Mempool, PooledTx};
 use fractal_rpc::{
-    logs_bloom_256, make_rpc_log, ChainInteraction, RpcChainConfig, RpcDaMetrics,
-    RpcMempoolLaneMetrics, RpcProofMetrics, RpcProofRejectionMetric,
+    logs_bloom_256, make_rpc_log, ChainInteraction, RpcChainConfig, RpcConsensusDiagnostics,
+    RpcDaMetrics, RpcMempoolLaneMetrics, RpcProofMetrics, RpcProofRejectionMetric,
 };
 use fractal_storage::{ProofFinalityStore, StoredProofFinalityRecord};
 use libp2p::multiaddr::Protocol;
@@ -144,6 +145,29 @@ pub struct ProofMetrics {
     pub rejection_reasons: BTreeMap<String, u64>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct QcDiagnostics {
+    pub status: String,
+    pub reason: String,
+    pub height: u64,
+    pub view: u64,
+    pub vote_count: u64,
+    pub threshold: u64,
+}
+
+impl Default for QcDiagnostics {
+    fn default() -> Self {
+        Self {
+            status: "none".into(),
+            reason: "not_attempted".into(),
+            height: 0,
+            view: 0,
+            vote_count: 0,
+            threshold: 0,
+        }
+    }
+}
+
 const GENESIS_TAG: &[u8] = b"FRACTALCHAIN_GENESIS_V0";
 
 /// Hardhat / Anvil default signer #0 — re-exported from `fractal_core::devnet_accounts`.
@@ -153,6 +177,19 @@ pub use fractal_core::HARDHAT_DEFAULT_SIGNER_1;
 
 pub fn genesis_parent_hash() -> fractal_crypto::Hash256 {
     keccak256(GENESIS_TAG)
+}
+
+fn validator_set_hash(validators: &ValidatorSet) -> fractal_crypto::Hash256 {
+    let mut bytes = Vec::with_capacity(validators.len() * (32 + 48));
+    for entry in validators.entries() {
+        bytes.extend_from_slice(&entry.fingerprint);
+        bytes.extend_from_slice(&entry.bls_pubkey.0);
+    }
+    keccak256(&bytes)
+}
+
+fn hash_hex(hash: &fractal_crypto::Hash256) -> String {
+    format!("0x{}", hex::encode(hash))
 }
 
 fn devnet_validator_set_from_env() -> ValidatorSet {
@@ -180,6 +217,28 @@ fn devnet_validator_index_from_env(validators: &ValidatorSet) -> usize {
     } else {
         parsed
     }
+}
+
+fn shard_id_from_env() -> u32 {
+    std::env::var("FRACTAL_SHARD_ID")
+        .ok()
+        .and_then(|raw| raw.trim().parse().ok())
+        .unwrap_or(0)
+}
+
+fn shard_count_from_env() -> u32 {
+    std::env::var("FRACTAL_SHARD_COUNT")
+        .ok()
+        .and_then(|raw| raw.trim().parse().ok())
+        .filter(|count| *count > 0)
+        .unwrap_or(1)
+}
+
+fn consensus_mode_from_env() -> String {
+    std::env::var("FRACTAL_CONSENSUS_MODE")
+        .ok()
+        .filter(|raw| !raw.trim().is_empty())
+        .unwrap_or_else(|| "singleton".into())
 }
 
 /// Reads `FRACTAL_VALIDATOR_SECRET_HEX` (`docs/prd.md` §7.3 / M7-d).
@@ -304,6 +363,9 @@ fn proof_finality_store_from_env() -> Option<std::path::PathBuf> {
 
 pub struct NodeInner {
     pub chain_id: u64,
+    pub shard_id: u32,
+    pub shard_count: u32,
+    pub consensus_mode: String,
     pub height: u64,
     pub view: u64,
     pub head_hash: fractal_crypto::Hash256,
@@ -347,6 +409,8 @@ pub struct NodeInner {
     pub chain_config: ChainConfig,
     pub da_metrics: DaMetrics,
     pub proof_metrics: ProofMetrics,
+    pub p2p_connected_peers: AtomicU64,
+    pub qc_diagnostics: QcDiagnostics,
 }
 
 impl NodeInner {
@@ -400,6 +464,9 @@ impl NodeInner {
         );
         Self {
             chain_id: 41,
+            shard_id: 0,
+            shard_count: 1,
+            consensus_mode: "singleton".into(),
             height: 0,
             view: 0,
             head_hash: genesis_parent_hash(),
@@ -426,6 +493,8 @@ impl NodeInner {
             chain_config: ChainConfig::default(),
             da_metrics: DaMetrics::default(),
             proof_metrics: ProofMetrics::default(),
+            p2p_connected_peers: AtomicU64::new(0),
+            qc_diagnostics: QcDiagnostics::default(),
         }
     }
 
@@ -435,6 +504,81 @@ impl NodeInner {
     pub fn is_my_turn(&self, view: u64) -> bool {
         self.validators
             .is_proposer_for_view(view, self.validator_index)
+    }
+
+    #[must_use]
+    pub fn connected_validator_count(&self) -> u64 {
+        let peer_count = self.p2p_connected_peers.load(Ordering::Relaxed);
+        let with_self = peer_count.saturating_add(1);
+        with_self.min(self.validators.len() as u64)
+    }
+
+    #[must_use]
+    pub fn validator_set_hash(&self) -> fractal_crypto::Hash256 {
+        validator_set_hash(&self.validators)
+    }
+
+    #[must_use]
+    pub fn consensus_diagnostics_rpc(&self) -> RpcConsensusDiagnostics {
+        let leader_index = self.validators.leader_index(self.view);
+        let leader_fingerprint = self.validators.expected_proposer(self.view);
+        let height2 = self.vote_pool.best_slot_for_height(2);
+        let (height2_vote_view, height2_vote_header_hash, height2_votes_received, signers) =
+            match height2 {
+                Some((view, header_hash, count, signers)) => (
+                    Some(format!("0x{view:x}")),
+                    Some(hash_hex(&header_hash)),
+                    count as u64,
+                    signers,
+                ),
+                None => (None, None, 0, Vec::new()),
+            };
+        RpcConsensusDiagnostics {
+            height: format!("0x{:x}", self.height),
+            current_view: format!("0x{:x}", self.view),
+            validator_index: format!("0x{:x}", self.validator_index),
+            validator_set_size: format!("0x{:x}", self.validators.len()),
+            quorum_threshold: format!("0x{:x}", self.validators.quorum_threshold()),
+            connected_peer_count: format!(
+                "0x{:x}",
+                self.p2p_connected_peers.load(Ordering::Relaxed)
+            ),
+            connected_validator_count: format!("0x{:x}", self.connected_validator_count()),
+            current_leader_index: format!("0x{leader_index:x}"),
+            current_leader_fingerprint: hash_hex(&leader_fingerprint),
+            height2_votes_received: format!("0x{height2_votes_received:x}"),
+            height2_vote_view,
+            height2_vote_header_hash,
+            height2_vote_signers: signers
+                .into_iter()
+                .map(|idx| format!("0x{idx:x}"))
+                .collect(),
+            qc_status: self.qc_diagnostics.status.clone(),
+            qc_reason: self.qc_diagnostics.reason.clone(),
+            qc_height: format!("0x{:x}", self.qc_diagnostics.height),
+            qc_view: format!("0x{:x}", self.qc_diagnostics.view),
+            qc_vote_count: format!("0x{:x}", self.qc_diagnostics.vote_count),
+            qc_threshold: format!("0x{:x}", self.qc_diagnostics.threshold),
+            genesis_hash: hash_hex(&genesis_parent_hash()),
+            validator_set_hash: hash_hex(&self.validator_set_hash()),
+        }
+    }
+
+    pub fn log_startup_consensus_diagnostics(&self, prefix: &str) {
+        let leader_index = self.validators.leader_index(self.view);
+        let leader_fingerprint = self.validators.expected_proposer(self.view);
+        eprintln!(
+            "{prefix}: consensus_diagnostics genesis_hash={} validator_set_hash={} current_view={} current_leader_index={} current_leader_fingerprint={} quorum_threshold={} shard_id={} shard_count={} consensus_mode={}",
+            hash_hex(&genesis_parent_hash()),
+            hash_hex(&self.validator_set_hash()),
+            self.view,
+            leader_index,
+            hash_hex(&leader_fingerprint),
+            self.validators.quorum_threshold(),
+            self.shard_id,
+            self.shard_count,
+            self.consensus_mode
+        );
     }
 
     /// Wire gossip vote publishing (`docs/prd.md` §18 M7-d-5). When `None`, votes stay local only.
@@ -553,20 +697,61 @@ impl NodeInner {
     /// §7.3 / M7-d-4). Thin wrapper over [`VotePool::record`] using this node's
     /// active `validators`.
     pub fn record_vote(&mut self, vote: Vote) -> RecordVoteOutcome {
-        self.vote_pool.record(vote, &self.validators)
+        let view = vote.view;
+        let height = vote.height;
+        let header_hash = vote.header_hash;
+        let outcome = self.vote_pool.record(vote, &self.validators);
+        let count = self.vote_pool.count(view, header_hash);
+        if height == 2 || matches!(outcome, RecordVoteOutcome::ReachedQuorum) {
+            let signers = self.vote_pool.signer_indices(view, header_hash);
+            eprintln!(
+                "fractal-node: vote_pool height={height} view={view} header_hash={} votes={count}/{} signers={signers:?} outcome={outcome:?}",
+                hash_hex(&header_hash),
+                self.validators.quorum_threshold()
+            );
+        }
+        outcome
     }
 
     /// Attempt to form a QC for `(view, block_height, header_hash)` from the
     /// local vote pool. Returns `None` until `quorum_threshold` is reached.
     /// Wrapper over [`VotePool::try_form_qc`].
     pub fn try_form_qc(
-        &self,
+        &mut self,
         view: u64,
         block_height: u64,
         header_hash: fractal_crypto::Hash256,
     ) -> Option<FormedQc> {
-        self.vote_pool
-            .try_form_qc(view, block_height, header_hash, &self.validators)
+        let vote_count = self.vote_pool.count(view, header_hash) as u64;
+        let threshold = self.validators.quorum_threshold() as u64;
+        let formed = self
+            .vote_pool
+            .try_form_qc(view, block_height, header_hash, &self.validators);
+        let (status, reason) = if formed.is_some() {
+            ("formed".to_owned(), "quorum_reached".to_owned())
+        } else if vote_count < threshold {
+            (
+                "not_formed".to_owned(),
+                format!("insufficient_votes:{vote_count}/{threshold}"),
+            )
+        } else {
+            ("not_formed".to_owned(), "aggregation_failed".to_owned())
+        };
+        self.qc_diagnostics = QcDiagnostics {
+            status,
+            reason,
+            height: block_height,
+            view,
+            vote_count,
+            threshold,
+        };
+        eprintln!(
+            "fractal-node: qc_diagnostics height={block_height} view={view} header_hash={} status={} reason={} votes={vote_count}/{threshold}",
+            hash_hex(&header_hash),
+            self.qc_diagnostics.status,
+            self.qc_diagnostics.reason
+        );
+        formed
     }
 
     pub fn submit_validity_proof(
@@ -963,6 +1148,18 @@ impl ChainInteraction for NodeInner {
         self.chain_id
     }
 
+    fn shard_id(&self) -> u32 {
+        self.shard_id
+    }
+
+    fn shard_count(&self) -> u32 {
+        self.shard_count
+    }
+
+    fn consensus_mode(&self) -> String {
+        self.consensus_mode.clone()
+    }
+
     fn balance_of(&self, addr: &Address) -> u128 {
         self.state
             .accounts
@@ -1333,6 +1530,10 @@ impl ChainInteraction for NodeInner {
         }
     }
 
+    fn consensus_diagnostics(&self) -> RpcConsensusDiagnostics {
+        self.consensus_diagnostics_rpc()
+    }
+
     fn mempool_lane_metrics(&self) -> RpcMempoolLaneMetrics {
         let metrics = self.mempool.lane_metrics();
         RpcMempoolLaneMetrics {
@@ -1522,6 +1723,9 @@ pub async fn run_dev() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let (vote_tx, vote_rx) = tokio::sync::mpsc::unbounded_channel();
     let mut inner =
         NodeInner::devnet_with_validator_secret(validators, validator_index, validator_secret);
+    inner.shard_id = shard_id_from_env();
+    inner.shard_count = shard_count_from_env();
+    inner.consensus_mode = consensus_mode_from_env();
     let proof_required = proof_required_settlement_from_env();
     inner.set_protocol_phase_config(protocol_phase_config_from_env());
     inner.set_native_transition_proofs_enabled(native_transition_proofs_enabled_from_env());
@@ -1539,6 +1743,7 @@ pub async fn run_dev() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             "soft"
         }
     );
+    inner.log_startup_consensus_diagnostics("fractal-node");
     let node: NodeHandle = Arc::new(Mutex::new(inner));
     let addr: std::net::SocketAddr = std::env::var("FRACTAL_RPC_ADDR")
         .unwrap_or_else(|_| "127.0.0.1:8545".into())
@@ -1599,6 +1804,9 @@ pub async fn run_follower() -> Result<(), Box<dyn std::error::Error + Send + Syn
     let (vote_tx, vote_rx) = tokio::sync::mpsc::unbounded_channel();
     let mut inner =
         NodeInner::devnet_with_validator_secret(validators, validator_index, validator_secret);
+    inner.shard_id = shard_id_from_env();
+    inner.shard_count = shard_count_from_env();
+    inner.consensus_mode = consensus_mode_from_env();
     let proof_required = proof_required_settlement_from_env();
     inner.set_protocol_phase_config(protocol_phase_config_from_env());
     inner.set_native_transition_proofs_enabled(native_transition_proofs_enabled_from_env());
@@ -1619,6 +1827,7 @@ pub async fn run_follower() -> Result<(), Box<dyn std::error::Error + Send + Syn
             "soft"
         }
     );
+    inner.log_startup_consensus_diagnostics("fractal-node follower");
     let node: NodeHandle = Arc::new(Mutex::new(inner));
     let addr: std::net::SocketAddr = std::env::var("FRACTAL_RPC_ADDR")
         .unwrap_or_else(|_| "127.0.0.1:8546".into())

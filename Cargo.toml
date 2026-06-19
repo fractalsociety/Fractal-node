@@ -2,12 +2,14 @@
 resolver = "2"
 members = [
     "crates/core",
+    "crates/bft-wire",
     "crates/wallet",
     "crates/crypto",
     "crates/consensus",
     "crates/network",
     "crates/evm",
     "crates/storage",
+    "crates/shard",
     "crates/mempool",
     "crates/eth-wire",
     "crates/rpc",
@@ -18,6 +20,8 @@ members = [
     "crates/faucet",
     "crates/indexer-stub",
     "crates/benchmarks",
+    "crates/fractal-society",
+    "tools/load-tps",
 ]
 
 [workspace.package]

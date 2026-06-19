@@ -229,6 +229,32 @@ pub struct RpcProofMetrics {
 
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct RpcConsensusDiagnostics {
+    pub height: String,
+    pub current_view: String,
+    pub validator_index: String,
+    pub validator_set_size: String,
+    pub quorum_threshold: String,
+    pub connected_peer_count: String,
+    pub connected_validator_count: String,
+    pub current_leader_index: String,
+    pub current_leader_fingerprint: String,
+    pub height2_votes_received: String,
+    pub height2_vote_view: Option<String>,
+    pub height2_vote_header_hash: Option<String>,
+    pub height2_vote_signers: Vec<String>,
+    pub qc_status: String,
+    pub qc_reason: String,
+    pub qc_height: String,
+    pub qc_view: String,
+    pub qc_vote_count: String,
+    pub qc_threshold: String,
+    pub genesis_hash: String,
+    pub validator_set_hash: String,
+}
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct RpcMempoolLaneMetrics {
     pub pending_total: String,
     pub pending_owned: String,
@@ -493,6 +519,18 @@ pub trait ChainInteraction: Send {
 
     fn chain_id(&self) -> u64;
 
+    fn shard_id(&self) -> u32 {
+        0
+    }
+
+    fn shard_count(&self) -> u32 {
+        1
+    }
+
+    fn consensus_mode(&self) -> String {
+        "singleton".into()
+    }
+
     fn balance_of(&self, addr: &Address) -> u128;
 
     fn transaction_count(&self, addr: &Address) -> u64;
@@ -585,6 +623,8 @@ pub trait ChainInteraction: Send {
 
     fn proof_metrics(&self) -> RpcProofMetrics;
 
+    fn consensus_diagnostics(&self) -> RpcConsensusDiagnostics;
+
     fn mempool_lane_metrics(&self) -> RpcMempoolLaneMetrics;
 
     fn chain_config(&self) -> RpcChainConfig;
@@ -635,6 +675,55 @@ pub fn build_module(ctx: SharedChain) -> RpcModule<SharedChain> {
             }
         })
         .expect("register net_version");
+
+    module
+        .register_async_method("fractal_getShardId", |_params: Params<'static>, ctx, _| {
+            let ctx = ctx.clone();
+            async move {
+                let g = ctx.lock().await;
+                Ok::<String, ErrorObjectOwned>(format!("0x{:x}", g.shard_id()))
+            }
+        })
+        .expect("register fractal_getShardId");
+
+    module
+        .register_async_method(
+            "fractal_getShardCount",
+            |_params: Params<'static>, ctx, _| {
+                let ctx = ctx.clone();
+                async move {
+                    let g = ctx.lock().await;
+                    Ok::<String, ErrorObjectOwned>(format!("0x{:x}", g.shard_count()))
+                }
+            },
+        )
+        .expect("register fractal_getShardCount");
+
+    module
+        .register_async_method(
+            "fractal_getConsensusMode",
+            |_params: Params<'static>, ctx, _| {
+                let ctx = ctx.clone();
+                async move {
+                    let g = ctx.lock().await;
+                    Ok::<String, ErrorObjectOwned>(g.consensus_mode())
+                }
+            },
+        )
+        .expect("register fractal_getConsensusMode");
+
+    module
+        .register_async_method(
+            "fractal_consensusDiagnostics",
+            |_params: Params<'static>, ctx, _| {
+                let ctx = ctx.clone();
+                async move {
+                    let g = ctx.lock().await;
+                    Ok::<RpcConsensusDiagnostics, ErrorObjectOwned>(g.consensus_diagnostics())
+                }
+            },
+        )
+        .expect("register fractal_consensusDiagnostics");
 
     module
         .register_async_method("fractal_daMetrics", |_params: Params<'static>, ctx, _| {

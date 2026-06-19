@@ -246,7 +246,11 @@ fn debit_signer(state: &mut State, signer: Address, amount: u128) -> Result<(), 
     if bal < amount {
         return Err(ExecError::InsufficientBalance);
     }
-    state.accounts.get_mut(&signer).expect("signer").balance -= amount;
+    state
+        .accounts
+        .get_mut(&signer)
+        .ok_or(ExecError::UnknownSigner)?
+        .balance -= amount;
     Ok(())
 }
 

@@ -151,7 +151,9 @@ pub fn verify_consensus_misbehavior_evidence(
             timeout_b,
             ..
         } => {
-            if timeout_a.validator_index != offender_idx || timeout_b.validator_index != offender_idx {
+            if timeout_a.validator_index != offender_idx
+                || timeout_b.validator_index != offender_idx
+            {
                 return Err(MisbehaviorError::InvalidEvidence);
             }
             if timeout_a.validator_index != timeout_b.validator_index {
@@ -179,7 +181,9 @@ pub fn verify_consensus_misbehavior_evidence(
 }
 
 /// Build a [`ValidatorSet`] from on-chain registry rows (sorted by fingerprint).
-pub fn validator_set_from_registry(rows: &[([u8; 32], [u8; 48])]) -> Result<ValidatorSet, MisbehaviorError> {
+pub fn validator_set_from_registry(
+    rows: &[([u8; 32], [u8; 48])],
+) -> Result<ValidatorSet, MisbehaviorError> {
     let mut entries: Vec<ValidatorEntry> = Vec::with_capacity(rows.len());
     for (fp, pk_bytes) in rows {
         entries.push(ValidatorEntry {

@@ -2,6 +2,7 @@
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 use fractal_consensus::{header_hash, Block, DaShare, Vote};
@@ -139,6 +140,11 @@ async fn record_vote_from_gossip_bytes(node: &NodeHandle, data: &[u8]) {
         }
         Err(e) => eprintln!("fractal-node gossipsub: invalid vote borsh: {e}"),
     }
+}
+
+async fn record_connected_peer_count(node: &NodeHandle, count: usize) {
+    let g = node.lock().await;
+    g.p2p_connected_peers.store(count as u64, Ordering::Relaxed);
 }
 
 /// `gossipsub::publish` returns [`gossipsub::PublishError::NoPeersSubscribedToTopic`] until the
@@ -369,6 +375,7 @@ async fn handle_producer_swarm_event(
         SwarmEvent::Behaviour(NodeBehaviourEvent::Gossipsub(_)) => {}
         SwarmEvent::ConnectionEstablished { peer_id, .. } => {
             swarm.behaviour_mut().gossipsub.add_explicit_peer(&peer_id);
+            record_connected_peer_count(node, swarm.connected_peers().count()).await;
             publish_da_provider_announcement(
                 node,
                 &mut swarm.behaviour_mut().gossipsub,
@@ -376,9 +383,10 @@ async fn handle_producer_swarm_event(
             )
             .await;
         }
-        SwarmEvent::IncomingConnection { .. }
-        | SwarmEvent::IncomingConnectionError { .. }
-        | SwarmEvent::ConnectionClosed { .. } => {}
+        SwarmEvent::ConnectionClosed { .. } => {
+            record_connected_peer_count(node, swarm.connected_peers().count()).await;
+        }
+        SwarmEvent::IncomingConnection { .. } | SwarmEvent::IncomingConnectionError { .. } => {}
         _ => {}
     }
 }
@@ -630,6 +638,7 @@ async fn handle_follower_swarm_event(
                 .behaviour_mut()
                 .gossipsub
                 .add_explicit_peer(&producer_peer);
+            record_connected_peer_count(node, swarm.connected_peers().count()).await;
             *connected = true;
             *outstanding = true;
             swarm
@@ -637,9 +646,12 @@ async fn handle_follower_swarm_event(
                 .sync
                 .send_request(&producer_peer, SyncRequest::GetTip);
         }
-        SwarmEvent::ConnectionEstablished { .. } => {}
+        SwarmEvent::ConnectionEstablished { .. } => {
+            record_connected_peer_count(node, swarm.connected_peers().count()).await;
+        }
         SwarmEvent::ConnectionClosed { peer_id, .. } => {
             connected_da_peers.remove(&peer_id);
+            record_connected_peer_count(node, swarm.connected_peers().count()).await;
         }
         SwarmEvent::Behaviour(NodeBehaviourEvent::Sync(request_response::Event::Message {
             message: Message::Response { response, .. },

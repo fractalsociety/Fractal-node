@@ -1,0 +1,61 @@
+name: nightly-validation
+
+on:
+  schedule:
+    - cron: "21 7 * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: nightly-validation-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: "1"
+
+jobs:
+  nightly-smoke:
+    name: nightly long-running validation
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Masterchain tests
+        run: cargo test -p fractal-masterchain
+
+      - name: Proof pipeline tests
+        run: cargo test -p fractal-node --test stwo_plonky2_pipeline
+
+      - name: Light client tests
+        run: cargo test -p fractal-light-client
+
+      - name: Bounded pilot smoke
+        run: timeout 25m ./scripts/run-pilot-shards.sh smoke-start
+
+      - name: Stop pilot shards
+        if: always()
+        run: ./scripts/run-pilot-shards.sh stop || true
+
+      - name: Masterchain-backed pilot smoke
+        run: |
+          timeout 25m ./scripts/run-pilot-shards.sh start-with-masterchain
+          sleep 8
+          timeout 8m ./scripts/run-pilot-shards.sh smoke
+
+      - name: Stop pilot and masterchain
+        if: always()
+        run: ./scripts/run-pilot-shards.sh stop || true
+
+      - name: Upload nightly logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: nightly-validation-logs
+          path: |
+            .pilot-shards/*.log
+            .masterchain-bft/*.log
+          if-no-files-found: ignore
+          retention-days: 30

@@ -60,6 +60,8 @@ pub enum BuildBlockError {
     EthRawLenMismatch { txs: usize, got: usize },
     #[error("data availability sidecar invalid")]
     DataAvailability,
+    #[error(transparent)]
+    Da(#[from] DaVerifyError),
 }
 
 #[derive(Debug, Error)]
@@ -1275,7 +1277,8 @@ pub fn da_share_commitment(
         is_parity,
         data,
     };
-    keccak256(&borsh::to_vec(&body).expect("da share commitment borsh"))
+    let bytes = borsh::to_vec(&body).unwrap_or_default();
+    keccak256(&bytes)
 }
 
 pub fn da_root(sidecar: &DaSidecar) -> Hash256 {
@@ -1311,22 +1314,26 @@ fn required_data_share_count(original_len: u64, share_size: u32) -> Result<u32, 
     u32::try_from(count).map_err(|_| DaVerifyError::ShareCount)
 }
 
-pub fn build_da_sidecar(payload: &[u8], namespace: DaNamespace, share_size: u32) -> DaSidecar {
+pub fn build_da_sidecar(
+    payload: &[u8],
+    namespace: DaNamespace,
+    share_size: u32,
+) -> Result<DaSidecar, DaVerifyError> {
     let share_size = share_size.max(1) as usize;
     if payload.is_empty() {
-        return DaSidecar {
+        return Ok(DaSidecar {
             namespace,
             original_len: 0,
             share_size: share_size as u32,
             data_share_count: 0,
             parity_share_count: 0,
             shares: Vec::new(),
-        };
+        });
     }
     let data_share_count = payload.len().div_ceil(share_size);
     let parity_share_count = default_parity_share_count(data_share_count as u32) as usize;
     let codec = ReedSolomon::new(data_share_count, parity_share_count)
-        .expect("valid DA erasure coding parameters");
+        .map_err(|_| DaVerifyError::ErasureCoding)?;
     let mut shards = Vec::with_capacity(data_share_count + parity_share_count);
     for i in 0..data_share_count {
         let start = i * share_size;
@@ -1340,7 +1347,7 @@ pub fn build_da_sidecar(payload: &[u8], namespace: DaNamespace, share_size: u32)
     }
     codec
         .encode(&mut shards)
-        .expect("DA erasure encoding should succeed");
+        .map_err(|_| DaVerifyError::ErasureCoding)?;
     let mut shares = Vec::new();
     for (i, data) in shards.into_iter().enumerate() {
         let index = i as u32;
@@ -1354,14 +1361,14 @@ pub fn build_da_sidecar(payload: &[u8], namespace: DaNamespace, share_size: u32)
             commitment,
         });
     }
-    DaSidecar {
+    Ok(DaSidecar {
         namespace,
         original_len: payload.len() as u64,
         share_size: share_size as u32,
         data_share_count: data_share_count as u32,
         parity_share_count: parity_share_count as u32,
         shares,
-    }
+    })
 }
 
 pub fn reconstruct_da_payload(sidecar: &DaSidecar) -> Result<Vec<u8>, DaVerifyError> {
@@ -1852,7 +1859,7 @@ pub fn execute_and_build_zone_block(
     let native_event_root = [0u8; 32];
     let evm_log_root = block_evm_log_root(state, &txs)?;
     let da_payload = borsh::to_vec(&txs)?;
-    let da_sidecar = build_da_sidecar(&da_payload, zone_namespace, DEFAULT_DA_SHARE_SIZE);
+    let da_sidecar = build_da_sidecar(&da_payload, zone_namespace, DEFAULT_DA_SHARE_SIZE)?;
     let da_root = da_root(&da_sidecar);
     let da_gas_used = da_gas_for_sidecar(&da_sidecar);
     let da_fee_paid = da_fee_for_gas(da_gas_used);
@@ -3580,7 +3587,8 @@ mod tests {
             body: TxBody::Native(NativeCall::NoOp),
         };
         let payload = borsh::to_vec(&vec![tx]).unwrap();
-        let sidecar = build_da_sidecar(&payload, DEFAULT_DA_NAMESPACE, 7);
+        let sidecar =
+            build_da_sidecar(&payload, DEFAULT_DA_NAMESPACE, 7).expect("DA sidecar fixture");
 
         let reconstructed = reconstruct_da_payload(&sidecar).expect("reconstruct");
         assert_eq!(reconstructed, payload);
@@ -3588,7 +3596,8 @@ mod tests {
 
     #[test]
     fn da_sidecar_adds_parity_shares() {
-        let sidecar = build_da_sidecar(b"abcdefghijklmnopqrstuvwxyz", DEFAULT_DA_NAMESPACE, 7);
+        let sidecar = build_da_sidecar(b"abcdefghijklmnopqrstuvwxyz", DEFAULT_DA_NAMESPACE, 7)
+            .expect("DA sidecar fixture");
 
         assert_eq!(sidecar.data_share_count, 4);
         assert_eq!(sidecar.parity_share_count, 4);
@@ -3608,7 +3617,8 @@ mod tests {
     #[test]
     fn da_payload_reconstructs_with_missing_data_shares() {
         let payload = b"abcdefghijklmnopqrstuvwxyz0123456789";
-        let sidecar = build_da_sidecar(payload, DEFAULT_DA_NAMESPACE, 8);
+        let sidecar =
+            build_da_sidecar(payload, DEFAULT_DA_NAMESPACE, 8).expect("DA sidecar fixture");
         let available = sidecar
             .shares
             .iter()
@@ -3623,7 +3633,8 @@ mod tests {
     #[test]
     fn da_payload_rejects_insufficient_reconstruction_shares() {
         let payload = b"abcdefghijklmnopqrstuvwxyz0123456789";
-        let sidecar = build_da_sidecar(payload, DEFAULT_DA_NAMESPACE, 8);
+        let sidecar =
+            build_da_sidecar(payload, DEFAULT_DA_NAMESPACE, 8).expect("DA sidecar fixture");
         let available = sidecar
             .shares
             .iter()
@@ -3639,7 +3650,8 @@ mod tests {
     #[test]
     fn da_sampling_rejects_tampered_share() {
         let payload = b"abcdefghijklmnopqrstuvwxyz";
-        let mut sidecar = build_da_sidecar(payload, DEFAULT_DA_NAMESPACE, 64);
+        let mut sidecar =
+            build_da_sidecar(payload, DEFAULT_DA_NAMESPACE, 64).expect("DA sidecar fixture");
         let root = da_root(&sidecar);
         sidecar.shares[0].data[0] ^= 0xff;
 
@@ -3652,7 +3664,8 @@ mod tests {
     #[test]
     fn da_sampling_rejects_tampered_parity_share() {
         let payload = b"abcdefghijklmnopqrstuvwxyz";
-        let mut sidecar = build_da_sidecar(payload, DEFAULT_DA_NAMESPACE, 8);
+        let mut sidecar =
+            build_da_sidecar(payload, DEFAULT_DA_NAMESPACE, 8).expect("DA sidecar fixture");
         let root = da_root(&sidecar);
         let parity_idx = sidecar.data_share_count as usize;
         sidecar.shares[parity_idx].data[0] ^= 0xff;
@@ -3717,7 +3730,7 @@ mod tests {
     #[test]
     fn da_sampling_rejects_namespace_mismatch() {
         let payload = b"abcdefghijklmnopqrstuvwxyz";
-        let sidecar = build_da_sidecar(payload, *b"zone0001", 64);
+        let sidecar = build_da_sidecar(payload, *b"zone0001", 64).expect("DA sidecar fixture");
         let root = da_root(&sidecar);
 
         assert!(matches!(

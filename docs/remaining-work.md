@@ -26,15 +26,19 @@ These are engineering quality gaps that should be done, but they do not define n
 
 These are important, but they are validation/operations work rather than protocol coding.
 
-- [ ] **Install CI workflows** — `docs/ci/mvp-bridge-smoke.workflow.yml` exists but `.github/workflows/` is not present. Add the workflow and decide which long-running jobs are nightly vs PR-gated.
+- [ ] **Testnet release gates** — track T0–T4 in `docs/testnet-release-gates-prd.md`. T0 workflow files are installed; exit sign-off still requires remote CI green and a scheduled nightly run. Audit remains a parallel gate and does not block closed/invite-only testnet, but must land before public RPC and validator registration.
 
-- [ ] **Pilot smoke in CI** — run `./scripts/run-pilot-shards.sh smoke-start` in CI with bounded runtime and log capture.
+- [ ] **T1 hardening sign-off** — panic-boundary audit and fuzz target scaffolding are installed (`docs/panic-boundary-audit.md`, `fuzz/`). Still need a timed fuzz run with retained seed corpus metadata before T1 can be signed off.
 
-- [ ] **Masterchain + pilot CI** — run `./scripts/run-pilot-shards.sh start-with-masterchain` plus a focused anchor/proof smoke.
+- [x] **Install CI workflows** — active workflows now live in `.github/workflows/`; long-running jobs are documented in `docs/ci-policy.md` as PR-gated versus nightly.
+
+- [x] **Pilot smoke in CI** — `pilot-smoke.yml` runs `./scripts/run-pilot-shards.sh smoke-start` with a bounded runtime and uploads `.pilot-shards/*.log`.
+
+- [x] **Masterchain + pilot CI** — `pilot-smoke.yml` runs `./scripts/run-pilot-shards.sh start-with-masterchain` plus a focused pilot smoke and uploads shard/masterchain logs.
 
 - [ ] **HyperBFT lab load sign-off** — deterministic BFT-7 torture exists. Still need lab-hardware load with partitions/view-change under sustained traffic and measured p99 finality ≤ 900 ms.
 
-- [ ] **M10 exit sign-off** — two shards finalize independently under sustained load, through the RPC gateway, with no proof-worker latency regression.
+- [ ] **M10 exit sign-off** — two shards finalize independently under sustained load, through the RPC gateway, with no proof-worker latency regression. Latest local T2 attempt is recorded in `docs/t2-validation-report.md`; remediation checklist lives in `docs/t2-remediation-prd.md`.
 
 - [ ] **M11 exit benchmark** — after proof-chain fast sync exists, compare new-node sync from pruned proof chain vs full replay at a realistic large height. Keep “1M blocks” as the target scale, not as a coding task by itself.
 

@@ -26,7 +26,11 @@ pub fn deposit_consensus_stake(
             return Err(ExecError::InsufficientBalance);
         }
     }
-    state.accounts.get_mut(&signer).expect("signer").balance -= amount;
+    state
+        .accounts
+        .get_mut(&signer)
+        .ok_or(ExecError::UnknownSigner)?
+        .balance -= amount;
     *state
         .consensus_stakes
         .entry(validator_fingerprint)
@@ -91,19 +95,11 @@ pub fn withdraw_consensus_rewards(
         .remove(&(signer, validator_fingerprint))
         .unwrap_or(0);
     if amount > 0 {
-        state
-            .accounts
-            .entry(signer)
-            .or_insert(crate::Account {
-                nonce: 0,
-                balance: 0,
-            })
-            .balance = state
-            .accounts
-            .get(&signer)
-            .expect("signer")
-            .balance
-            .saturating_add(amount);
+        let acc = state.accounts.entry(signer).or_insert(crate::Account {
+            nonce: 0,
+            balance: 0,
+        });
+        acc.balance = acc.balance.saturating_add(amount);
     }
     Ok(())
 }
@@ -164,8 +160,8 @@ pub fn distribute_fingerprint_block_reward(state: &mut State, fp: [u8; 32], rewa
         if add > 0 {
             *state
                 .consensus_stake_shares
-                .get_mut(&(*owner, fp))
-                .expect("shareholder") += add;
+                .entry((*owner, fp))
+                .or_insert(0) += add;
         }
     }
     *state.consensus_stakes.entry(fp).or_insert(0) += net;
@@ -344,5 +340,12 @@ mod tests {
             st.consensus_stake_shares.get(&(operator, FP)).copied(),
             Some(1140)
         );
+    }
+
+    #[test]
+    fn deposit_missing_signer_returns_error_instead_of_panicking() {
+        let mut st = State::default();
+        let err = deposit_consensus_stake(&mut st, [0x44u8; 20], FP, 1).unwrap_err();
+        assert_eq!(err, ExecError::UnknownSigner);
     }
 }

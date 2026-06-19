@@ -110,19 +110,20 @@ run_shard() {
   mkdir -p "$db"
 
   echo "Starting shard $id (RPC :${rpc_port}, P2P udp/${p2p_port}) -> $log"
-  FRACTAL_CONSENSUS_MODE=hyperbft \
-  FRACTAL_SHARD_COUNT=2 \
-  FRACTAL_SHARD_ID="$id" \
-  FRACTAL_TARGET_BLOCK_TIME_MS=70 \
-  FRACTAL_ANCHOR_INTERVAL="${FRACTAL_ANCHOR_INTERVAL:-100}" \
-  FRACTAL_ASYNC_PROOF=1 \
-  FRACTAL_AUTO_VALIDITY_PROOF=1 \
-  FRACTAL_RPC_ADDR="127.0.0.1:${rpc_port}" \
-  FRACTAL_P2P_LISTEN="/ip4/127.0.0.1/udp/${p2p_port}/quic-v1" \
-  FRACTAL_CHAIN_ROCKSDB_PATH="$db" \
-  FRACTAL_PROOF_ROCKSDB_PATH="$db" \
-  FRACTAL_MASTERCHAIN_RPC="${FRACTAL_MASTERCHAIN_RPC:-}" \
-    "$BINARY" >"$log" 2>&1 &
+  env \
+    FRACTAL_CONSENSUS_MODE=hyperbft \
+    FRACTAL_SHARD_COUNT=2 \
+    FRACTAL_SHARD_ID="$id" \
+    FRACTAL_TARGET_BLOCK_TIME_MS=70 \
+    FRACTAL_ANCHOR_INTERVAL="${FRACTAL_ANCHOR_INTERVAL:-100}" \
+    FRACTAL_ASYNC_PROOF=1 \
+    FRACTAL_AUTO_VALIDITY_PROOF=1 \
+    FRACTAL_RPC_ADDR="127.0.0.1:${rpc_port}" \
+    FRACTAL_P2P_LISTEN="/ip4/127.0.0.1/udp/${p2p_port}/quic-v1" \
+    FRACTAL_CHAIN_ROCKSDB_PATH="$db" \
+    FRACTAL_PROOF_ROCKSDB_PATH="$db" \
+    FRACTAL_MASTERCHAIN_RPC="${FRACTAL_MASTERCHAIN_RPC:-}" \
+    nohup "$BINARY" >"$log" 2>&1 &
   echo $! >"${PID_DIR}/shard-${id}.pid"
 }
 
@@ -160,7 +161,7 @@ case "$cmd" in
     export FRACTAL_ANCHOR_INTERVAL="${FRACTAL_ANCHOR_INTERVAL:-4}"
     start_shards
     echo "Waiting for HyperBFT + anchor cadence..."
-    sleep 8
+    sleep "${PILOT_PROOF_WAIT_SECS:-8}"
     FRACTAL_ANCHOR_INTERVAL="$FRACTAL_ANCHOR_INTERVAL" \
       "${ROOT}/scripts/smoke-pilot-shards.sh"
     ;;

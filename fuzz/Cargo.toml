@@ -1,0 +1,46 @@
+[package]
+name = "fractalchain-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+borsh = { version = "1.5", features = ["derive"] }
+fractal-consensus = { path = "../crates/consensus" }
+fractal-core = { path = "../crates/core" }
+fractal-network = { path = "../crates/network" }
+libfuzzer-sys = "0.4"
+
+[[bin]]
+name = "tx_decode"
+path = "fuzz_targets/tx_decode.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "proof_envelope"
+path = "fuzz_targets/proof_envelope.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "da_share"
+path = "fuzz_targets/da_share.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "peer_message"
+path = "fuzz_targets/peer_message.rs"
+test = false
+doc = false
+bench = false
+
+[workspace]
+members = ["."]

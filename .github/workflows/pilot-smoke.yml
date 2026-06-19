@@ -1,0 +1,80 @@
+name: pilot-smoke
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+
+concurrency:
+  group: pilot-smoke-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: "1"
+
+jobs:
+  pilot-shards:
+    name: bounded pilot shard smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Run bounded pilot smoke
+        run: timeout 25m ./scripts/run-pilot-shards.sh smoke-start
+
+      - name: Stop pilot shards
+        if: always()
+        run: ./scripts/run-pilot-shards.sh stop || true
+
+      - name: Upload pilot logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pilot-shards-logs
+          path: .pilot-shards/*.log
+          if-no-files-found: ignore
+          retention-days: 14
+
+  masterchain-pilot:
+    name: bounded masterchain plus pilot smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Start masterchain-backed pilot
+        run: timeout 25m ./scripts/run-pilot-shards.sh start-with-masterchain
+
+      - name: Run pilot smoke against masterchain-backed shards
+        run: |
+          sleep 8
+          timeout 8m ./scripts/run-pilot-shards.sh smoke
+
+      - name: Stop pilot and masterchain
+        if: always()
+        run: ./scripts/run-pilot-shards.sh stop || true
+
+      - name: Upload pilot logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: masterchain-pilot-shard-logs
+          path: .pilot-shards/*.log
+          if-no-files-found: ignore
+          retention-days: 14
+
+      - name: Upload masterchain logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: masterchain-logs
+          path: .masterchain-bft/*.log
+          if-no-files-found: ignore
+          retention-days: 14

@@ -625,7 +625,8 @@ pub fn run_da_sampling_bandwidth_bench(
         &payload,
         fractal_consensus::DEFAULT_DA_NAMESPACE,
         share_size,
-    );
+    )
+    .expect("DA sidecar benchmark fixture");
     let root = fractal_consensus::da_root(&sidecar);
     let started = Instant::now();
     for round in 0..rounds {

@@ -43,4 +43,10 @@ pub enum ExecError {
     WalletCommitmentMismatch,
     #[error("duplicate wallet task-receipt anchor")]
     DuplicateWalletAnchor,
+    #[error("permissionless validator entry is disabled")]
+    PermissionlessEntryDisabled,
+    #[error("validator fingerprint is already registered")]
+    ValidatorAlreadyRegistered,
+    #[error("bonded stake is below minimum validator stake")]
+    BelowMinValidatorStake,
 }

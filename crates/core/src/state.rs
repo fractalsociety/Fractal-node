@@ -276,7 +276,7 @@ impl State {
                     self.evm_tx_logs.insert(h, outcome.logs);
                     self.evm_tx_success.insert(h, true);
                 }
-                self.bump_nonce(signer);
+                self.bump_nonce(signer)?;
                 Ok(())
             }
             (
@@ -309,9 +309,13 @@ impl State {
         result
     }
 
-    fn bump_nonce(&mut self, signer: Address) {
-        let a = self.accounts.get_mut(&signer).expect("signer exists");
+    fn bump_nonce(&mut self, signer: Address) -> Result<(), ExecError> {
+        let a = self
+            .accounts
+            .get_mut(&signer)
+            .ok_or(ExecError::UnknownSigner)?;
         a.nonce = a.nonce.saturating_add(1);
+        Ok(())
     }
 
     fn bump_owned_object_versions_for_scope(&mut self, scope: &TxExecutionScope) {
@@ -355,7 +359,10 @@ impl State {
             }
         }
         {
-            let from_acc = self.accounts.get_mut(&from).expect("from exists");
+            let from_acc = self
+                .accounts
+                .get_mut(&from)
+                .ok_or(ExecError::UnknownSigner)?;
             from_acc.balance -= amount;
         }
         self.accounts
@@ -365,7 +372,7 @@ impl State {
                 balance: 0,
             })
             .balance += amount;
-        self.bump_nonce(from);
+        self.bump_nonce(from)?;
         Ok(())
     }
 
@@ -417,7 +424,7 @@ impl State {
                 self.agents.insert(id, rec);
                 self.address_to_agent.insert(signer, id);
                 if bump_nonce {
-                    self.bump_nonce(signer);
+                    self.bump_nonce(signer)?;
                 }
                 Ok(())
             }
@@ -435,7 +442,7 @@ impl State {
                     ag.pubkey = *pk;
                 }
                 if bump_nonce {
-                    self.bump_nonce(signer);
+                    self.bump_nonce(signer)?;
                 }
                 Ok(())
             }
@@ -447,7 +454,7 @@ impl State {
                 let ag = self.agents.get_mut(agent_id).ok_or(ExecError::NotFound)?;
                 ag.status = 1;
                 if bump_nonce {
-                    self.bump_nonce(signer);
+                    self.bump_nonce(signer)?;
                 }
                 Ok(())
             }
@@ -457,7 +464,7 @@ impl State {
                 }
                 self.receipts.insert(r.receipt_id, r.clone());
                 if bump_nonce {
-                    self.bump_nonce(signer);
+                    self.bump_nonce(signer)?;
                 }
                 Ok(())
             }
@@ -495,7 +502,7 @@ impl State {
                     },
                 );
                 if bump_nonce {
-                    self.bump_nonce(signer);
+                    self.bump_nonce(signer)?;
                 }
                 Ok(())
             }
@@ -511,7 +518,7 @@ impl State {
                     .ok_or(ExecError::NotFound)?;
                 d.status = *resolution;
                 if bump_nonce {
-                    self.bump_nonce(signer);
+                    self.bump_nonce(signer)?;
                 }
                 Ok(())
             }
@@ -523,12 +530,15 @@ impl State {
                     }
                 }
                 {
-                    let acc = self.accounts.get_mut(&signer).expect("signer");
+                    let acc = self
+                        .accounts
+                        .get_mut(&signer)
+                        .ok_or(ExecError::UnknownSigner)?;
                     acc.balance -= amount;
                 }
                 *self.stakes.entry(signer).or_insert(0) += amount;
                 if bump_nonce {
-                    self.bump_nonce(signer);
+                    self.bump_nonce(signer)?;
                 }
                 Ok(())
             }
@@ -546,7 +556,7 @@ impl State {
                     })
                     .balance += amount;
                 if bump_nonce {
-                    self.bump_nonce(signer);
+                    self.bump_nonce(signer)?;
                 }
                 Ok(())
             }
@@ -557,7 +567,7 @@ impl State {
                 self.require_governance(signer)?;
                 self.stakes.remove(validator_id);
                 if bump_nonce {
-                    self.bump_nonce(signer);
+                    self.bump_nonce(signer)?;
                 }
                 Ok(())
             }
@@ -569,12 +579,15 @@ impl State {
                     }
                 }
                 {
-                    let acc = self.accounts.get_mut(&signer).expect("signer");
+                    let acc = self
+                        .accounts
+                        .get_mut(&signer)
+                        .ok_or(ExecError::UnknownSigner)?;
                     acc.balance -= amount;
                 }
                 *self.delegated.entry((signer, *validator)).or_insert(0) += amount;
                 if bump_nonce {
-                    self.bump_nonce(signer);
+                    self.bump_nonce(signer)?;
                 }
                 Ok(())
             }
@@ -587,7 +600,7 @@ impl State {
                     })
                     .balance += 0;
                 if bump_nonce {
-                    self.bump_nonce(signer);
+                    self.bump_nonce(signer)?;
                 }
                 Ok(())
             }
@@ -616,13 +629,13 @@ impl State {
                 }
                 self.wallet_task_receipt_anchors.insert(*commitment, signer);
                 if bump_nonce {
-                    self.bump_nonce(signer);
+                    self.bump_nonce(signer)?;
                 }
                 Ok(())
             }
             NativeCall::NoOp => {
                 if bump_nonce {
-                    self.bump_nonce(signer);
+                    self.bump_nonce(signer)?;
                 }
                 Ok(())
             }
@@ -630,7 +643,7 @@ impl State {
                 self.require_governance(signer)?;
                 self.chain_economics = params.clone();
                 if bump_nonce {
-                    self.bump_nonce(signer);
+                    self.bump_nonce(signer)?;
                 }
                 Ok(())
             }
@@ -696,7 +709,7 @@ impl State {
             self.receipts.insert(r.receipt_id, r.clone());
         }
         if bump_nonce {
-            self.bump_nonce(signer);
+            self.bump_nonce(signer)?;
         }
         Ok(())
     }
@@ -734,7 +747,7 @@ impl State {
             })
             .balance += amount;
         if bump_nonce {
-            self.bump_nonce(signer);
+            self.bump_nonce(signer)?;
         }
         Ok(())
     }

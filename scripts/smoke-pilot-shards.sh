@@ -112,16 +112,24 @@ check_shard() {
 
   if [[ "$EXPECT_ZK" -eq 1 ]]; then
     body="$(rpc_raw "$url" fractal_getGlobalZkRoot)" || fail "$label fractal_getGlobalZkRoot failed"
-    gz="$(rpc_result "$body")" || fail "$label no globalZkRoot yet (anchor_interval=$ANCHOR_INTERVAL): $body"
-    gz_hex="${gz#\"}"
-    gz_hex="${gz_hex%\"}"
-    gz_hex="${gz_hex#0x}"
-    [[ "$gz_hex" != "$(printf '0%.0s' {1..64})" ]] || fail "$label globalZkRoot is zero"
-    echo "  $label globalZkRoot=${gz:0:18}... ok"
+    if echo "$body" | grep -q '"result"'; then
+      gz="$(rpc_result "$body")" || fail "$label no globalZkRoot yet (anchor_interval=$ANCHOR_INTERVAL): $body"
+      gz_hex="${gz#\"}"
+      gz_hex="${gz_hex%\"}"
+      gz_hex="${gz_hex#0x}"
+      [[ "$gz_hex" != "$(printf '0%.0s' {1..64})" ]] || fail "$label globalZkRoot is zero"
+      echo "  $label globalZkRoot=${gz:0:18}... ok"
 
-    body="$(rpc_raw "$url" fractal_getGlobalZkProof)" || fail "$label fractal_getGlobalZkProof failed"
-    echo "$body" | grep -q '"snarkBytes"' || fail "$label missing Plonky2 bundle"
-    echo "  $label Plonky2 bundle ok"
+      body="$(rpc_raw "$url" fractal_getGlobalZkProof)" || fail "$label fractal_getGlobalZkProof failed"
+      echo "$body" | grep -q '"snarkBytes"' || fail "$label missing Plonky2 bundle"
+      echo "  $label Plonky2 bundle ok"
+    else
+      body="$(rpc_raw "$url" fractal_proofMetrics)" || fail "$label fractal_proofMetrics failed"
+      accepted="$(echo "$body" | sed -n 's/.*"proofsAccepted":"0x\([0-9a-fA-F]*\)".*/\1/p' | head -1)"
+      [[ -n "$accepted" ]] || fail "$label missing proof metrics: $body"
+      [[ $((16#${accepted:-0})) -gt 0 ]] || fail "$label proof worker has not accepted proofs yet: $body"
+      echo "  $label proofMetrics proofsAccepted=0x$accepted ok"
+    fi
   else
     echo "  $label ZK checks skipped (FRACTAL_ANCHOR_INTERVAL=$ANCHOR_INTERVAL > 16)"
   fi

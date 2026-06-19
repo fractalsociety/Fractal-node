@@ -6,8 +6,15 @@
 *.swp
 .env
 .env.*
+tools/codex-langfuse/.venv/
+tools/codex-langfuse/export/
 contracts/node_modules/
 packages/**/node_modules/
 packages/**/dist/
 contracts/cache/
 contracts/artifacts/
+fuzz/artifacts/
+fuzz/target/
+.hyperbft-bft7-shard/
+.pilot-shards/
+.track-b-lab/
