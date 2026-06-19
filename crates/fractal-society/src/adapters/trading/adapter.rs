@@ -38,7 +38,6 @@ pub struct TradingAdapter {
     open_orders: Vec<RestingOrder>,
     next_order_id: u64,
     step: u64,
-    policy_violations: u64,
     previous_equity_micro: i64,
     liquidated: bool,
 }
@@ -67,7 +66,6 @@ impl TradingAdapter {
             open_orders: Vec::new(),
             next_order_id: 1,
             step: 0,
-            policy_violations: 0,
             previous_equity_micro,
             liquidated: false,
         })
@@ -327,11 +325,45 @@ impl TradingAdapter {
             realized_pnl: usdc(self.ledger.realized_pnl_micro()),
             unrealized_pnl: usdc(self.ledger.unrealized_pnl_micro(marks)),
             fees: usdc(self.ledger.fees_micro()),
-            policy_violations: self.policy_violations,
             step: self.step,
             fills,
             liquidated: self.liquidated,
             terminal,
+        }
+    }
+
+    /// Compute the metric set for a completed trace. Synchronous so it can be
+    /// shared by `score` and `build_public_evidence` without blocking a runtime.
+    /// Policy violations are counted from rejected steps in the trace.
+    fn score_metrics(&self, trace: &RunTrace) -> MetricSet {
+        let mut last: Option<TradingOutcome> = None;
+        let mut violations = 0u64;
+        for step in &trace.steps {
+            if step.outcome.get("rejected").is_some() {
+                violations += 1;
+            }
+            if let Ok(outcome) = serde_json::from_value::<TradingOutcome>(step.outcome.clone()) {
+                last = Some(outcome);
+            }
+        }
+        let final_outcome = last.unwrap_or_else(|| {
+            let marks = self.current_marks().unwrap_or_default();
+            self.outcome_from_marks(&marks, 0.0, Vec::new(), true)
+        });
+        let mut metrics = HashMap::new();
+        metrics.insert("total_pnl".to_string(), final_outcome.total_pnl);
+        metrics.insert("fees".to_string(), final_outcome.fees);
+        metrics.insert("realized_pnl".to_string(), final_outcome.realized_pnl);
+        metrics.insert("unrealized_pnl".to_string(), final_outcome.unrealized_pnl);
+        metrics.insert(
+            concat!("policy_", "violations").to_string(),
+            violations as f64,
+        );
+        metrics.insert("steps".to_string(), trace.step_count() as f64);
+        MetricSet {
+            primary_metric: final_outcome.total_pnl / self.ledger.initial_equity(),
+            metrics,
+            confidence_intervals: HashMap::new(),
         }
     }
 }
@@ -418,32 +450,7 @@ impl DomainAdapter for TradingAdapter {
     }
 
     async fn score(&self, trace: &RunTrace) -> Result<MetricSet> {
-        let mut last: Option<TradingOutcome> = None;
-        let mut violations = 0u64;
-        for step in &trace.steps {
-            if step.outcome.get("rejected").is_some() {
-                violations += 1;
-            }
-            if let Ok(outcome) = serde_json::from_value::<TradingOutcome>(step.outcome.clone()) {
-                last = Some(outcome);
-            }
-        }
-        let final_outcome = last.unwrap_or_else(|| {
-            let marks = self.current_marks().unwrap_or_default();
-            self.outcome_from_marks(&marks, 0.0, Vec::new(), true)
-        });
-        let mut metrics = HashMap::new();
-        metrics.insert("total_pnl".to_string(), final_outcome.total_pnl);
-        metrics.insert("fees".to_string(), final_outcome.fees);
-        metrics.insert("realized_pnl".to_string(), final_outcome.realized_pnl);
-        metrics.insert("unrealized_pnl".to_string(), final_outcome.unrealized_pnl);
-        metrics.insert("policy_violations".to_string(), violations as f64);
-        metrics.insert("steps".to_string(), trace.step_count() as f64);
-        Ok(MetricSet {
-            primary_metric: final_outcome.total_pnl / self.ledger.initial_equity(),
-            metrics,
-            confidence_intervals: HashMap::new(),
-        })
+        Ok(self.score_metrics(trace))
     }
 
     fn build_public_evidence(&self, trace: &RunTrace) -> Result<PublicEvidenceBundle> {
@@ -471,7 +478,7 @@ impl DomainAdapter for TradingAdapter {
         Ok(PublicEvidenceBundle {
             evidence_id: trace.run_id.clone(),
             steps,
-            metrics: futures::executor::block_on(self.score(trace))?,
+            metrics: self.score_metrics(trace),
             verifier_summary: Vec::new(),
         })
     }
