@@ -20,6 +20,9 @@ use crate::pkgs::pipeline_contract::PipelineOutcome;
 use crate::pkgs::proof_manifest;
 use crate::pkgs::reward_gate;
 use crate::pkgs::run_bundle::RunBundle;
+use crate::pkgs::{
+    accounting_integrity, cost_completeness, risk_policy, sandbox_policy, temporal_leakage,
+};
 use crate::protocol::{EvidenceBundle, Hash, ProofManifest};
 use crate::signing::AuthorSigner;
 use crate::simulation::Agent;
@@ -113,4 +116,65 @@ pub async fn run_pipeline(
         outcome,
         bundle,
     })
+}
+
+/// Default accounting tolerance used by the canonical trading verifier pack.
+pub const DEFAULT_TOLERANCE: f64 = 1e-3;
+
+/// The canonical verifier set for a trading simulation run.
+///
+/// Returns the core trading verifiers — accounting integrity, cost
+/// completeness, risk-policy consistency, temporal ordering, and sandbox policy
+/// — wrapped as [`VerifierFn`]s. Pass to [`run_pipeline`] or use
+/// [`run_pipeline_default`].
+pub fn trading_verifier_pack(tolerance: f64, allowed_tools: Vec<String>) -> Vec<VerifierFn> {
+    vec![
+        Arc::new(move |evidence: &EvidenceBundle| {
+            accounting_integrity::verify(evidence, tolerance)
+        }),
+        Arc::new(move |evidence: &EvidenceBundle| cost_completeness::verify(evidence, tolerance)),
+        Arc::new(move |evidence: &EvidenceBundle| risk_policy::verify(evidence)),
+        Arc::new(|evidence: &EvidenceBundle| temporal_leakage::verify(evidence)),
+        Arc::new(move |evidence: &EvidenceBundle| sandbox_policy::verify(evidence, &allowed_tools)),
+    ]
+}
+
+fn default_allowed_tools() -> Vec<String> {
+    vec![
+        "hold".to_string(),
+        "place_order".to_string(),
+        "reduce_position".to_string(),
+        "cancel_order".to_string(),
+    ]
+}
+
+/// Run the pipeline using the canonical trading verifier pack.
+///
+/// Convenience wrapper around [`run_pipeline`] that supplies
+/// [`trading_verifier_pack`] with [`DEFAULT_TOLERANCE`] and the standard trading
+/// action allowlist. Supply everything else as for [`run_pipeline`].
+#[allow(clippy::too_many_arguments)] // orchestrator convenience; inputs are genuinely independent
+pub async fn run_pipeline_default(
+    adapter: TradingAdapter,
+    agent: impl Agent<TradingAdapter>,
+    seed: u64,
+    kernel_config: KernelConfig,
+    trading_config: TradingConfig,
+    baselines: Vec<(String, RunOutcome)>,
+    signer: &AuthorSigner,
+    timestamp: DateTime<Utc>,
+) -> crate::Result<PipelineResult> {
+    let verifiers = trading_verifier_pack(DEFAULT_TOLERANCE, default_allowed_tools());
+    run_pipeline(
+        adapter,
+        agent,
+        seed,
+        kernel_config,
+        trading_config,
+        baselines,
+        verifiers,
+        signer,
+        timestamp,
+    )
+    .await
 }
