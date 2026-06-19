@@ -76,6 +76,8 @@ pub struct MarketBar {
     pub close: f64,
     /// Synthetic volume.
     pub volume: f64,
+    /// Data-quality flag: true when this bar represents a data outage (stale/gapped).
+    pub stale: bool,
 }
 
 impl MarketBar {

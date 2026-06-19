@@ -41,8 +41,24 @@ pub fn synthetic_bars(seed: u64, steps: u64) -> Vec<BarSet> {
         eth = (eth + eth_move).max(500.0);
         out.push(BarSet {
             step,
-            btc: make_bar(step, Asset::Btc, btc_open, btc, 160.0, 10.0 + step as f64),
-            eth: make_bar(step, Asset::Eth, eth_open, eth, 28.0, 50.0 + step as f64),
+            btc: make_bar(
+                step,
+                Asset::Btc,
+                btc_open,
+                btc,
+                160.0,
+                10.0 + step as f64,
+                false,
+            ),
+            eth: make_bar(
+                step,
+                Asset::Eth,
+                eth_open,
+                eth,
+                28.0,
+                50.0 + step as f64,
+                false,
+            ),
         });
     }
     out
@@ -60,8 +76,8 @@ pub fn liquidation_bars(steps: u64) -> Vec<BarSet> {
         eth -= 50.0;
         out.push(BarSet {
             step,
-            btc: make_bar(step, Asset::Btc, btc_open, btc, 1_000.0, 25.0),
-            eth: make_bar(step, Asset::Eth, eth_open, eth, 20.0, 25.0),
+            btc: make_bar(step, Asset::Btc, btc_open, btc, 1_000.0, 25.0, false),
+            eth: make_bar(step, Asset::Eth, eth_open, eth, 20.0, 25.0, false),
         });
     }
     out
@@ -80,6 +96,7 @@ pub fn golden_bars() -> Vec<BarSet> {
                 low: 95.0,
                 close: 100.0,
                 volume: 1_000.0,
+                stale: false,
             },
             eth: MarketBar {
                 ts: 0,
@@ -89,6 +106,7 @@ pub fn golden_bars() -> Vec<BarSet> {
                 low: 9.0,
                 close: 10.0,
                 volume: 1_000.0,
+                stale: false,
             },
         },
         BarSet {
@@ -101,6 +119,7 @@ pub fn golden_bars() -> Vec<BarSet> {
                 low: 99.0,
                 close: 110.0,
                 volume: 1_000.0,
+                stale: false,
             },
             eth: MarketBar {
                 ts: 1,
@@ -110,12 +129,42 @@ pub fn golden_bars() -> Vec<BarSet> {
                 low: 10.0,
                 close: 11.0,
                 volume: 1_000.0,
+                stale: false,
             },
         },
     ]
 }
 
-fn make_bar(step: u64, asset: Asset, open: f64, close: f64, spread: f64, volume: f64) -> MarketBar {
+/// Deterministic fixture where BTC experiences data outages (stale bars) on even
+/// steps; ETH is always fresh. Used to test data-outage handling (P04-N06).
+pub fn outage_bars(steps: u64) -> Vec<BarSet> {
+    let mut out = Vec::with_capacity(steps as usize);
+    let mut btc = 100.0_f64;
+    let mut eth = 10.0_f64;
+    for step in 0..steps {
+        let btc_open = btc;
+        let eth_open = eth;
+        btc += 1.0;
+        eth += 0.1;
+        let btc_stale = step % 2 == 0;
+        out.push(BarSet {
+            step,
+            btc: make_bar(step, Asset::Btc, btc_open, btc, 1.0, 10.0, btc_stale),
+            eth: make_bar(step, Asset::Eth, eth_open, eth, 0.5, 10.0, false),
+        });
+    }
+    out
+}
+
+fn make_bar(
+    step: u64,
+    asset: Asset,
+    open: f64,
+    close: f64,
+    spread: f64,
+    volume: f64,
+    stale: bool,
+) -> MarketBar {
     MarketBar {
         ts: step as i64,
         asset,
@@ -124,5 +173,6 @@ fn make_bar(step: u64, asset: Asset, open: f64, close: f64, spread: f64, volume:
         low: (open.min(close) - spread).max(0.01),
         close,
         volume,
+        stale,
     }
 }

@@ -176,6 +176,11 @@ impl TradingAdapter {
             }
             return Ok(PolicyDecision::Approved);
         }
+        if self.current_bars().bar(asset).stale {
+            return Ok(PolicyDecision::Rejected {
+                reason: "data outage: market data is stale".to_string(),
+            });
+        }
         let delta = qty_micro * side.sign();
         if pos.qty_micro != 0
             && pos.qty_micro.signum() != delta.signum()
