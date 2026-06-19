@@ -1663,4 +1663,163 @@ Checks: non-empty `id`, `question`, `claim`; non-empty `domain_adapter.id` / `do
 
 - **66 packages total**, all flat against the base crate, zero inter-package file overlap.
 - This fifth batch adds market-data validation/resampling (53/54), evidence/stat extraction (55/64/65), generic privacy/export utilities (56/57/58/59/60), registries (61), and lifecycle/validation helpers (52/62/63/66).
-- **The serial orchestrator + vertical-slice test remains the single milestone that converts this component library into a running research pipeline.**
+- **The serial orchestrator + vertical-slice test remains the single milestone that converts this component library into a running research pipeline."""
+
+---
+
+# Serial integration track — Packages 67–72
+
+> ⚠️ **These are NOT parallel packages.** They are **serial, ordered integration
+> tasks** that wire the 66 components into a running pipeline. Rules:
+> - **One agent, in order (67 → 68 → 69 → 70 → 71 → 72).** Do not assign them to
+>   different agents simultaneously — each depends on the prior.
+> - They are **exempt from the parallel zero-overlap rule**: they create/edit
+>   real integration files (`src/pipeline.rs`, `lib.rs`, examples, tests) and
+>   legitimately `use` many `pkgs::*` modules together.
+> - Prerequisite: the spine packages they compose — **7 (proof_manifest), 29
+>   (verifier_summary), 30 (pipeline_contract), 36 (run_bundle), 11 (reward_gate)**,
+>   plus trading `build_scorecard` and the kernel — must be landed. (They are.)
+
+**Dependency chain:**
+```
+67 orchestrator  →  68 vertical-slice test            ← "it works end-to-end" (Bar B)
+                →  69 canonical verifier pack
+                →  70 example/CLI binary
+                →  71 offline proof verification
+                →  72 pipeline determinism + replay test
+```
+**Milestone:** **67 + 68 landing = "the research pipeline works end-to-end" on
+synthetic data.** 69–72 harden it (defaults, usability, trustless verify, replay).
+
+---
+
+## ☐ Package 67 — pipeline orchestrator (SERIAL)
+
+**Goal:** Create `src/pipeline.rs` — the spine that chains the stages into one call: run → score → verify → proof → outcome/bundle.
+
+**Files allowed:** create `src/pipeline.rs`; edit `src/lib.rs` (add `pub mod pipeline;`); create `tests/pipeline.rs`.
+**Dependencies:** packages 7, 11, 29, 30, 36; trading `build_scorecard`; `kernel::run`.
+**Interface (interface-first — implement to this):**
+```rust
+use std::sync::Arc;
+use chrono::{DateTime, Utc};
+use crate::adapters::trading::{TradingAdapter, TradingConfig, build_scorecard};
+use crate::kernel::{KernelConfig, RunOutcome};
+use crate::pkgs::pipeline_contract::PipelineOutcome;
+use crate::pkgs::run_bundle::RunBundle;
+use crate::protocol::{EvidenceBundle, ProofManifest};
+use crate::signing::AuthorSigner;
+use crate::simulation::Agent;
+use crate::verifier::{Scorecard, VerifierReport};
+
+/// A verifier function run over a run's evidence.
+pub type VerifierFn = Arc<dyn Fn(&EvidenceBundle) -> VerifierReport + Send + Sync>;
+
+/// Full output of a pipeline run.
+pub struct PipelineResult {
+    pub run: RunOutcome,
+    pub scorecard: Scorecard,
+    pub verifier_reports: Vec<VerifierReport>,
+    pub proof_manifest: ProofManifest,
+    pub outcome: PipelineOutcome,
+    pub bundle: RunBundle,
+}
+
+/// Run the full research pipeline for one candidate.
+pub async fn run_pipeline(
+    adapter: TradingAdapter,
+    agent: impl Agent<TradingAdapter>,
+    seed: u64,
+    kernel_config: KernelConfig,
+    trading_config: TradingConfig,
+    baselines: Vec<(String, RunOutcome)>,
+    verifiers: Vec<VerifierFn>,
+    signer: &AuthorSigner,
+    timestamp: DateTime<Utc>,
+) -> crate::Result<PipelineResult>;
+```
+Steps inside: `kernel::run` → `build_scorecard(&run, &baselines, &trading_config, ts)` → run each `verifier` over `&run.evidence` → `reward_gate::evaluate(&reports, false, 1)` sets `reward_released` → `proof_manifest::build(&run, &scorecard, signer, ts)` → `PipelineOutcome { evidence_hash: run.evidence_hash, scorecard_hash: Hash::of(&scorecard)?, verifier_reports, committed: true, reward_released }` → `RunBundle::new(run_manifest_hash, evidence_hash, scorecard_hash, proof_hash, agent_id)`.
+**Acceptance tests:** `run_pipeline` returns a `PipelineResult` whose `proof_manifest` verifies (`verify_author(&signer.public_key())` ok), `outcome.stage() >= Verify`, and `bundle.bundle_hash()` is deterministic.
+**Complexity:** ~3 h.
+
+---
+
+## ☐ Package 68 — vertical-slice end-to-end test (SERIAL)
+
+**Goal:** One test that proves the whole pipeline works on synthetic trading data. **This test passing IS "the pipeline works" (Bar B).**
+
+**Files allowed:** create `tests/pipeline_vertical_slice.rs`.
+**Dependencies:** package 67; verifier packages 1 (accounting_integrity), 2 (cost_completeness), 3 (risk_policy), 14 (temporal_leakage); trading adapter + baselines.
+**Steps:** build a `TradingAdapter` (synthetic bars) + `TradingAgent` + the 4 baselines + an `AuthorSigner`; assemble `verifiers` from the landed verifier functions; call `run_pipeline`; assert: `run.evidence` non-empty; `scorecard.baselines.len() == 4`; **all** `verifier_reports` `passed`; `proof_manifest.verify_author(pk)` is `Ok`; `outcome.stage() == Reward` and `outcome.is_complete()`.
+**Acceptance test:** the single `pipeline_runs_end_to_end` test passes.
+**Complexity:** ~2 h.
+
+---
+
+## ☐ Package 69 — canonical trading verifier pack (SERIAL)
+
+**Goal:** A single `trading_verifier_pack()` returning the standard verifier set, wired as the orchestrator's default so callers don't hand-pick verifiers.
+
+**Files allowed:** create `src/pipeline/verify_pack.rs` (and `src/pipeline/mod.rs` if converting `pipeline.rs` to a directory module) or extend `src/pipeline.rs`; add a `run_pipeline_default` convenience.
+**Dependencies:** package 67; verifier packages 1, 2, 3, 13 (sandbox_policy), 14 (temporal_leakage), 15 (baseline_correctness).
+**Interface:**
+```rust
+/// The canonical verifier set for a trading simulation run.
+pub fn trading_verifier_pack(tolerance: f64, allowed_tools: Vec<String>) -> Vec<VerifierFn>;
+```
+**Acceptance tests:** the pack is non-empty; `run_pipeline_default` (which calls `run_pipeline` with this pack) succeeds end-to-end.
+**Complexity:** ~1.5 h.
+
+---
+
+## ☐ Package 70 — example/CLI binary (SERIAL)
+
+**Goal:** A runnable `examples/run_research.rs` that executes the pipeline on a fixture and prints a public `ProofCard` — the human-usable "it works" demo.
+
+**Files allowed:** create `examples/run_research.rs`.
+**Dependencies:** packages 67, 69, 31 (proof_card).
+**Steps:** construct adapter/agent/baselines/signer with fixed seeds; call `run_pipeline_default`; build a `ProofCard` via `proof_card::build`; print claim, tier, net return, proof hash, disclaimer.
+**Acceptance tests:** `cargo run --example run_research` exits 0 and prints a line containing the proof hash + "SIMULATION".
+**Complexity:** ~1.5 h.
+
+---
+
+## ☐ Package 71 — offline proof verification (SERIAL)
+
+**Goal:** Trustless verification — given a `RunBundle` + public `ProofManifest` + `Scorecard` + author pubkey, verify the proof **without re-running** the pipeline (recompute `scorecard_hash`, check the manifest signature, confirm the bundle's hashes are consistent). Implements PRD P07-N09.
+
+**Files allowed:** create `src/offline_verify.rs` (register `pub mod offline_verify;` in `lib.rs`); create `tests/offline_verify.rs`.
+**Dependencies:** packages 7, 30, 36; `ProofManifest::verify_author`, `Hash::of`.
+**Interface:**
+```rust
+use crate::pkgs::run_bundle::RunBundle;
+use crate::protocol::{ProofManifest, Hash};
+use crate::verifier::Scorecard;
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum VerifyVerdict { Valid, Invalid { reasons: Vec<String> } }
+pub fn verify(bundle: &RunBundle, manifest: &ProofManifest, scorecard: &Scorecard, public_key: &[u8; 32]) -> VerifyVerdict;
+```
+Checks: `Hash::of(scorecard) == bundle.scorecard_hash == manifest.scorecard_hash`; `manifest.trace_merkle_root == bundle.evidence_hash`; `manifest.verify_author(public_key)` ok; `Hash::of(manifest) == bundle.proof_hash`. Collect failures into `Invalid`.
+**Acceptance tests:** a genuine bundle/manifest/scorecard → `Valid`; a tampered scorecard → `Invalid`; wrong pubkey → `Invalid`.
+**Complexity:** ~2 h.
+
+---
+
+## ☐ Package 72 — pipeline determinism + replay test (SERIAL)
+
+**Goal:** Prove the integrated pipeline is deterministic and replayable: two `run_pipeline` calls with identical inputs produce identical proof/bundle hashes, and the pipeline can be replayed from a frozen seed.
+
+**Files allowed:** create `tests/pipeline_determinism.rs`.
+**Dependencies:** package 67 (and 69 for the default pack).
+**Steps:** run the pipeline twice with identical (adapter, agent, seed, config, baselines, verifiers, signer, timestamp); assert `proof_manifest` hashes equal and `bundle.bundle_hash()` equal; run with a different seed → different hashes.
+**Acceptance tests:** `pipeline_is_deterministic` (identical hashes) and `pipeline_varies_by_seed` (different hashes) both pass.
+**Complexity:** ~1.5 h.
+
+---
+
+## Track summary (67–72)
+
+- **6 serial integration tasks**, ~11–12 h total, **one agent in order**.
+- **67 + 68 = Bar B: the research pipeline works end-to-end on synthetic data.**
+- 69–72 add defaults, a runnable demo, trustless offline verification, and replay determinism — the credibility/usability layer before the cross-repo TS port (Bar C).
+- After this track, the remaining work to a *product* is cross-repo (fractalwork TS schema port), infrastructure (persistence, live data recorder P03), and the arena launch — none of which is more Rust packages.
