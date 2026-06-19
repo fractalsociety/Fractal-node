@@ -96,7 +96,14 @@ pub trait DomainAdapter: Send + Sync {
     async fn resolve_dataset(&self, manifest: &DatasetManifest) -> Result<Box<dyn DatasetHandle>>;
 
     /// Create an environment from configuration
-    async fn create_environment(&self, config: &EnvironmentManifest) -> Result<Box<dyn Environment>>;
+    async fn create_environment(
+        &self,
+        config: &EnvironmentManifest,
+    ) -> Result<Box<dyn Environment>>;
+
+    /// Reset the environment to its initial state and return the initial
+    /// observation. Called by the kernel at the start of each episode.
+    async fn reset(&mut self) -> Result<Self::Obs>;
 
     /// Normalize raw observation data
     fn normalize_observation(&self, raw: serde_json::Value) -> Result<Self::Obs>;
@@ -107,14 +114,34 @@ pub trait DomainAdapter: Send + Sync {
     /// Execute a single step in the environment
     async fn step(&mut self, action: Self::Act) -> Result<StepResult<Self::Obs, Self::Out>>;
 
-    /// Score an evidence bundle
-    async fn score(&self, evidence: &EvidenceBundle) -> Result<MetricSet>;
+    /// Score a run trace.
+    async fn score(&self, trace: &RunTrace) -> Result<MetricSet>;
 
-    /// Build public evidence (redacted) from full evidence
-    fn build_public_evidence(&self, evidence: &EvidenceBundle) -> Result<PublicEvidenceBundle>;
+    /// Build public (redacted) evidence from a full run trace.
+    fn build_public_evidence(&self, trace: &RunTrace) -> Result<PublicEvidenceBundle>;
 
     /// Get terminal conditions for this domain
     fn terminal_conditions(&self) -> Vec<TerminalCondition>;
+}
+
+/// A policy that chooses actions for a [`DomainAdapter`] (PHASE-02).
+///
+/// Implementations must be deterministic given their construction (including
+/// any seed). The kernel never passes wall-clock time or OS randomness into
+/// [`Agent::act`], so a run is fully determined by the adapter, the agent, the
+/// seed, and the kernel config.
+#[async_trait]
+pub trait Agent<A: DomainAdapter>: Send + Sync {
+    /// Stable agent identifier.
+    fn id(&self) -> &str;
+
+    /// Choose an action for the current observation.
+    async fn act(&mut self, observation: &A::Obs) -> Result<A::Act>;
+
+    /// The agent's manifest, if it exposes one. Defaults to `None`.
+    fn manifest(&self) -> Option<AgentManifest> {
+        None
+    }
 }
 
 /// Validation report for protocol validation
@@ -214,10 +241,15 @@ pub enum PolicyDecision {
     /// Approve action
     Approved,
     /// Reject action
-    Rejected { reason: String },
+    Rejected {
+        /// Reason the action was rejected.
+        reason: String,
+    },
     /// Modify action
     Modified {
+        /// Original proposed action.
         original_action: serde_json::Value,
+        /// Modified action applied instead.
         modified_action: serde_json::Value,
     },
 }
@@ -235,19 +267,103 @@ pub struct StepResult<O, U> {
     pub info: serde_json::Value,
 }
 
-/// Evidence bundle from a run
+/// Runtime trace accumulated during a run, before canonicalization into a
+/// [`protocol::EvidenceBundle`](crate::protocol::EvidenceBundle).
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct EvidenceBundle {
+pub struct RunTrace {
     /// Run ID
     pub run_id: String,
-    /// Agent manifest
-    pub agent: AgentManifest,
+    /// Agent manifest, if the agent exposes one.
+    pub agent: Option<AgentManifest>,
     /// Steps taken
     pub steps: Vec<EvidenceStep>,
     /// Final outcome
-    pub final_outcome: serde_json::Value,
+    pub final_outcome: Option<serde_json::Value>,
     /// Verifier reports
     pub verifier_reports: Vec<VerifierReport>,
+}
+
+impl RunTrace {
+    /// Create an empty trace for `run_id`.
+    pub fn new(run_id: impl Into<String>) -> Self {
+        Self {
+            run_id: run_id.into(),
+            agent: None,
+            steps: Vec::new(),
+            final_outcome: None,
+            verifier_reports: Vec::new(),
+        }
+    }
+
+    /// Record a step. `timestamp` must be a logical run clock supplied by the
+    /// kernel (not a wall clock) to preserve determinism.
+    pub fn record_step(
+        &mut self,
+        step: u64,
+        observation: serde_json::Value,
+        action: serde_json::Value,
+        outcome: serde_json::Value,
+        timestamp: chrono::DateTime<chrono::Utc>,
+    ) {
+        self.steps.push(EvidenceStep {
+            step,
+            observation,
+            action,
+            outcome,
+            timestamp,
+        });
+    }
+
+    /// Set the agent manifest for this trace.
+    pub fn set_agent(&mut self, agent: AgentManifest) {
+        self.agent = Some(agent);
+    }
+
+    /// Set the final outcome value of the run.
+    pub fn set_final_outcome(&mut self, outcome: serde_json::Value) {
+        self.final_outcome = Some(outcome);
+    }
+
+    /// Attach a verifier report produced for this run.
+    pub fn add_verifier_report(&mut self, report: VerifierReport) {
+        self.verifier_reports.push(report);
+    }
+
+    /// Number of steps recorded.
+    pub fn step_count(&self) -> u64 {
+        self.steps.len() as u64
+    }
+
+    /// Canonicalize into a [`protocol::EvidenceBundle`]. Each step becomes a
+    /// [`DecisionTrace`](crate::protocol::DecisionTrace) with its observation
+    /// hashed and a policy decision of `Approved`: the kernel validates actions
+    /// before stepping, so rejected actions never enter the trace.
+    pub fn into_evidence(
+        self,
+        id: crate::protocol::ObjectId,
+        metrics: HashMap<String, f64>,
+        timestamp: chrono::DateTime<chrono::Utc>,
+    ) -> crate::error::Result<crate::protocol::EvidenceBundle> {
+        let mut decision_traces = Vec::with_capacity(self.steps.len());
+        for s in self.steps {
+            decision_traces.push(crate::protocol::DecisionTrace {
+                step: s.step,
+                observation_hash: crate::protocol::Hash::of(&s.observation)?,
+                action: s.action,
+                risk_decision: crate::protocol::RiskDecision::Approved,
+                outcome: s.outcome,
+                timestamp: s.timestamp,
+            });
+        }
+        Ok(crate::protocol::EvidenceBundle {
+            id,
+            run_id: self.run_id,
+            decision_traces,
+            metrics,
+            verifier_reports: self.verifier_reports,
+            timestamp,
+        })
+    }
 }
 
 /// Single step evidence
@@ -323,7 +439,10 @@ pub enum TerminalConditionType {
     /// Maximum reward threshold
     MaxReward,
     /// Custom condition
-    Custom { name: String },
+    Custom {
+        /// Name of the custom condition.
+        name: String,
+    },
 }
 
 /// Generic environment configuration
@@ -335,19 +454,8 @@ pub struct EnvironmentConfig {
     pub domain_adapter: String,
     /// Configuration parameters
     pub parameters: HashMap<String, serde_json::Value>,
-    /// Resource limits
-    pub resource_limits: ResourceLimits,
-}
-
-/// Resource limits for execution
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ResourceLimits {
-    /// Max memory in MB
-    pub max_memory_mb: u64,
-    /// Max runtime in seconds
-    pub max_runtime_seconds: u64,
-    /// Max CPU cores
-    pub max_cpu_cores: u64,
+    /// Resource limits (canonical [`protocol::ResourceLimits`](crate::protocol::ResourceLimits))
+    pub resource_limits: crate::protocol::ResourceLimits,
 }
 
 #[cfg(test)]

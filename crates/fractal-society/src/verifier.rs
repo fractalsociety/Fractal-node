@@ -105,11 +105,24 @@ pub struct VerifierPackage {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum VerificationLogic {
     /// Inline code (for simple verifiers)
-    Inline { code: String, language: String },
+    Inline {
+        /// Source code of the verifier.
+        code: String,
+        /// Language of `code`.
+        language: String,
+    },
     /// Reference to external module
-    Module { module_path: String, function: String },
+    Module {
+        /// Path to the module containing the verifier.
+        module_path: String,
+        /// Function to invoke.
+        function: String,
+    },
     /// WASM blob
-    Wasm { blob_hash: Hash },
+    Wasm {
+        /// Content hash of the WASM blob.
+        blob_hash: Hash,
+    },
 }
 
 /// Calibration fixture for testing
@@ -303,7 +316,10 @@ pub enum ChallengeType {
     /// Reproducibility failure
     ReproducibilityFailure,
     /// Other
-    Other { description: String },
+    Other {
+        /// Free-form description of the challenge.
+        description: String,
+    },
 }
 
 /// Challenge status

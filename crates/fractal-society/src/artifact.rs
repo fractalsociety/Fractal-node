@@ -9,7 +9,7 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
-use crate::protocol::{Hash, Visibility, Version};
+use crate::protocol::{Hash, Version, Visibility};
 
 /// Unique artifact identifier
 pub type ArtifactId = String;
@@ -88,13 +88,27 @@ pub struct RegistryEntry {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum StorageLocation {
     /// Local filesystem
-    Local { path: String },
+    Local {
+        /// Filesystem path.
+        path: String,
+    },
     /// S3-compatible object storage
-    S3 { bucket: String, key: String },
+    S3 {
+        /// Bucket name.
+        bucket: String,
+        /// Object key.
+        key: String,
+    },
     /// IPFS
-    Ipfs { cid: String },
+    Ipfs {
+        /// Content identifier.
+        cid: String,
+    },
     /// URL
-    Url { url: String },
+    Url {
+        /// Resolvable URL.
+        url: String,
+    },
 }
 
 /// Package digest - signed hash of an artifact
@@ -125,6 +139,52 @@ pub struct Signature {
     pub timestamp: chrono::DateTime<chrono::Utc>,
 }
 
+impl PackageDigest {
+    /// Canonical bytes of the payload covered by attached signatures: the full
+    /// digest with the `signatures` list blanked, so a signature never covers
+    /// itself or another signature (gate P01-N03).
+    pub fn signable_bytes(&self) -> crate::error::Result<Vec<u8>> {
+        let mut copy = self.clone();
+        copy.signatures.clear();
+        crate::canonical::signable_bytes(&copy)
+    }
+
+    /// Attach the author's Ed25519 signature under `signer_id`.
+    pub fn attach_signature(
+        &mut self,
+        signer: &crate::signing::AuthorSigner,
+        signer_id: &str,
+    ) -> crate::error::Result<()> {
+        let bytes = self.signable_bytes()?;
+        let sig = hex::encode(signer.sign_bytes(&bytes));
+        self.signatures.push(Signature {
+            signer: signer_id.to_string(),
+            signature: sig,
+            algorithm: "ed25519".to_string(),
+            timestamp: chrono::Utc::now(),
+        });
+        Ok(())
+    }
+
+    /// Verify the signature attached under `signer_id` against `public_key`.
+    pub fn verify_signature(
+        &self,
+        signer_id: &str,
+        public_key: &[u8; 32],
+    ) -> crate::error::Result<()> {
+        let sig = self
+            .signatures
+            .iter()
+            .find(|s| s.signer == signer_id)
+            .ok_or_else(|| {
+                crate::error::Error::Signature(format!("no signature for signer '{signer_id}'"))
+            })?;
+        let bytes = self.signable_bytes()?;
+        let decoded = crate::signing::decode_signature_hex(&sig.signature)?;
+        crate::signing::verify_signature(public_key, &bytes, &decoded)
+    }
+}
+
 /// Artifact export bundle
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ExportBundle {
@@ -153,9 +213,17 @@ pub struct ExportManifest {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum ArtifactData {
     /// Inline data (for small artifacts)
-    Inline { data: String, encoding: String },
+    Inline {
+        /// Encoded payload.
+        data: String,
+        /// Encoding of `data` (e.g. "base64").
+        encoding: String,
+    },
     /// Reference to storage location
-    Reference { location: StorageLocation },
+    Reference {
+        /// Where the artifact bytes live.
+        location: StorageLocation,
+    },
 }
 
 /// Immutable version marker

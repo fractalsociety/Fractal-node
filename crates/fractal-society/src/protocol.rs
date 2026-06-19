@@ -9,9 +9,9 @@
 //! - ExperimentRun
 //! - EvidenceBundle
 //! - VerifierRun
-//! - Review
-//! - Replication
 //! - ProofManifest
+//!
+//! `Review` and `Replication` live in the [`verifier`](crate::verifier) module.
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -27,10 +27,19 @@ pub type Version = String;
 pub struct Hash(pub String);
 
 impl Hash {
-    /// Create a new hash from bytes
+    /// Hash of raw bytes via SHA-256, hex-encoded.
+    ///
+    /// Uses SHA-256 (not blake3) so all Fractal Society content hashes share
+    /// one convention with the canonical object hash and the TypeScript app.
     pub fn new(data: &[u8]) -> Self {
-        let hash = blake3::hash(data);
-        Self(hex::encode(hash.as_bytes()))
+        Self(hex::encode(fractal_crypto::sha256(data)))
+    }
+
+    /// Canonical content hash of a serializable value: SHA-256 of its
+    /// [`canonical JSON`](crate::canonical) encoding. Deterministic regardless
+    /// of struct field order or map insertion order.
+    pub fn of<T: Serialize + ?Sized>(value: &T) -> crate::error::Result<Self> {
+        crate::canonical::content_hash(value)
     }
 
     /// Parse a hash from hex string
@@ -204,11 +213,22 @@ pub struct DatasetManifest {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum DataSource {
     /// Historical data
-    Historical { venue: String, market: String },
+    Historical {
+        /// Venue the data was sourced from.
+        venue: String,
+        /// Market identifier.
+        market: String,
+    },
     /// Synthetic data
-    Synthetic { generator: String },
+    Synthetic {
+        /// Generator that produced the data.
+        generator: String,
+    },
     /// Live data
-    Live { venue: String },
+    Live {
+        /// Venue the data is sourced from.
+        venue: String,
+    },
 }
 
 /// Visibility level for artifacts
@@ -286,15 +306,16 @@ pub struct SkillRef {
     pub version: Version,
 }
 
-/// Resource limits
+/// Canonical resource limits for execution, shared by agent manifests and the
+/// simulation runtime.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ResourceLimits {
-    /// Max memory in GB
-    pub max_memory_gb: u32,
-    /// Max runtime in minutes
-    pub max_runtime_minutes: u32,
+    /// Max memory in MB
+    pub max_memory_mb: u64,
+    /// Max runtime in seconds
+    pub max_runtime_seconds: u64,
     /// Max CPU cores
-    pub max_cpu_cores: u32,
+    pub max_cpu_cores: u64,
 }
 
 /// Network policy
@@ -339,7 +360,10 @@ pub enum RunStatus {
     /// Completed
     Completed,
     /// Failed
-    Failed { error: String },
+    Failed {
+        /// Error message describing the failure.
+        error: String,
+    },
     /// Cancelled
     Cancelled,
 }
@@ -384,9 +408,17 @@ pub enum RiskDecision {
     /// Approved
     Approved,
     /// Rejected
-    Rejected { reason: String },
+    Rejected {
+        /// Reason the action was rejected.
+        reason: String,
+    },
     /// Modified
-    Modified { original: serde_json::Value, modified: serde_json::Value },
+    Modified {
+        /// Original proposed action.
+        original: serde_json::Value,
+        /// Modified action applied instead.
+        modified: serde_json::Value,
+    },
 }
 
 /// Verifier report
@@ -402,51 +434,6 @@ pub struct VerifierReport {
     pub score: Option<f64>,
     /// Details
     pub details: serde_json::Value,
-    /// Timestamp
-    pub timestamp: chrono::DateTime<chrono::Utc>,
-}
-
-/// Review record
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Review {
-    /// Review ID
-    pub id: ObjectId,
-    /// Proof ID being reviewed
-    pub proof_id: ObjectId,
-    /// Reviewer
-    pub reviewer: String,
-    /// Review decision
-    pub decision: ReviewDecision,
-    /// Comments
-    pub comments: String,
-    /// Timestamp
-    pub timestamp: chrono::DateTime<chrono::Utc>,
-}
-
-/// Review decision
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum ReviewDecision {
-    /// Approve
-    Approve,
-    /// Request changes
-    RequestChanges,
-    /// Reject
-    Reject,
-}
-
-/// Replication record
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Replication {
-    /// Replication ID
-    pub id: ObjectId,
-    /// Original proof ID
-    pub original_proof_id: ObjectId,
-    /// Replicator
-    pub replicator: String,
-    /// Success
-    pub success: bool,
-    /// Differences
-    pub differences: Vec<String>,
     /// Timestamp
     pub timestamp: chrono::DateTime<chrono::Utc>,
 }
@@ -497,6 +484,33 @@ pub struct ChainReference {
     pub finalized: bool,
 }
 
+impl ProofManifest {
+    /// Canonical bytes of the payload covered by the author signature: every
+    /// field except `author_signature` (blanked), so the signature never covers
+    /// itself. Mutating any committed field changes these bytes (gate P01-N03).
+    pub fn signable_bytes(&self) -> crate::error::Result<Vec<u8>> {
+        let mut copy = self.clone();
+        copy.author_signature.clear();
+        crate::canonical::signable_bytes(&copy)
+    }
+
+    /// Compute the hex Ed25519 author signature for this manifest.
+    pub fn author_signature_hex(
+        &self,
+        signer: &crate::signing::AuthorSigner,
+    ) -> crate::error::Result<String> {
+        let bytes = self.signable_bytes()?;
+        Ok(hex::encode(signer.sign_bytes(&bytes)))
+    }
+
+    /// Verify the manifest's `author_signature` against a 32-byte public key.
+    pub fn verify_author(&self, public_key: &[u8; 32]) -> crate::error::Result<()> {
+        let sig = crate::signing::decode_signature_hex(&self.author_signature)?;
+        let bytes = self.signable_bytes()?;
+        crate::signing::verify_signature(public_key, &bytes, &sig)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -505,7 +519,7 @@ mod tests {
     fn test_hash_creation() {
         let data = b"test data";
         let hash = Hash::new(data);
-        assert_eq!(hash.0.len(), 64); // Blake3 hex output
+        assert_eq!(hash.0.len(), 64); // SHA-256 hex output
     }
 
     #[test]

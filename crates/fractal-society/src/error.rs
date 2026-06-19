@@ -43,6 +43,10 @@ pub enum Error {
     #[error("Data gap detected: {0}")]
     DataGap(String),
 
+    /// Signature creation or verification failure
+    #[error("Signature error: {0}")]
+    Signature(String),
+
     /// IO error
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),

@@ -8,13 +8,17 @@ license.workspace = true
 thiserror.workspace = true
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
-blake3.workspace = true
 borsh.workspace = true
 async-trait.workspace = true
 tokio.workspace = true
 futures.workspace = true
 hex.workspace = true
 chrono = { version = "0.4", features = ["serde"] }
+rand.workspace = true
+# Canonical hashing (SHA-256) and author signatures (Ed25519) reuse the chain's
+# crypto crate so artifacts verify across the Rust spec and the TS app.
+fractal-crypto = { path = "../crypto" }
+ed25519-dalek.workspace = true
 
 # Domain-specific dependencies (optional until used)
 hyperliquid = { optional = true, version = "0.1" }

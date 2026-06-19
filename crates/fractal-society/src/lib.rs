@@ -1,20 +1,31 @@
-// Fractal Society: Train in Simulation. Prove in Public. Deploy with Confidence.
-//
-// A domain-neutral research protocol for AI agents with trading as the first domain adapter.
-//
-// # Architecture Principles
-//
-// 1. **Generic Core, Domain Adapters**: The kernel is domain-neutral. Trading-specific logic lives in adapters.
-// 2. **Proof Over Screenshots**: Every result is backed by cryptographic commitments and verifiable evidence.
-// 3. **Simulation First**: All agents begin with deterministic simulations before real-world deployment.
-// 4. **Public Proof, Private IP**: Users can prove capabilities without revealing proprietary strategies.
+//! Fractal Society: Train in Simulation. Prove in Public. Deploy with Confidence.
+//!
+//! A domain-neutral research protocol for AI agents with trading as the first
+//! domain adapter. This crate is the canonical, tested protocol spec (PHASE-01
+//! schemas + PHASE-02 generic kernel); the TypeScript app in `fractalwork`
+//! mirrors these schemas at runtime.
+//!
+//! # Architecture Principles
+//!
+//! 1. **Generic Core, Domain Adapters**: the kernel is domain-neutral.
+//!    Trading-specific logic lives in adapters, never in the kernel or schema.
+//! 2. **Proof Over Screenshots**: every result is backed by cryptographic
+//!    commitments and verifiable evidence.
+//! 3. **Simulation First**: all agents begin with deterministic simulations
+//!    before real-world deployment.
+//! 4. **Public Proof, Private IP**: users can prove capabilities without
+//!    revealing proprietary strategies.
 
-#![warn(missing_docs)]
+#![deny(missing_docs)]
 #![deny(unsafe_code)]
 
-pub mod error;
-pub mod protocol;
+pub mod adapters;
 pub mod artifact;
+pub mod canonical;
+pub mod error;
+pub mod kernel;
+pub mod protocol;
+pub mod signing;
 pub mod simulation;
 pub mod verifier;
 
@@ -26,16 +37,18 @@ pub type Result<T> = std::result::Result<T, error::Error>;
 
 /// Re-exports commonly used types
 pub mod prelude {
+    pub use crate::adapters::{ReferenceAdapter, ReferenceAgent};
+    pub use crate::artifact::{ArtifactHash, ArtifactId, ArtifactManifest};
+    pub use crate::canonical::content_hash;
     pub use crate::error::{Error, Result};
+    pub use crate::kernel::{run, KernelConfig, RunManifest};
     pub use crate::protocol::{
-        ResearchProject, Protocol, DatasetManifest, EnvironmentManifest,
-        AgentManifest, ExperimentRun, EvidenceBundle, Visibility,
+        AgentManifest, DatasetManifest, EnvironmentManifest, EvidenceBundle, Hash, Protocol,
+        ResearchProject, Visibility,
     };
-    pub use crate::artifact::{
-        ArtifactId, ArtifactHash, ArtifactManifest,
-    };
-    pub use crate::simulation::{DomainAdapter, Observation, Action, Outcome};
-    pub use crate::verifier::{VerifierPackage, VerifierReport, ProofLevel};
+    pub use crate::signing::AuthorSigner;
+    pub use crate::simulation::{Action, DomainAdapter, Observation, Outcome};
+    pub use crate::verifier::{ProofLevel, VerifierPackage, VerifierReport};
 }
 
 /// Fractal Society configuration
@@ -53,8 +66,8 @@ impl Default for Config {
     fn default() -> Self {
         Self {
             max_initial_capital: 100_000, // $100,000 USDC
-            default_leverage_cap: 2.0,     // 2x
-            trading_enabled: false,         // Disabled until explicitly enabled
+            default_leverage_cap: 2.0,    // 2x
+            trading_enabled: false,       // Disabled until explicitly enabled
         }
     }
 }
@@ -62,11 +75,6 @@ impl Default for Config {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn test_version() {
-        assert!(!VERSION.is_empty());
-    }
 
     #[test]
     fn test_default_config() {

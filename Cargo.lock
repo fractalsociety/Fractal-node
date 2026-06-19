@@ -2515,9 +2515,10 @@ name = "fractal-society"
 version = "0.1.0"
 dependencies = [
  "async-trait",
- "blake3",
  "borsh",
  "chrono",
+ "ed25519-dalek",
+ "fractal-crypto",
  "futures",
  "hex",
  "hyperliquid",
