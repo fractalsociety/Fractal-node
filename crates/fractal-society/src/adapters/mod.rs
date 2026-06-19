@@ -5,7 +5,9 @@
 //! guards: the kernel must not import anything from this module.
 
 pub mod reference;
+pub mod trading;
 
 pub use reference::{
     BanditAction, BanditObservation, BanditOutcome, ReferenceAdapter, ReferenceAgent,
 };
+pub use trading::{TradingAdapter, TradingAgent};
