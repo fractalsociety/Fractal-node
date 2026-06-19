@@ -2519,7 +2519,6 @@ dependencies = [
  "chrono",
  "ed25519-dalek",
  "fractal-crypto",
- "futures",
  "hex",
  "hyperliquid",
  "rand 0.8.6",
