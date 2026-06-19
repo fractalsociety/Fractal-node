@@ -1,9 +1,34 @@
-//! Work-package stub (architect-owned). **Package 9 — disclosure_tiers.**
+//! Disclosure-tier redaction package.
 //!
-//! Map a `Visibility` tier to a redacted public view of an `EvidenceBundle`
-//! (e.g., hash-only for `CommittedPrivate`; action-type-only steps for
-//! `PartialPublic`) so disclosure never leaks raw observations/actions.
-//!
-//! See `crates/fractal-society/WORK_PACKAGES.md` for the exact interface,
-//! acceptance tests, and constraints. Replace this stub with the implementation.
-//! Edit ONLY this file and your test file `tests/wp_disclosure_tiers.rs`.
+//! Maps a `Visibility` tier to a redacted copy of an `EvidenceBundle` so public
+//! disclosure can prove commitments without leaking raw traces.
+
+use crate::protocol::{EvidenceBundle, RiskDecision, Visibility};
+
+/// Return a redacted copy of `evidence` appropriate for `tier`.
+pub fn redact(evidence: &EvidenceBundle, tier: Visibility) -> EvidenceBundle {
+    match tier {
+        Visibility::Private => {
+            let mut redacted = evidence.clone();
+            redacted.decision_traces.clear();
+            redacted
+        }
+        Visibility::CommittedPrivate | Visibility::ReviewerAccess => {
+            let mut redacted = evidence.clone();
+            for trace in &mut redacted.decision_traces {
+                trace.action = serde_json::Value::Null;
+                trace.outcome = serde_json::Value::Null;
+                trace.risk_decision = RiskDecision::Approved;
+            }
+            redacted
+        }
+        Visibility::PartialPublic => {
+            let mut redacted = evidence.clone();
+            for trace in &mut redacted.decision_traces {
+                trace.outcome = serde_json::Value::Null;
+            }
+            redacted
+        }
+        Visibility::Open => evidence.clone(),
+    }
+}
