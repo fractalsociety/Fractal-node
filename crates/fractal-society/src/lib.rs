@@ -24,6 +24,7 @@ pub mod artifact;
 pub mod canonical;
 pub mod error;
 pub mod kernel;
+pub mod pipeline;
 pub mod pkgs;
 pub mod protocol;
 pub mod signing;
