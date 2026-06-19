@@ -436,3 +436,334 @@ After packages land, a single integration task (not parallel) may:
 3. Wire `build_proof_manifest` + `merkle_commitment` + `disclosure_tiers` into a `ProofManifest` pipeline.
 
 This is intentionally separate so the 12 packages stay conflict-free.
+
+---
+
+# Packages 13–25 (second batch)
+
+Same rules as the first batch: each agent edits **only** `src/pkgs/<name>.rs`
+(replace the stub) **and** creates `tests/wp_<name>.rs`. Everything else is
+forbidden. The architect-owned `src/pkgs/mod.rs` already declares all 13; the
+crate builds with the empty stubs, so each agent is fully isolated. Deterministic
+only; `VerifierReport.execution_time_seconds = 0.0`; no new deps;
+`#![deny(missing_docs)]`.
+
+**Dependency graph (second batch):** still flat — every package depends only on
+the stable `fractal-society` base API, none on each other, none on packages 1–12.
+**Overlap with batch 1 and within batch 2:** zero (each owns a unique file pair).
+
+**Priority (within this batch):** Tier 1b verifiers = **(13)(14)(15)**; Tier 2b
+proof/commitment = **(16)(17)(18)**; Tier 3 arena = **(19)(20)(21)**; Tier 4
+graph/reputation/fraud = **(22)(23)(24)**; utility = **(25)**.
+
+---
+
+## ☐ Package 13 — sandbox_policy
+
+**Goal:** Verify a run's recorded actions stayed within a declared tool allowlist.
+
+**Context:** PHASE-06 sandbox compliance (P06-N11). Scan each `decision_traces[*].action` JSON for a `"tool"` field; if present and not in `allowed_tools`, fail.
+
+**Interface:**
+```rust
+use fractal_society::protocol::EvidenceBundle;
+use fractal_society::verifier::VerifierReport;
+pub const VERIFIER_ID: &str = "sandbox-policy";
+pub fn verify(evidence: &EvidenceBundle, allowed_tools: &[String]) -> VerifierReport;
+```
+
+**Files allowed:** `src/pkgs/sandbox_policy.rs`, `tests/wp_sandbox_policy.rs`  •  **Forbidden:** everything else.
+**Dependencies:** none.
+**Acceptance tests:** `passes_when_no_tool_use`; `passes_when_tool_allowed` (action `{"tool":"calc"}` + allow `["calc"]`); `fails_when_tool_not_allowed`; id/zero-time.
+**Complexity:** ~1.5 h.
+
+---
+
+## ☐ Package 14 — temporal_leakage
+
+**Goal:** Detect non-monotonic / duplicate decision-trace steps (tamper or look-ahead signal).
+
+**Context:** PHASE-06 (P06-N02). Steps must be strictly increasing.
+
+**Interface:**
+```rust
+use fractal_society::protocol::EvidenceBundle;
+use fractal_society::verifier::VerifierReport;
+pub const VERIFIER_ID: &str = "temporal-leakage";
+pub fn verify(evidence: &EvidenceBundle) -> VerifierReport;
+```
+
+**Files allowed:** `src/pkgs/temporal_leakage.rs`, `tests/wp_temporal_leakage.rs`  •  **Forbidden:** everything else.
+**Dependencies:** none.
+**Acceptance tests:** `passes_for_monotonic` (a real run); `fails_for_regressed_step` (swap two traces so a later step has a smaller index → fail); `fails_for_duplicate_step`; id/zero-time.
+**Complexity:** ~1.5 h.
+
+---
+
+## ☐ Package 15 — baseline_correctness
+
+**Goal:** Re-verify the baseline-comparison arithmetic stored in a `Scorecard`.
+
+**Context:** PHASE-06 / P04-N08. For each `BaselineResult`, re-derive `difference = candidate_value − baseline_value`, `percent_difference`, `is_better`, and compare to the stored values.
+
+**Interface:**
+```rust
+use fractal_society::verifier::{Scorecard, VerifierReport};
+pub const VERIFIER_ID: &str = "baseline-correctness";
+pub fn verify(scorecard: &Scorecard, tolerance: f64) -> VerifierReport;
+```
+
+**Files allowed:** `src/pkgs/baseline_correctness.rs`, `tests/wp_baseline_correctness.rs`  •  **Forbidden:** everything else.
+**Dependencies:** none (`Scorecard`).
+**Acceptance tests:** `passes_for_consistent_scorecard` (build one via `adapters::trading::build_scorecard`); `fails_when_difference_tampered` (mutate a `BaselineResult.difference`); id/zero-time.
+**Complexity:** ~1.5 h.
+
+---
+
+## ☐ Package 16 — chain_commitment
+
+**Goal:** Interface-first chain-commitment adapter plus a deterministic in-memory mock.
+
+**Context:** PHASE-07 (P07-N03/N10). Define the `CommitmentAdapter` trait; the mock returns a `ChainReference` for a submitted proof hash.
+
+**Interface:**
+```rust
+use fractal_society::protocol::{ChainReference, Hash};
+pub trait CommitmentAdapter: Send + Sync {
+    /// Commit `proof_hash`; return the on-chain reference.
+    fn submit(&self, proof_hash: &Hash) -> fractal_society::Result<ChainReference>;
+}
+pub struct InMemoryCommitmentAdapter { /* network, next_block */ }
+impl InMemoryCommitmentAdapter {
+    pub fn new(network: impl Into<String>, starting_block: u64) -> Self;
+}
+impl CommitmentAdapter for InMemoryCommitmentAdapter { /* submit increments block, deterministic tx hash from proof_hash+block */ }
+```
+
+**Files allowed:** `src/pkgs/chain_commitment.rs`, `tests/wp_chain_commitment.rs`  •  **Forbidden:** everything else.
+**Dependencies:** none (`Hash`, `ChainReference`).
+**Acceptance tests:** `submit` returns a `ChainReference` with the configured network and `finalized == true`; two submits produce distinct increasing `block_number`; deterministic for a given `starting_block`.
+**Complexity:** ~2 h.
+
+---
+
+## ☐ Package 17 — reviewer_grants
+
+**Goal:** Issue, revoke, and validate reviewer access grants using logical (non-wall-clock) time.
+
+**Context:** PHASE-07 (P07-N05).
+
+**Interface:**
+```rust
+pub struct ReviewerGrant {
+    pub proof_id: String,
+    pub reviewer: String,
+    pub granted_at: u64,
+    pub expires_at: u64,
+    pub revoked: bool,
+}
+pub fn issue(proof_id: &str, reviewer: &str, granted_at: u64, ttl_seconds: u64) -> ReviewerGrant;
+pub fn revoke(grant: &mut ReviewerGrant);
+pub fn is_valid(grant: &ReviewerGrant, now: u64) -> bool; // not revoked AND now < expires_at
+```
+
+**Files allowed:** `src/pkgs/reviewer_grants.rs`, `tests/wp_reviewer_grants.rs`  •  **Forbidden:** everything else.
+**Dependencies:** none.
+**Acceptance tests:** valid before expiry & not revoked; `revoke` → invalid; `now >= expires_at` → invalid; `expires_at == granted_at + ttl_seconds`.
+**Complexity:** ~1 h.
+
+---
+
+## ☐ Package 18 — proof_level_resolver
+
+**Goal:** Derive the `ProofLevel` for a proof from evidence + reviews + replications (not author-chosen).
+
+**Context:** PHASE-07 (P07-N06). Monotone ladder: `PrivateDraft` → `Committed` (evidence non-empty) → `Auditable` (≥1 approved `Review`) → `Reproducible` (≥1 successful `Replication`); take the max reached.
+
+**Interface:**
+```rust
+use fractal_society::protocol::EvidenceBundle;
+use fractal_society::verifier::{ProofLevel, Replication, Review};
+pub fn resolve(evidence: &EvidenceBundle, reviews: &[Review], replications: &[Replication]) -> ProofLevel;
+```
+
+**Files allowed:** `src/pkgs/proof_level_resolver.rs`, `tests/wp_proof_level_resolver.rs`  •  **Forbidden:** everything else.
+**Dependencies:** none (`EvidenceBundle`, `Review`, `Replication`, `ProofLevel`).
+**Acceptance tests:** empty inputs → `PrivateDraft`; ≥1 approved review (and non-empty evidence) → `Auditable`; ≥1 successful replication → `Reproducible`; deterministic.
+**Complexity:** ~2 h.
+
+---
+
+## ☐ Package 19 — season_state_machine
+
+**Goal:** Agent-Arena season lifecycle (`Draft→Open→Frozen→Final→Closed`) with rules frozen once a season opens.
+
+**Context:** PHASE-08 (P08-N01).
+
+**Interface:**
+```rust
+use fractal_society::protocol::Hash;
+pub enum SeasonState { Draft, Open, Frozen, Final, Closed }
+pub struct Season { pub id: String, pub state: SeasonState, pub rules_hash: Hash, pub rules_frozen: bool }
+pub fn new_season(id: impl Into<String>, rules_hash: Hash) -> Season;
+pub fn open(season: &mut Season) -> fractal_society::Result<()>;    // Draft→Open; sets rules_frozen=true
+pub fn freeze(season: &mut Season) -> fractal_society::Result<()>;  // Open→Frozen
+pub fn finalize(season: &mut Season) -> fractal_society::Result<()>;// Frozen→Final
+pub fn close(season: &mut Season) -> fractal_society::Result<()>;   // Final→Closed
+```
+
+**Files allowed:** `src/pkgs/season_state_machine.rs`, `tests/wp_season_state_machine.rs`  •  **Forbidden:** everything else.
+**Dependencies:** none (`Hash`).
+**Acceptance tests:** legal transitions succeed; illegal transition (e.g. `Draft→Freeze`) returns `Err`; `rules_frozen` becomes true after `open` and `rules_hash` is unchanged; full lifecycle reaches `Closed`.
+**Complexity:** ~2 h.
+
+---
+
+## ☐ Package 20 — leaderboard
+
+**Goal:** Rank candidates by a risk/robustness-weighted score (never raw PnL alone), deterministic tie-break.
+
+**Context:** PHASE-08 (P08-N04/N07).
+
+**Interface:**
+```rust
+pub struct LeaderboardEntry { pub agent_id: String, pub net_return: f64, pub max_drawdown: f64, pub policy_violations: u64 }
+pub struct RankedEntry { pub rank: u32, pub entry: LeaderboardEntry, pub score: f64 }
+/// score = net_return − 0.5 * max_drawdown − 0.1 * policy_violations; sort desc, tie-break agent_id asc.
+pub fn rank(entries: &[LeaderboardEntry]) -> Vec<RankedEntry>;
+```
+
+**Files allowed:** `src/pkgs/leaderboard.rs`, `tests/wp_leaderboard.rs`  •  **Forbidden:** everything else.
+**Dependencies:** none.
+**Acceptance tests:** higher score ranks first; drawdown and violations penalize rank vs raw return; equal scores tie-break by `agent_id`; ranks are contiguous from 1.
+**Complexity:** ~1.5 h.
+
+---
+
+## ☐ Package 21 — submission_freeze
+
+**Goal:** Freeze a candidate submission into a tamper-evident manifest hash.
+
+**Context:** PHASE-08 (P08-N02). Submission = agent+protocol+dataset+env hashes + attempt.
+
+**Interface:**
+```rust
+use fractal_society::protocol::Hash;
+pub struct Submission {
+    pub agent_hash: Hash, pub protocol_hash: Hash, pub dataset_hash: Hash,
+    pub env_hash: Hash, pub attempt: u32,
+}
+impl Submission {
+    pub fn new(agent_hash: Hash, protocol_hash: Hash, dataset_hash: Hash, env_hash: Hash, attempt: u32) -> Self;
+    pub fn manifest_hash(&self) -> fractal_society::Result<Hash>; // Hash::of(self)
+}
+```
+
+**Files allowed:** `src/pkgs/submission_freeze.rs`, `tests/wp_submission_freeze.rs`  •  **Forbidden:** everything else.
+**Dependencies:** none (`Hash`).
+**Acceptance tests:** identical inputs → identical `manifest_hash`; changing any one hash or `attempt` → different hash; deterministic.
+**Complexity:** ~1 h.
+
+---
+
+## ☐ Package 22 — graph_projection
+
+**Goal:** Minimal relational research graph (nodes + edges) built from records.
+
+**Context:** PHASE-10 (P10-N01/N02).
+
+**Interface:**
+```rust
+use std::collections::HashSet;
+#[derive(Debug, Clone, Hash, Eq, PartialEq)]
+pub enum GraphNode { Person(String), Agent(String), Run(String), Proof(String), Review(String) }
+#[derive(Debug, Clone, Hash, Eq, PartialEq)]
+pub enum GraphEdge { Created, Used, VerifiedBy, ReviewedBy, ReplicatedBy }
+pub struct ResearchGraph { /* nodes: HashSet<GraphNode>, edges: HashSet<(GraphNode, GraphNode, GraphEdge)> */ }
+impl ResearchGraph {
+    pub fn new() -> Self;
+    pub fn add_node(&mut self, node: GraphNode);
+    pub fn add_edge(&mut self, from: GraphNode, to: GraphNode, edge: GraphEdge);
+    pub fn node_count(&self) -> usize;
+    pub fn edge_count(&self) -> usize;
+    pub fn has_edge(&self, from: &GraphNode, to: &GraphNode, edge: &GraphEdge) -> bool;
+}
+impl Default for ResearchGraph { fn default() -> Self { Self::new() } }
+```
+
+**Files allowed:** `src/pkgs/graph_projection.rs`, `tests/wp_graph_projection.rs`  •  **Forbidden:** everything else.
+**Dependencies:** none (`std::collections::HashSet`).
+**Acceptance tests:** counts correct; duplicate node/edge adds do not double-count; `has_edge` true/false correctly; `Default` works.
+**Complexity:** ~2 h.
+
+---
+
+## ☐ Package 23 — review_conflicts
+
+**Goal:** Apply review conflict-of-interest rules (reject self-review and direct financial-conflict reviews).
+
+**Context:** PHASE-10 (P10-N04).
+
+**Interface:**
+```rust
+pub struct ReviewRequest { pub reviewer: String, pub proof_author: String, pub financial_interests: Vec<String> }
+pub enum ConflictOutcome { Accept, Reject { reason: String } }
+pub fn check(request: &ReviewRequest) -> ConflictOutcome;
+```
+
+**Files allowed:** `src/pkgs/review_conflicts.rs`, `tests/wp_review_conflicts.rs`  •  **Forbidden:** everything else.
+**Dependencies:** none.
+**Acceptance tests:** reviewer == proof_author → `Reject`; non-empty `financial_interests` → `Reject`; otherwise `Accept`.
+**Complexity:** ~1 h.
+
+---
+
+## ☐ Package 24 — sybil_detection
+
+**Goal:** Flag suspicious review patterns (self-review, duplicate review, circular review).
+
+**Context:** PHASE-10 (P10-N07).
+
+**Interface:**
+```rust
+pub struct ReviewRecord { pub reviewer: String, pub subject: String }
+pub enum SuspiciousPattern {
+    SelfReview { reviewer: String },
+    DuplicateReview { reviewer: String, subject: String },
+    CircularReview { cycle: Vec<String> },
+}
+pub fn analyze(reviews: &[ReviewRecord]) -> Vec<SuspiciousPattern>;
+```
+
+**Files allowed:** `src/pkgs/sybil_detection.rs`, `tests/wp_sybil_detection.rs`  •  **Forbidden:** everything else.
+**Dependencies:** none.
+**Acceptance tests:** `reviewer==subject` → `SelfReview`; same `(reviewer,subject)` twice → `DuplicateReview`; `A→B` and `B→A` → `CircularReview`; clean set → empty.
+**Complexity:** ~2.5 h.
+
+---
+
+## ☐ Package 25 — gap_detection
+
+**Goal:** Detect gaps in an ordered integer sequence (e.g. bar timestamps / sequence numbers) and emit explicit `DataGap` records (never silently interpolate).
+
+**Context:** PHASE-03 (P03-N04).
+
+**Interface:**
+```rust
+pub struct DataGap { pub after: i64, pub before: i64, pub missing_count: i64 }
+/// Sorts a copy ascending, then emits one `DataGap` per consecutive pair with diff > 1.
+pub fn detect(sequence: &[i64]) -> Vec<DataGap>;
+```
+
+**Files allowed:** `src/pkgs/gap_detection.rs`, `tests/wp_gap_detection.rs`  •  **Forbidden:** everything else.
+**Dependencies:** none.
+**Acceptance tests:** `[1,2,4,7]` → gaps `{after:2,before:4,missing:1}` and `{after:4,before:7,missing:2}`; contiguous sequence → none; empty → none; unsorted input is sorted first (same result as its sorted form).
+**Complexity:** ~1 h.
+
+---
+
+## Batch summary (1–25)
+
+- **25 packages total**, all flat against the base crate, zero inter-package file overlap.
+- Combined estimated effort: ~38–45 h of fully parallelizable work.
+- Suggested wave plan: **Wave A = 1–6** • **Wave B = 13–15 + 7–9** • **Wave C = 16–18 + 10–12** • **Wave D = 19–21 + 22–25**.

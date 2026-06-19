@@ -24,3 +24,18 @@ pub mod reputation_events;
 pub mod reward_gate;
 pub mod risk_policy;
 pub mod scorecard_reproduction;
+
+// --- Second batch: packages 13–25 (same zero-overlap rules as above) ---
+pub mod baseline_correctness;
+pub mod chain_commitment;
+pub mod gap_detection;
+pub mod graph_projection;
+pub mod leaderboard;
+pub mod proof_level_resolver;
+pub mod review_conflicts;
+pub mod reviewer_grants;
+pub mod sandbox_policy;
+pub mod season_state_machine;
+pub mod submission_freeze;
+pub mod sybil_detection;
+pub mod temporal_leakage;
