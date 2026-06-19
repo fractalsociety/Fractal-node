@@ -1059,3 +1059,307 @@ impl Default for ArtifactRegistry { fn default() -> Self { Self::new() } }
 - **37 packages total**, all flat against the base crate, zero inter-package file overlap.
 - This third batch adds the **integration-enabling spine types** (29 verifier_summary, 30 pipeline_contract, 36 run_bundle) plus stats utilities (26/27/28), more validation (32/33/34), and artifact plumbing (35/37).
 - **After these land, the next milestone is the SERIAL orchestrator + end-to-end vertical-slice test** (not a parallel package): it composes `kernel::run → build_scorecard → verifier_summary → build_proof_manifest → pipeline_contract::PipelineOutcome → run_bundle`. That test passing is "the research pipeline works end-to-end" on synthetic data.
+
+---
+
+# Packages 38–51 (fourth batch)
+
+Same rules: each agent edits **only** `src/pkgs/<name>.rs` (replace the stub) **and**
+creates `tests/wp_<name>.rs`. Everything else forbidden. `pkgs/mod.rs` already
+declares all 14; crate builds with empty stubs. Deterministic only;
+`execution_time_seconds = 0.0`; no new deps; `#![deny(missing_docs)]`.
+
+**Dependency graph (fourth batch):** flat — all depend only on the base crate.
+**Overlap:** zero. These deepen verification (42 holdout, 43 overfit, 38
+determinism_audit), arena/reward mechanics (44/45/46/47), agent/dataset policy
+(48/49/50/51), and small utilities (39/40/41).
+
+---
+
+## ☐ Package 38 — determinism_audit
+
+**Goal:** Diff two `EvidenceBundle`s (original vs claimed replay) step-by-step; emit divergences.
+
+**Interface:**
+```rust
+use crate::protocol::EvidenceBundle;
+#[derive(Debug, Clone, PartialEq)]
+pub struct Divergence { pub step: u64, pub field: String, pub left: serde_json::Value, pub right: serde_json::Value }
+pub fn diff(left: &EvidenceBundle, right: &EvidenceBundle) -> Vec<Divergence>;
+```
+Compare matching steps' `action` and `outcome` JSON.
+
+**Files allowed:** `src/pkgs/determinism_audit.rs`, `tests/wp_determinism_audit.rs`  •  **Forbidden:** everything else.
+**Dependencies:** none (`EvidenceBundle`).
+**Acceptance tests:** identical bundles → empty; one mutated field → exactly one `Divergence` with the right step/field.
+**Complexity:** ~1.5 h.
+
+---
+
+## ☐ Package 39 — canonical_roundtrip
+
+**Goal:** Hash a value through serialize → deserialize and confirm the canonical hash is stable.
+
+**Interface:**
+```rust
+use crate::protocol::Hash;
+pub fn roundtrip_hash<T: serde::Serialize + serde::de::DeserializeOwned>(value: &T) -> Option<Hash>;
+```
+Returns `None` if the round-trip changes the canonical hash or fails to deserialize.
+
+**Files allowed:** `src/pkgs/canonical_roundtrip.rs`, `tests/wp_canonical_roundtrip.rs`  •  **Forbidden:** everything else.
+**Dependencies:** none (`Hash`, `canonical`).
+**Acceptance tests:** a plain struct → `Some` deterministic hash; a value whose deserialized form differs → `None`.
+**Complexity:** ~1 h.
+
+---
+
+## ☐ Package 40 — evidence_summary
+
+**Goal:** Compact summary of an `EvidenceBundle` (step count, metric snapshot, action-type histogram).
+
+**Interface:**
+```rust
+use std::collections::HashMap;
+use crate::protocol::EvidenceBundle;
+#[derive(Debug, Clone, PartialEq)]
+pub struct EvidenceSummary { pub step_count: usize, pub metrics: HashMap<String, f64>, pub action_type_counts: HashMap<String, u64> }
+pub fn summarize(evidence: &EvidenceBundle) -> EvidenceSummary;
+```
+`action_type_counts` keyed by the action JSON's top-level variant name.
+
+**Files allowed:** `src/pkgs/evidence_summary.rs`, `tests/wp_evidence_summary.rs`  •  **Forbidden:** everything else.
+**Dependencies:** none (`EvidenceBundle`).
+**Acceptance tests:** step_count and metric snapshot correct; action histogram counts a known run's actions.
+**Complexity:** ~1.5 h.
+
+---
+
+## ☐ Package 41 — execution_budget
+
+**Goal:** Deterministic resource budget (steps/calls) with consume/allow semantics.
+
+**Interface:**
+```rust
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExecutionBudget { pub limit: u64, pub used: u64 }
+impl ExecutionBudget {
+    pub fn new(limit: u64) -> Self;
+    pub fn consume(&mut self, n: u64) -> bool; // false if it would exceed the limit
+    pub fn remaining(&self) -> u64;
+    pub fn exhausted(&self) -> bool;
+}
+```
+
+**Files allowed:** `src/pkgs/execution_budget.rs`, `tests/wp_execution_budget.rs`  •  **Forbidden:** everything else.
+**Dependencies:** none.
+**Acceptance tests:** consume within limit → `true`; over-limit → `false` and `used` unchanged; `remaining`/`exhausted` correct.
+**Complexity:** ~1 h.
+
+---
+
+## ☐ Package 42 — holdout_isolation
+
+**Goal:** Verify private holdout identifiers do not leak into a run's evidence (action/observation/outcome JSON).
+
+**Interface:**
+```rust
+use crate::protocol::EvidenceBundle;
+use crate::verifier::VerifierReport;
+pub const VERIFIER_ID: &str = "holdout-isolation";
+pub fn verify(evidence: &EvidenceBundle, private_ids: &[String]) -> VerifierReport;
+```
+
+**Files allowed:** `src/pkgs/holdout_isolation.rs`, `tests/wp_holdout_isolation.rs`  •  **Forbidden:** everything else.
+**Dependencies:** none (`EvidenceBundle`, `VerifierReport`).
+**Acceptance tests:** clean evidence → `passed`; evidence whose action contains a private id → `!passed`.
+**Complexity:** ~1.5 h.
+
+---
+
+## ☐ Package 43 — overfit_detector
+
+**Goal:** Flag overfitting by comparing a candidate's public-training vs private-eval scorecards.
+
+**Interface:**
+```rust
+use crate::verifier::Scorecard;
+#[derive(Debug, Clone, PartialEq)]
+pub struct OverfitAssessment { pub overfit: bool, pub train_return: f64, pub eval_return: f64, pub gap: f64 }
+pub fn assess(train: &Scorecard, eval: &Scorecard, gap_threshold: f64) -> OverfitAssessment;
+```
+`overfit = (train.net_return − eval.net_return) > gap_threshold`.
+
+**Files allowed:** `src/pkgs/overfit_detector.rs`, `tests/wp_overfit_detector.rs`  •  **Forbidden:** everything else.
+**Dependencies:** none (`Scorecard`).
+**Acceptance tests:** small gap → `overfit == false`; large gap → `overfit == true`; `gap == train − eval`.
+**Complexity:** ~1.5 h.
+
+---
+
+## ☐ Package 44 — review_aggregation
+
+**Goal:** Aggregate `Review` records into a consensus decision with a quorum.
+
+**Interface:**
+```rust
+use crate::verifier::Review;
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Consensus { Approved, Rejected, NoQuorum }
+pub fn aggregate(reviews: &[Review], quorum: usize) -> Consensus;
+```
+`NoQuorum` if `reviews.len() < quorum`; else majority of approve vs reject (tie → `Rejected`).
+
+**Files allowed:** `src/pkgs/review_aggregation.rs`, `tests/wp_review_aggregation.rs`  •  **Forbidden:** everything else.
+**Dependencies:** none (`Review`, `ReviewDecision`).
+**Acceptance tests:** majority-approve → `Approved`; tie → `Rejected`; below quorum → `NoQuorum`.
+**Complexity:** ~1.5 h.
+
+---
+
+## ☐ Package 45 — challenge_bond
+
+**Goal:** Track a challenge/dispute bond: post, slash, or release (local types, logical settlement).
+
+**Interface:**
+```rust
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum BondState { Posted, Slashed, Released }
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ChallengeBond { pub poster: String, pub amount: u64, pub state: BondState }
+impl ChallengeBond {
+    pub fn post(poster: impl Into<String>, amount: u64) -> Self;
+    pub fn slash(&mut self) -> crate::Result<()>;   // Posted → Slashed
+    pub fn release(&mut self) -> crate::Result<()>; // Posted → Released
+}
+```
+
+**Files allowed:** `src/pkgs/challenge_bond.rs`, `tests/wp_challenge_bond.rs`  •  **Forbidden:** everything else.
+**Dependencies:** none.
+**Acceptance tests:** `post` → `Posted`; `slash`/`release` transition correctly; double-settle → `Err`.
+**Complexity:** ~1.5 h.
+
+---
+
+## ☐ Package 46 — reward_split
+
+**Goal:** Split a reward pool among winners proportionally to weights, deterministic, zero-sum.
+
+**Interface:**
+```rust
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RewardShare { pub recipient: String, pub amount: u64 }
+/// Largest-remainder proportional split; sum of amounts == pool. Zero-weight recipients excluded.
+pub fn split(pool: u64, weights: &[(String, u64)]) -> Vec<RewardShare>;
+```
+
+**Files allowed:** `src/pkgs/reward_split.rs`, `tests/wp_reward_split.rs`  •  **Forbidden:** everything else.
+**Dependencies:** none.
+**Acceptance tests:** shares sum exactly to `pool`; proportional to weights; zero-total-weights → empty (or equal split, document which).
+**Complexity:** ~2 h.
+
+---
+
+## ☐ Package 47 — appeals_flow
+
+**Goal:** Appeal lifecycle state machine (`Filed → UnderReview → Resolved`) with guards.
+
+**Interface:**
+```rust
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AppealState { Filed, UnderReview, Resolved { upheld: bool } }
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Appeal { pub id: String, pub state: AppealState, pub reason: Option<String> }
+impl Appeal {
+    pub fn file(id: impl Into<String>) -> Self;
+    pub fn begin_review(&mut self) -> crate::Result<()>;                        // Filed → UnderReview
+    pub fn resolve(&mut self, upheld: bool, reason: impl Into<String>) -> crate::Result<()>; // UnderReview → Resolved
+}
+```
+
+**Files allowed:** `src/pkgs/appeals_flow.rs`, `tests/wp_appeals_flow.rs`  •  **Forbidden:** everything else.
+**Dependencies:** none.
+**Acceptance tests:** legal transitions succeed; resolving from `Filed` (skipping review) → `Err`; `reason` stored on resolve.
+**Complexity:** ~1.5 h.
+
+---
+
+## ☐ Package 48 — tool_allowlist
+
+**Goal:** Check requested tools against an `AgentManifest`'s declared `tool_allowlist` (static manifest policy).
+
+**Interface:**
+```rust
+use crate::protocol::AgentManifest;
+pub fn allowed(manifest: &AgentManifest, tool: &str) -> bool;
+pub fn disallowed_subset(manifest: &AgentManifest, requested: &[String]) -> Vec<String>;
+```
+
+**Files allowed:** `src/pkgs/tool_allowlist.rs`, `tests/wp_tool_allowlist.rs`  •  **Forbidden:** everything else.
+**Dependencies:** none (`AgentManifest`).
+**Acceptance tests:** allowed tool → `true`; disallowed → `false`; `disallowed_subset` returns exactly the violators.
+**Complexity:** ~1 h.
+
+---
+
+## ☐ Package 49 — skill_graph
+
+**Goal:** Build a dependency graph over skills, detect cycles, produce a topological load order.
+
+**Interface:**
+```rust
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SkillDep { pub id: String, pub depends_on: Vec<String> }
+pub fn has_cycle(deps: &[SkillDep]) -> bool;
+pub fn load_order(deps: &[SkillDep]) -> crate::Result<Vec<String>>; // Err on cycle
+```
+
+**Files allowed:** `src/pkgs/skill_graph.rs`, `tests/wp_skill_graph.rs`  •  **Forbidden:** everything else.
+**Dependencies:** none.
+**Acceptance tests:** acyclic deps → a valid topological order; cyclic deps → `has_cycle == true` and `load_order` → `Err`.
+**Complexity:** ~2 h.
+
+---
+
+## ☐ Package 50 — dataset_window
+
+**Goal:** Validate `DatasetBoundaries` (development/validation/evaluation windows).
+
+**Interface:**
+```rust
+use crate::protocol::DatasetBoundaries;
+pub fn validate(boundaries: &DatasetBoundaries) -> std::result::Result<(), Vec<String>>;
+```
+Checks: each window `start < end`; windows ordered and non-overlapping (`dev.end ≤ val.start ≤ val.end ≤ eval.start`).
+
+**Files allowed:** `src/pkgs/dataset_window.rs`, `tests/wp_dataset_window.rs`  •  **Forbidden:** everything else.
+**Dependencies:** none (`DatasetBoundaries`).
+**Acceptance tests:** valid ordered windows → `Ok`; overlapping windows → `Err`; reversed window → `Err`.
+**Complexity:** ~1.5 h.
+
+---
+
+## ☐ Package 51 — data_quality_report
+
+**Goal:** Summarize data quality from an observed sequence + expected range (completeness, gap/missing counts).
+
+**Interface:**
+```rust
+#[derive(Debug, Clone, PartialEq)]
+pub struct DataQualityReport { pub observed: usize, pub expected: usize, pub completeness: f64, pub gap_count: usize, pub missing_count: i64 }
+pub fn report(observed: &[i64], expected_min: i64, expected_max: i64) -> DataQualityReport;
+```
+`expected = max(0, expected_max − expected_min + 1)`; `completeness = observed_unique_in_range / expected`.
+
+**Files allowed:** `src/pkgs/data_quality_report.rs`, `tests/wp_data_quality_report.rs`  •  **Forbidden:** everything else.
+**Dependencies:** none.
+**Acceptance tests:** a complete sequence → `completeness == 1.0`; a gappy sequence → `completeness < 1.0` and `missing_count > 0`; empty expected range → `completeness` defined (no division by zero).
+**Complexity:** ~1.5 h.
+
+---
+
+## Batch summary (1–51)
+
+- **51 packages total**, all flat against the base crate, zero inter-package file overlap.
+- The library now spans: canonical integrity, kernel, trading adapter, 6+ verifiers, proof/commitment, disclosure, arena (season/leaderboard/submission/appeals/reward), reputation/reward/fraud (graph/review-conflict/sybil/reputation/reward-gate/challenge-bond), agent/skill policy, dataset/data-quality, and the integration-enabling spine types (verifier_summary, pipeline_contract, run_bundle).
+- **The serial orchestrator + vertical-slice test remains the next milestone** once the desired subset of these 51 has landed — that is what turns the component library into a working research pipeline.

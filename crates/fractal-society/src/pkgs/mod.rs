@@ -53,3 +53,19 @@ pub mod risk_adjusted_metrics;
 pub mod run_bundle;
 pub mod seed_derivation;
 pub mod verifier_summary;
+
+// --- Fourth batch: packages 38–51 (same zero-overlap rules as above) ---
+pub mod appeals_flow;
+pub mod canonical_roundtrip;
+pub mod challenge_bond;
+pub mod data_quality_report;
+pub mod dataset_window;
+pub mod determinism_audit;
+pub mod evidence_summary;
+pub mod execution_budget;
+pub mod holdout_isolation;
+pub mod overfit_detector;
+pub mod review_aggregation;
+pub mod reward_split;
+pub mod skill_graph;
+pub mod tool_allowlist;
