@@ -69,3 +69,20 @@ pub mod review_aggregation;
 pub mod reward_split;
 pub mod skill_graph;
 pub mod tool_allowlist;
+
+// --- Fifth batch: packages 52–66 (same zero-overlap rules as above) ---
+pub mod bar_validation;
+pub mod challenge_window;
+pub mod commit_reveal;
+pub mod drawdown_analysis;
+pub mod equity_curve;
+pub mod field_redactor;
+pub mod id_uniqueness;
+pub mod jsonl_export;
+pub mod metric_csv_export;
+pub mod ohlc_aggregation;
+pub mod replication_summary;
+pub mod research_project_validation;
+pub mod signature_verification;
+pub mod streak_analysis;
+pub mod verifier_registry;

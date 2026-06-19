@@ -1363,3 +1363,304 @@ pub fn report(observed: &[i64], expected_min: i64, expected_max: i64) -> DataQua
 - **51 packages total**, all flat against the base crate, zero inter-package file overlap.
 - The library now spans: canonical integrity, kernel, trading adapter, 6+ verifiers, proof/commitment, disclosure, arena (season/leaderboard/submission/appeals/reward), reputation/reward/fraud (graph/review-conflict/sybil/reputation/reward-gate/challenge-bond), agent/skill policy, dataset/data-quality, and the integration-enabling spine types (verifier_summary, pipeline_contract, run_bundle).
 - **The serial orchestrator + vertical-slice test remains the next milestone** once the desired subset of these 51 has landed — that is what turns the component library into a working research pipeline.
+
+---
+
+# Packages 52–66 (fifth batch)
+
+Same rules: each agent edits **only** `src/pkgs/<name>.rs` (replace the stub) **and**
+creates `tests/wp_<name>.rs`. Everything else forbidden. `pkgs/mod.rs` already
+declares all 15; crate builds with empty stubs. Deterministic only;
+`execution_time_seconds = 0.0`; no new deps; `#![deny(missing_docs)]`.
+
+**Dependency graph (fifth batch):** flat — all depend only on the base crate
+(a few read trading `MarketBar`/`EvidenceBundle`, which are stable public types;
+no package depends on another package). **Overlap:** zero.
+
+---
+
+## ☐ Package 52 — signature_verification
+
+**Goal:** Verify signatures attached to a `PackageDigest` against a set of public keys (multi-sig).
+
+**Interface:**
+```rust
+use crate::artifact::PackageDigest;
+pub fn verify_all(digest: &PackageDigest, public_keys: &[&[u8; 32]]) -> usize; // count that verify
+pub fn all_valid(digest: &PackageDigest, public_keys: &[&[u8; 32]]) -> bool;    // every signature verifies
+```
+
+**Files allowed:** `src/pkgs/signature_verification.rs`, `tests/wp_signature_verification.rs`  •  **Forbidden:** everything else.
+**Dependencies:** none (`PackageDigest`).
+**Acceptance tests:** a digest signed by a known key → `all_valid == true` with that key present; wrong key set → `false`; counts correct.
+**Complexity:** ~1.5 h.
+
+---
+
+## ☐ Package 53 — bar_validation
+
+**Goal:** OHLCV sanity check for a `MarketBar`.
+
+**Interface:**
+```rust
+use crate::adapters::trading::MarketBar;
+pub fn validate(bar: &MarketBar) -> std::result::Result<(), Vec<String>>;
+```
+Checks: `high ≥ max(open, close)`; `low ≤ min(open, close)`; `high ≥ low`; all prices finite and `≥ 0`; `volume ≥ 0`.
+
+**Files allowed:** `src/pkgs/bar_validation.rs`, `tests/wp_bar_validation.rs`  •  **Forbidden:** everything else.
+**Dependencies:** none (`MarketBar`).
+**Acceptance tests:** a well-formed bar → `Ok`; `high < close` → `Err`; negative price → `Err`.
+**Complexity:** ~1.5 h.
+
+---
+
+## ☐ Package 54 — ohlc_aggregation
+
+**Goal:** Resample a bar series into a higher timeframe (combine N consecutive bars).
+
+**Interface:**
+```rust
+use crate::adapters::trading::MarketBar;
+pub fn aggregate(bars: &[MarketBar], group_size: usize) -> Vec<MarketBar>;
+```
+Per group: `open = first.open`, `high = max`, `low = min`, `close = last.close`, `volume = sum`, `ts = first.ts`, `asset/stale/funding_rate = first`'s.
+
+**Files allowed:** `src/pkgs/ohlc_aggregation.rs`, `tests/wp_ohlc_aggregation.rs`  •  **Forbidden:** everything else.
+**Dependencies:** none (`MarketBar`).
+**Acceptance tests:** 4 bars grouped by 2 → 2 bars with correct OHLCV; `group_size == 0` → empty (or identity, document); remaining bars (`len % group_size != 0`) form a final partial group.
+**Complexity:** ~2 h.
+
+---
+
+## ☐ Package 55 — equity_curve
+
+**Goal:** Extract the per-step equity series from an `EvidenceBundle`.
+
+**Interface:**
+```rust
+use crate::protocol::EvidenceBundle;
+pub fn extract(evidence: &EvidenceBundle) -> Vec<f64>;
+```
+Parse the `equity` field of each decision-trace outcome (skip non-matching).
+
+**Files allowed:** `src/pkgs/equity_curve.rs`, `tests/wp_equity_curve.rs`  •  **Forbidden:** everything else.
+**Dependencies:** none (`EvidenceBundle`).
+**Acceptance tests:** a known evidence bundle → the expected equity series; steps without `equity` are skipped.
+**Complexity:** ~1 h.
+
+---
+
+## ☐ Package 56 — field_redactor
+
+**Goal:** Recursively redact JSON at given dot-paths (generic, field-level; distinct from bundle-level disclosure tiers).
+
+**Interface:**
+```rust
+/// Return a copy of `value` with every node at a dot-`paths` location replaced by `"REDACTED"`.
+pub fn redact(value: &serde_json::Value, paths: &[&str]) -> serde_json::Value;
+```
+
+**Files allowed:** `src/pkgs/field_redactor.rs`, `tests/wp_field_redactor.rs`  •  **Forbidden:** everything else.
+**Dependencies:** none (`serde_json`).
+**Acceptance tests:** nested object path redacted; sibling paths intact; missing path is a no-op; arrays handled (document index or skip).
+**Complexity:** ~2 h.
+
+---
+
+## ☐ Package 57 — commit_reveal
+
+**Goal:** Hash-based commit/reveal scheme.
+
+**Interface:**
+```rust
+use crate::protocol::Hash;
+pub fn commit(value: &serde_json::Value) -> Hash;
+pub fn reveal(value: &serde_json::Value, claimed: &Hash) -> bool;
+```
+
+**Files allowed:** `src/pkgs/commit_reveal.rs`, `tests/wp_commit_reveal.rs`  •  **Forbidden:** everything else.
+**Dependencies:** none (`Hash`, `canonical`).
+**Acceptance tests:** `reveal(v, commit(v)) == true`; a tampered value → `false`; deterministic.
+**Complexity:** ~1 h.
+
+---
+
+## ☐ Package 58 — id_uniqueness
+
+**Goal:** Detect duplicate identifiers in a list.
+
+**Interface:**
+```rust
+pub fn unique(ids: &[String]) -> bool;
+pub fn duplicates(ids: &[String]) -> Vec<String>; // each duplicated id once
+```
+
+**Files allowed:** `src/pkgs/id_uniqueness.rs`, `tests/wp_id_uniqueness.rs`  •  **Forbidden:** everything else.
+**Dependencies:** none.
+**Acceptance tests:** all-distinct → `unique == true` and `duplicates` empty; a repeated id listed once.
+**Complexity:** ~1 h.
+
+---
+
+## ☐ Package 59 — jsonl_export
+
+**Goal:** Serialize records to newline-delimited JSON (JSONL).
+
+**Interface:**
+```rust
+pub fn to_jsonl<T: serde::Serialize>(records: &[T]) -> crate::Result<String>;
+```
+
+**Files allowed:** `src/pkgs/jsonl_export.rs`, `tests/wp_jsonl_export.rs`  •  **Forbidden:** everything else.
+**Dependencies:** none (`serde_json`).
+**Acceptance tests:** N records → N newline-separated lines, each parses back to the record; empty input → empty string.
+**Complexity:** ~1 h.
+
+---
+
+## ☐ Package 60 — metric_csv_export
+
+**Goal:** Export a `MetricSet` to CSV.
+
+**Interface:**
+```rust
+use crate::simulation::MetricSet;
+pub fn to_csv(metrics: &MetricSet) -> String; // header `name,value` + one row per metric (primary first)
+```
+
+**Files allowed:** `src/pkgs/metric_csv_export.rs`, `tests/wp_metric_csv_export.rs`  •  **Forbidden:** everything else.
+**Dependencies:** none (`MetricSet`).
+**Acceptance tests:** output has a header and one row per metric incl. `primary_metric`; values round-trip parseable; deterministic ordering.
+**Complexity:** ~1.5 h.
+
+---
+
+## ☐ Package 61 — verifier_registry
+
+**Goal:** In-memory registry of `VerifierPackage`s keyed by id.
+
+**Interface:**
+```rust
+use crate::verifier::VerifierPackage;
+pub struct VerifierRegistry { /* HashMap<String, VerifierPackage> */ }
+impl VerifierRegistry {
+    pub fn new() -> Self;
+    pub fn insert(&mut self, pkg: VerifierPackage) -> bool; // false if id already present
+    pub fn get(&self, id: &str) -> Option<&VerifierPackage>;
+    pub fn contains(&self, id: &str) -> bool;
+    pub fn len(&self) -> usize;
+    pub fn list(&self) -> Vec<&VerifierPackage>;
+}
+impl Default for VerifierRegistry { fn default() -> Self { Self::new() } }
+```
+
+**Files allowed:** `src/pkgs/verifier_registry.rs`, `tests/wp_verifier_registry.rs`  •  **Forbidden:** everything else.
+**Dependencies:** none (`VerifierPackage`).
+**Acceptance tests:** insert + `get`/`contains`; duplicate-id insert → `false`; `len`/`list` correct.
+**Complexity:** ~1.5 h.
+
+---
+
+## ☐ Package 62 — replication_summary
+
+**Goal:** Aggregate `Replication` records into a summary.
+
+**Interface:**
+```rust
+use crate::verifier::Replication;
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReplicationSummary { pub total: usize, pub successful: usize, pub failed: usize, pub any_success: bool }
+pub fn summarize(replications: &[Replication]) -> ReplicationSummary;
+```
+
+**Files allowed:** `src/pkgs/replication_summary.rs`, `tests/wp_replication_summary.rs`  •  **Forbidden:** everything else.
+**Dependencies:** none (`Replication`).
+**Acceptance tests:** counts by `success`; `any_success` true iff ≥1 success; empty → all zero.
+**Complexity:** ~1 h.
+
+---
+
+## ☐ Package 63 — challenge_window
+
+**Goal:** Logical-time challenge window (open/closed by deadline).
+
+**Interface:**
+```rust
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ChallengeWindow { pub opened_at: u64, pub duration: u64 }
+impl ChallengeWindow {
+    pub fn new(opened_at: u64, duration: u64) -> Self;
+    pub fn deadline(&self) -> u64;             // opened_at + duration (saturating)
+    pub fn is_open(&self, now: u64) -> bool;   // now < deadline
+}
+```
+
+**Files allowed:** `src/pkgs/challenge_window.rs`, `tests/wp_challenge_window.rs`  •  **Forbidden:** everything else.
+**Dependencies:** none.
+**Acceptance tests:** `is_open` true before deadline; false at/after; `deadline == opened_at + duration`.
+**Complexity:** ~1 h.
+
+---
+
+## ☐ Package 64 — streak_analysis
+
+**Goal:** Max win/loss streaks from a return series.
+
+**Interface:**
+```rust
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Streaks { pub max_win_streak: usize, pub max_loss_streak: usize }
+pub fn analyze(returns: &[f64]) -> Streaks;
+```
+`> 0` = win step, `< 0` = loss step, `0` breaks both streaks.
+
+**Files allowed:** `src/pkgs/streak_analysis.rs`, `tests/wp_streak_analysis.rs`  •  **Forbidden:** everything else.
+**Dependencies:** none.
+**Acceptance tests:** alternating signs → 1/1; a run of N wins → `max_win_streak == N`; empty → 0/0.
+**Complexity:** ~1.5 h.
+
+---
+
+## ☐ Package 65 — drawdown_analysis
+
+**Goal:** Full drawdown analysis from an equity curve (series + max + duration).
+
+**Interface:**
+```rust
+#[derive(Debug, Clone, PartialEq)]
+pub struct DrawdownAnalysis { pub series: Vec<f64>, pub max_drawdown: f64, pub max_drawdown_duration: usize }
+pub fn analyze(equity_curve: &[f64]) -> DrawdownAnalysis;
+```
+`series[i]` = `(peak_i − equity_i)/peak_i`; `max_drawdown_duration` = longest run of consecutive `series[i] > 0`.
+
+**Files allowed:** `src/pkgs/drawdown_analysis.rs`, `tests/wp_drawdown_analysis.rs`  •  **Forbidden:** everything else.
+**Dependencies:** none.
+**Acceptance tests:** monotonic-up curve → all-zero `series`, `max_drawdown == 0`; a peak-then-drop curve → correct max + duration; empty/single → zeros.
+**Complexity:** ~2 h.
+
+---
+
+## ☐ Package 66 — research_project_validation
+
+**Goal:** Validate a `ResearchProject`.
+
+**Interface:**
+```rust
+use crate::protocol::ResearchProject;
+pub fn validate(project: &ResearchProject) -> std::result::Result<(), Vec<String>>;
+```
+Checks: non-empty `id`, `question`, `claim`; non-empty `domain_adapter.id` / `domain_adapter.version`.
+
+**Files allowed:** `src/pkgs/research_project_validation.rs`, `tests/wp_research_project_validation.rs`  •  **Forbidden:** everything else.
+**Dependencies:** none (`ResearchProject`).
+**Acceptance tests:** valid project → `Ok`; empty `id`/`question`/`claim` → `Err`; empty domain-adapter id → `Err`.
+**Complexity:** ~1 h.
+
+---
+
+## Batch summary (1–66)
+
+- **66 packages total**, all flat against the base crate, zero inter-package file overlap.
+- This fifth batch adds market-data validation/resampling (53/54), evidence/stat extraction (55/64/65), generic privacy/export utilities (56/57/58/59/60), registries (61), and lifecycle/validation helpers (52/62/63/66).
+- **The serial orchestrator + vertical-slice test remains the single milestone that converts this component library into a running research pipeline.**
