@@ -767,3 +767,295 @@ pub fn detect(sequence: &[i64]) -> Vec<DataGap>;
 - **25 packages total**, all flat against the base crate, zero inter-package file overlap.
 - Combined estimated effort: ~38–45 h of fully parallelizable work.
 - Suggested wave plan: **Wave A = 1–6** • **Wave B = 13–15 + 7–9** • **Wave C = 16–18 + 10–12** • **Wave D = 19–21 + 22–25**.
+
+---
+
+# Packages 26–37 (third batch)
+
+Same rules: each agent edits **only** `src/pkgs/<name>.rs` (replace the stub) **and**
+creates `tests/wp_<name>.rs`. Everything else forbidden. `pkgs/mod.rs` already
+declares all 12; crate builds with empty stubs. Deterministic only;
+`execution_time_seconds = 0.0`; no new deps; `#![deny(missing_docs)]`.
+
+**This batch is deliberately integration-leaning:** packages **29 (verifier_summary)**,
+**30 (pipeline_contract)**, and **36 (run_bundle)** are the interface-first data
+model the future end-to-end orchestrator will compose. They depend only on the
+stable base API, so they stay parallel-safe — but they are the prep for the
+**serial** orchestrator + vertical-slice milestone that actually makes the
+pipeline "work." (The orchestrator itself is intentionally NOT a parallel package
+— it wires other packages together, so it's a dedicated serial task after these land.)
+
+**Dependency graph (third batch):** flat — all depend only on the base crate.
+**Overlap:** zero.
+
+---
+
+## ☐ Package 26 — seed_derivation
+
+**Goal:** Deterministic sub-seed derivation (expand a parent seed into labeled/ordered sub-seeds via SHA-256, no OS randomness).
+
+**Interface:**
+```rust
+/// Derive a deterministic sub-seed from `parent` and a domain `label`.
+pub fn sub_seed(parent: u64, label: &str) -> u64;
+/// Derive `count` ordered, distinct sub-seeds from `parent`.
+pub fn expand(parent: u64, count: usize) -> Vec<u64>;
+```
+
+**Files allowed:** `src/pkgs/seed_derivation.rs`, `tests/wp_seed_derivation.rs`  •  **Forbidden:** everything else.
+**Dependencies:** none (`Hash::new` / `fractal_crypto::sha256`).
+**Acceptance tests:** same inputs → same output; distinct labels → distinct seeds; `expand(n)` yields `n` distinct values; deterministic across calls.
+**Complexity:** ~1 h.
+
+---
+
+## ☐ Package 27 — confidence_intervals
+
+**Goal:** Percentile + deterministic bootstrap mean CI over a numeric sample.
+
+**Interface:**
+```rust
+/// Percentile (0..=100) of a sample; `None` if empty.
+pub fn percentile(sample: &[f64], pct: f64) -> Option<f64>;
+/// Bootstrap mean confidence interval (lower, upper) at `confidence` (0..1); deterministic given `seed`.
+pub fn mean_ci(sample: &[f64], confidence: f64, trials: usize, seed: u64) -> Option<(f64, f64)>;
+```
+
+**Files allowed:** `src/pkgs/confidence_intervals.rs`, `tests/wp_confidence_intervals.rs`  •  **Forbidden:** everything else.
+**Dependencies:** none (`rand` seeded `StdRng`).
+**Acceptance tests:** `percentile([1,2,3], 50) == 2`; `mean_ci` deterministic for a fixed `seed`; CI of a symmetric sample brackets the sample mean; empty sample → `None`.
+**Complexity:** ~2 h.
+
+---
+
+## ☐ Package 28 — risk_adjusted_metrics
+
+**Goal:** Sharpe, Sortino, volatility, and max drawdown from a return series (risk-free = 0).
+
+**Interface:**
+```rust
+pub struct RiskAdjusted { pub sharpe: f64, pub sortino: f64, pub volatility: f64, pub max_drawdown: f64 }
+pub fn compute(returns: &[f64]) -> RiskAdjusted;
+```
+
+**Files allowed:** `src/pkgs/risk_adjusted_metrics.rs`, `tests/wp_risk_adjusted_metrics.rs`  •  **Forbidden:** everything else.
+**Dependencies:** none.
+**Acceptance tests:** empty / single-element → all zeros; a known series → hand-checked volatility and max drawdown; Sharpe finite for a non-constant series; deterministic.
+**Complexity:** ~2 h.
+
+---
+
+## ☐ Package 29 — verifier_summary
+
+**Goal:** Aggregate a set of `VerifierReport`s into a `VerifierSummary`. *(Integration-enabling.)*
+
+**Interface:**
+```rust
+use crate::verifier::{VerifierReport, VerifierSummary};
+pub fn summarize(reports: &[VerifierReport]) -> VerifierSummary;
+```
+Map: `total_verifiers = reports.len()`, `verifiers_passed/failed` by `passed`, `required_total = total`, `required_passed = passed`.
+
+**Files allowed:** `src/pkgs/verifier_summary.rs`, `tests/wp_verifier_summary.rs`  •  **Forbidden:** everything else.
+**Dependencies:** none (`VerifierReport`, `VerifierSummary`).
+**Acceptance tests:** all-pass → `verifiers_failed == 0`; mixed → counts correct; empty → all zero.
+**Complexity:** ~1 h.
+
+---
+
+## ☐ Package 30 — pipeline_contract
+
+**Goal:** Interface-first data model for the future orchestrator (types + well-formedness only, no wiring). *(Integration-enabling.)*
+
+**Interface:**
+```rust
+use crate::protocol::Hash;
+use crate::verifier::VerifierReport;
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PipelineStage { Run, Score, Verify, Commit, Reward }
+#[derive(Debug, Clone)]
+pub struct PipelineOutcome {
+    pub evidence_hash: Hash,
+    pub scorecard_hash: Hash,
+    pub verifier_reports: Vec<VerifierReport>,
+    pub committed: bool,
+    pub reward_released: bool,
+}
+impl PipelineOutcome {
+    pub fn stage(&self) -> PipelineStage;          // highest reached stage
+    pub fn all_verifiers_passed(&self) -> bool;
+    pub fn is_complete(&self) -> bool;             // reward_released AND all_verifiers_passed
+}
+pub fn validate(outcome: &PipelineOutcome) -> std::result::Result<(), String>;
+```
+Stage ladder: empty `evidence_hash` → `Run`; non-empty → `Score`; ≥1 verifier → `Verify`; `committed` → `Commit`; `reward_released` → `Reward`.
+
+**Files allowed:** `src/pkgs/pipeline_contract.rs`, `tests/wp_pipeline_contract.rs`  •  **Forbidden:** everything else.
+**Dependencies:** none (`Hash`, `VerifierReport`).
+**Acceptance tests:** stage ladder correct for hand-built outcomes; `is_complete` true only when `reward_released && all_verifiers_passed`; `validate` rejects an empty/zero `evidence_hash`.
+**Complexity:** ~1.5 h.
+
+---
+
+## ☐ Package 31 — proof_card
+
+**Goal:** Build a public-facing `ProofCard` from a signed `ProofManifest` + `Scorecard`.
+
+**Interface:**
+```rust
+use crate::protocol::{Hash, ProofManifest};
+use crate::verifier::{Scorecard, SimulationTier};
+#[derive(Debug, Clone, PartialEq)]
+pub struct ProofCard {
+    pub claim: String,
+    pub proof_level: String,
+    pub simulation_tier: SimulationTier,
+    pub net_return: f64,
+    pub max_drawdown: f64,
+    pub disclaimer: String,
+    pub proof_hash: Hash,
+}
+pub fn build(manifest: &ProofManifest, scorecard: &Scorecard) -> ProofCard;
+```
+
+**Files allowed:** `src/pkgs/proof_card.rs`, `tests/wp_proof_card.rs`  •  **Forbidden:** everything else.
+**Dependencies:** none (`ProofManifest`, `Scorecard`).
+**Acceptance tests:** `disclaimer` non-empty and contains "SIMULATION"; `net_return` from `scorecard.primary_metrics["net_return"]`; `proof_hash == manifest.trace_merkle_root`; `simulation_tier == scorecard.simulation_tier`.
+**Complexity:** ~1.5 h.
+
+---
+
+## ☐ Package 32 — replication_check
+
+**Goal:** Re-derive replication success from tolerance + `actual_difference`.
+
+**Interface:**
+```rust
+use crate::verifier::Replication;
+pub enum ReplicationClass { Success, Fail, Indeterminate }
+pub fn classify(replication: &Replication) -> ReplicationClass;
+pub fn within_tolerance(replication: &Replication) -> bool;
+```
+
+**Files allowed:** `src/pkgs/replication_check.rs`, `tests/wp_replication_check.rs`  •  **Forbidden:** everything else.
+**Dependencies:** none (`Replication`).
+**Acceptance tests:** `actual_difference <= tolerance` (finite) → `Success`/`true`; `actual_difference > tolerance` → `Fail`/`false`; `actual_difference == None` → `Indeterminate`/`false`.
+**Complexity:** ~1 h.
+
+---
+
+## ☐ Package 33 — protocol_validation
+
+**Goal:** Validate a `Protocol` (required fields, finite policy).
+
+**Interface:**
+```rust
+use crate::protocol::Protocol;
+pub fn validate(protocol: &Protocol) -> std::result::Result<(), Vec<String>>;
+```
+Checks: `primary_metrics` non-empty; `allowed_tools` non-empty; `safety_policy` fields finite/non-negative; `cost_model.fee_schedule` non-empty.
+
+**Files allowed:** `src/pkgs/protocol_validation.rs`, `tests/wp_protocol_validation.rs`  •  **Forbidden:** everything else.
+**Dependencies:** none (`Protocol`).
+**Acceptance tests:** valid protocol → `Ok`; empty `primary_metrics` → `Err`; empty `allowed_tools` → `Err`; negative `max_leverage` → `Err`.
+**Complexity:** ~1.5 h.
+
+---
+
+## ☐ Package 34 — environment_validation
+
+**Goal:** Validate an `EnvironmentManifest`.
+
+**Interface:**
+```rust
+use crate::protocol::EnvironmentManifest;
+pub fn validate(env: &EnvironmentManifest) -> std::result::Result<(), Vec<String>>;
+```
+Checks: `id` non-empty; `version_hash` parses as 64-hex; `config` not `Value::Null`.
+
+**Files allowed:** `src/pkgs/environment_validation.rs`, `tests/wp_environment_validation.rs`  •  **Forbidden:** everything else.
+**Dependencies:** none (`EnvironmentManifest`, `Hash`).
+**Acceptance tests:** valid → `Ok`; empty `id` → `Err`; null `config` → `Err`; bad version-hash hex → `Err`.
+**Complexity:** ~1 h.
+
+---
+
+## ☐ Package 35 — metric_set_ops
+
+**Goal:** Merge multiple `MetricSet`s for cross-run aggregation.
+
+**Interface:**
+```rust
+use crate::simulation::MetricSet;
+/// Union the metric maps (duplicate keys: last wins); primary_metric = mean of primaries.
+pub fn merge(sets: &[MetricSet]) -> MetricSet;
+```
+
+**Files allowed:** `src/pkgs/metric_set_ops.rs`, `tests/wp_metric_set_ops.rs`  •  **Forbidden:** everything else.
+**Dependencies:** none (`MetricSet`).
+**Acceptance tests:** merge of disjoint-key sets contains all keys; duplicate key keeps the last value; `primary_metric` is the mean of inputs; empty input → empty `MetricSet`.
+**Complexity:** ~1.5 h.
+
+---
+
+## ☐ Package 36 — run_bundle
+
+**Goal:** Assemble a portable run bundle (manifest/evidence/scorecard/proof hashes + agent id) with a tamper-evident bundle hash. *(Integration-enabling.)*
+
+**Interface:**
+```rust
+use crate::protocol::Hash;
+#[derive(Debug, Clone, PartialEq)]
+pub struct RunBundle {
+    pub run_manifest_hash: Hash,
+    pub evidence_hash: Hash,
+    pub scorecard_hash: Hash,
+    pub proof_hash: Hash,
+    pub agent_id: String,
+}
+impl RunBundle {
+    pub fn new(run_manifest_hash: Hash, evidence_hash: Hash, scorecard_hash: Hash, proof_hash: Hash, agent_id: impl Into<String>) -> Self;
+    pub fn bundle_hash(&self) -> fractal_society::Result<Hash>; // Hash::of(self)
+}
+```
+
+**Files allowed:** `src/pkgs/run_bundle.rs`, `tests/wp_run_bundle.rs`  •  **Forbidden:** everything else.
+**Dependencies:** none (`Hash`).
+**Acceptance tests:** `bundle_hash` deterministic; identical inputs → identical hash; changing any one hash or the agent id → different hash.
+**Complexity:** ~1 h.
+
+---
+
+## ☐ Package 37 — manifest_registry
+
+**Goal:** In-memory artifact registry (insert/lookup/list `ArtifactManifest` by content hash) — a minimal stand-in for the PRD's Artifact Registry.
+
+**Interface:**
+```rust
+use crate::artifact::{ArtifactHash, ArtifactManifest};
+pub struct ArtifactRegistry { /* HashMap<ArtifactHash, ArtifactManifest> */ }
+impl ArtifactRegistry {
+    pub fn new() -> Self;
+    /// Insert; returns false if the content hash is already present.
+    pub fn insert(&mut self, manifest: ArtifactManifest) -> bool;
+    pub fn get(&self, hash: &ArtifactHash) -> Option<&ArtifactManifest>;
+    pub fn contains(&self, hash: &ArtifactHash) -> bool;
+    pub fn len(&self) -> usize;
+    pub fn is_empty(&self) -> bool;
+    pub fn list(&self) -> Vec<&ArtifactManifest>;
+}
+impl Default for ArtifactRegistry { fn default() -> Self { Self::new() } }
+```
+
+**Files allowed:** `src/pkgs/manifest_registry.rs`, `tests/wp_manifest_registry.rs`  •  **Forbidden:** everything else.
+**Dependencies:** none (`ArtifactManifest`, `ArtifactHash`).
+**Acceptance tests:** insert + `get`/`contains`; duplicate-hash insert returns `false` and does not clobber; `len`/`is_empty`/`list` correct; `Default` works.
+**Complexity:** ~1.5 h.
+
+---
+
+## Batch summary (1–37)
+
+- **37 packages total**, all flat against the base crate, zero inter-package file overlap.
+- This third batch adds the **integration-enabling spine types** (29 verifier_summary, 30 pipeline_contract, 36 run_bundle) plus stats utilities (26/27/28), more validation (32/33/34), and artifact plumbing (35/37).
+- **After these land, the next milestone is the SERIAL orchestrator + end-to-end vertical-slice test** (not a parallel package): it composes `kernel::run → build_scorecard → verifier_summary → build_proof_manifest → pipeline_contract::PipelineOutcome → run_bundle`. That test passing is "the research pipeline works end-to-end" on synthetic data.

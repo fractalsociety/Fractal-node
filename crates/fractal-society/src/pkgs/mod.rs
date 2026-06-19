@@ -39,3 +39,17 @@ pub mod season_state_machine;
 pub mod submission_freeze;
 pub mod sybil_detection;
 pub mod temporal_leakage;
+
+// --- Third batch: packages 26–37 (same zero-overlap rules as above) ---
+pub mod confidence_intervals;
+pub mod environment_validation;
+pub mod manifest_registry;
+pub mod metric_set_ops;
+pub mod pipeline_contract;
+pub mod proof_card;
+pub mod protocol_validation;
+pub mod replication_check;
+pub mod risk_adjusted_metrics;
+pub mod run_bundle;
+pub mod seed_derivation;
+pub mod verifier_summary;
