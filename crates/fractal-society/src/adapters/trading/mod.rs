@@ -14,6 +14,8 @@ pub mod fill_model;
 pub mod fixtures;
 /// Integer portfolio ledger.
 pub mod ledger;
+/// Trading scorecard builder.
+pub mod scorecard;
 /// Trading domain types.
 pub mod types;
 
@@ -21,6 +23,7 @@ pub use adapter::{TradingAdapter, TradingAgent, STARTER_TRADING_AGENT_ID, TRADIN
 pub use baselines::{BuyAndHoldBaseline, CashBaseline, MovingAverageBaseline, RandomBaseline};
 pub use fixtures::{golden_bars, liquidation_bars, synthetic_bars};
 pub use ledger::Ledger;
+pub use scorecard::build_scorecard;
 pub use types::{
     Asset, Fill, MarketBar, OrderId, OrderType, PositionView, Side, TradingAction, TradingConfig,
     TradingObservation, TradingOutcome,
