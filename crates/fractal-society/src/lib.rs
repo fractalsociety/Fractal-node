@@ -22,10 +22,13 @@
 pub mod adapters;
 pub mod artifact;
 pub mod canonical;
+#[cfg(feature = "live-chain")]
+pub mod chain;
 pub mod error;
 pub mod kernel;
 pub mod market_data;
 pub mod offline_verify;
+pub mod persistence;
 pub mod pipeline;
 pub mod pkgs;
 pub mod protocol;

@@ -18,6 +18,8 @@ rand.workspace = true
 # crypto crate so artifacts verify across the Rust spec and the TS app.
 fractal-crypto = { path = "../crypto" }
 ed25519-dalek.workspace = true
+ethers = { workspace = true, optional = true }
+jsonrpsee = { workspace = true, features = ["http-client"], optional = true }
 
 # Domain-specific dependencies (optional until used)
 hyperliquid = { optional = true, version = "0.1" }
@@ -27,4 +29,6 @@ rand.workspace = true
 
 [features]
 default = []
+live-chain = ["dep:ethers", "dep:jsonrpsee"]
+live-data = ["dep:hyperliquid"]
 trading = ["dep:hyperliquid"]
