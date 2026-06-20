@@ -24,8 +24,9 @@ use fractal_crypto::hash::keccak256;
 use fractal_crypto::BlsSecretKey;
 use fractal_mempool::{next_base_fee, BaseFeeParams, Mempool, PooledTx};
 use fractal_rpc::{
-    logs_bloom_256, make_rpc_log, ChainInteraction, RpcChainConfig, RpcConsensusDiagnostics,
-    RpcDaMetrics, RpcMempoolLaneMetrics, RpcProofMetrics, RpcProofRejectionMetric,
+    logs_bloom_256, make_rpc_log, ChainInteraction, ProofCommitmentResponse, RpcChainConfig,
+    RpcConsensusDiagnostics, RpcDaMetrics, RpcMempoolLaneMetrics, RpcProofMetrics,
+    RpcProofRejectionMetric,
 };
 use fractal_storage::{ProofFinalityStore, StoredProofFinalityRecord};
 use libp2p::multiaddr::Protocol;
@@ -404,6 +405,8 @@ pub struct NodeInner {
     /// Blocks that have passed the validity-proof gate. Committee commits are soft-final;
     /// entries here are proof-final for settlement/bridging purposes.
     pub proof_finalized_blocks: BTreeMap<fractal_crypto::Hash256, BlockValidityProof>,
+    /// Research proof-hash commitments keyed by proof hash.
+    pub proof_commitments: BTreeMap<fractal_crypto::Hash256, u64>,
     pub proof_finality_store: Option<ProofFinalityStore>,
     pub witness_metadata: BTreeMap<fractal_crypto::Hash256, MixedExecutionWitnessMetadataV1>,
     pub chain_config: ChainConfig,
@@ -488,6 +491,7 @@ impl NodeInner {
             eth_rpc_to_internal_tx_hash: BTreeMap::new(),
             eth_internal_to_rpc_tx_hash: BTreeMap::new(),
             proof_finalized_blocks: BTreeMap::new(),
+            proof_commitments: BTreeMap::new(),
             proof_finality_store: None,
             witness_metadata: BTreeMap::new(),
             chain_config: ChainConfig::default(),
@@ -1573,6 +1577,25 @@ impl ChainInteraction for NodeInner {
         let block_hash = proof.block_hash;
         NodeInner::submit_validity_proof(self, proof).map_err(|e| e.to_string())?;
         Ok(block_hash)
+    }
+
+    fn submit_proof_hash(
+        &mut self,
+        proof_hash: [u8; 32],
+    ) -> Result<ProofCommitmentResponse, String> {
+        let block_number = self.block_number();
+        self.proof_commitments.insert(proof_hash, block_number);
+
+        let mut input = proof_hash.to_vec();
+        input.extend_from_slice(&block_number.to_be_bytes());
+        let tx_hash = format!("0x{}", hex::encode(fractal_crypto::sha256(&input)));
+
+        Ok(ProofCommitmentResponse {
+            network: format!("fractalchain-{}", self.chain_id()),
+            transaction_hash: tx_hash,
+            block_number,
+            finalized: true,
+        })
     }
 }
 

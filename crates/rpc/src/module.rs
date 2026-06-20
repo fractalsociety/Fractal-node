@@ -297,6 +297,19 @@ pub struct RpcProofSubmission {
     pub finality_status: String,
 }
 
+/// Response from `fractal_submitProofHash`.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct ProofCommitmentResponse {
+    /// Network name.
+    pub network: String,
+    /// Transaction hash (0x-prefixed hex).
+    pub transaction_hash: String,
+    /// Block number containing the commitment.
+    pub block_number: u64,
+    /// Whether the commitment is finalized.
+    pub finalized: bool,
+}
+
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RpcSettlementBlock {
@@ -633,6 +646,14 @@ pub trait ChainInteraction: Send {
         &mut self,
         proof: fractal_consensus::BlockValidityProof,
     ) -> Result<[u8; 32], String>;
+
+    /// Record a research-proof hash commitment. Default: not supported.
+    fn submit_proof_hash(
+        &mut self,
+        _proof_hash: [u8; 32],
+    ) -> Result<ProofCommitmentResponse, String> {
+        Err("fractal_submitProofHash not supported on this node".to_string())
+    }
 }
 
 pub type SharedChain = Arc<Mutex<dyn ChainInteraction + Send>>;
@@ -1405,6 +1426,41 @@ pub fn build_module(ctx: SharedChain) -> RpcModule<SharedChain> {
             }
         })
         .expect("register eth_getLogs");
+
+    module
+        .register_async_method(
+            "fractal_submitProofHash",
+            |params: Params<'static>, ctx, _| {
+                let ctx = ctx.clone();
+                async move {
+                    let arr: Vec<serde_json::Value> = params
+                        .parse()
+                        .map_err(|_| err_invalid_params("expected proof_hash object"))?;
+                    let obj = arr
+                        .first()
+                        .ok_or(err_invalid_params("expected proof_hash object"))?;
+                    let hex = obj
+                        .get("proof_hash")
+                        .and_then(|v| v.as_str())
+                        .or_else(|| obj.as_str())
+                        .ok_or(err_invalid_params("missing proof_hash string"))?;
+                    let hex = hex.strip_prefix("0x").unwrap_or(hex);
+                    let bytes = hex::decode(hex)
+                        .map_err(|_| err_invalid_params("invalid proof_hash hex"))?;
+                    if bytes.len() != 32 {
+                        return Err(err_invalid_params("proof_hash must be 32 bytes"));
+                    }
+                    let mut hash = [0u8; 32];
+                    hash.copy_from_slice(&bytes);
+                    let mut g = ctx.lock().await;
+                    let response = g
+                        .submit_proof_hash(hash)
+                        .map_err(|e| ErrorObjectOwned::owned(-32603, e, None::<()>))?;
+                    Ok::<ProofCommitmentResponse, ErrorObjectOwned>(response)
+                }
+            },
+        )
+        .expect("register fractal_submitProofHash");
 
     module
 }
