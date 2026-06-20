@@ -10,7 +10,12 @@ function rpcUrl() {
 let nextId = 1;
 const DEV_SIGNER_0 = "0xf39fd6e51aad88f6f4ce6ab8827279cfffb92266";
 const CACHE_KEY = "fractal-explorer.snapshot.v1";
+const DB_NAME = "fractal-explorer";
+const DB_VERSION = 1;
+const SNAPSHOT_STORE = "snapshots";
+const SNAPSHOT_ID = "latest";
 const RPC_TIMEOUT_MS = 8000;
+const BACKGROUND_REFRESH_MS = 30000;
 
 async function rpc(method, params = []) {
   const controller = new AbortController();
@@ -111,12 +116,69 @@ function readCache() {
   }
 }
 
+function openSnapshotDb() {
+  return new Promise((resolve, reject) => {
+    if (!("indexedDB" in window)) {
+      reject(new Error("IndexedDB unavailable"));
+      return;
+    }
+    const req = window.indexedDB.open(DB_NAME, DB_VERSION);
+    req.onupgradeneeded = () => {
+      req.result.createObjectStore(SNAPSHOT_STORE, { keyPath: "id" });
+    };
+    req.onerror = () => reject(req.error || new Error("IndexedDB open failed"));
+    req.onsuccess = () => resolve(req.result);
+  });
+}
+
+async function readSnapshotDb() {
+  let db;
+  try {
+    db = await openSnapshotDb();
+    return await new Promise((resolve, reject) => {
+      const tx = db.transaction(SNAPSHOT_STORE, "readonly");
+      const req = tx.objectStore(SNAPSHOT_STORE).get(SNAPSHOT_ID);
+      req.onerror = () => reject(req.error || new Error("IndexedDB read failed"));
+      req.onsuccess = () => {
+        const row = req.result;
+        resolve(row && typeof row.snapshot === "object" ? row.snapshot : null);
+      };
+    });
+  } catch {
+    return null;
+  } finally {
+    if (db) db.close();
+  }
+}
+
+async function writeSnapshotDb(snapshot) {
+  let db;
+  try {
+    db = await openSnapshotDb();
+    await new Promise((resolve, reject) => {
+      const tx = db.transaction(SNAPSHOT_STORE, "readwrite");
+      tx.objectStore(SNAPSHOT_STORE).put({
+        id: SNAPSHOT_ID,
+        snapshot,
+        updatedAt: Date.now(),
+      });
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error || new Error("IndexedDB write failed"));
+    });
+  } catch {
+    // The page can still render from memory/localStorage.
+  } finally {
+    if (db) db.close();
+  }
+}
+
 function writeCache(partial) {
   try {
     const next = { ...(readCache() || {}), ...partial, cachedAt: Date.now() };
     window.localStorage.setItem(CACHE_KEY, JSON.stringify(next));
+    void writeSnapshotDb(next);
   } catch {
-    // Cache is an optimization only.
+    void writeSnapshotDb({ ...partial, cachedAt: Date.now() });
   }
 }
 
@@ -141,6 +203,11 @@ function renderMetricRows(el, rows) {
 function renderCachedSnapshot() {
   const cache = readCache();
   if (!cache) return false;
+  renderSnapshot(cache);
+  return true;
+}
+
+function renderSnapshot(cache) {
   if (cache.hero) {
     updateHeroStat("heroHead", cache.hero.head ?? "—");
     updateHeroStat("heroFinality", cache.hero.finality ?? "—");
@@ -150,6 +217,17 @@ function renderCachedSnapshot() {
   if (summary && Array.isArray(cache.summaryRows)) renderMetricRows(summary, cache.summaryRows);
   const blocks = document.getElementById("blocks");
   if (blocks && Array.isArray(cache.blockRows)) renderBlockRows(blocks, cache.blockRows, cache.blockCaption || "Cached recent activity.");
+}
+
+async function renderStoredSnapshot() {
+  const snapshot = await readSnapshotDb();
+  if (!snapshot) return false;
+  renderSnapshot(snapshot);
+  try {
+    window.localStorage.setItem(CACHE_KEY, JSON.stringify(snapshot));
+  } catch {
+    // IndexedDB remains the source of truth.
+  }
   return true;
 }
 
@@ -538,28 +616,11 @@ async function refresh(options = {}) {
   if (button && !silent) button.disabled = true;
   const results = await Promise.allSettled([loadSummary(sum), loadBlocks(blk)]);
   const summaryFailure = results[0].status === "rejected" ? results[0].reason : null;
-  const blocksFailure = results[1].status === "rejected" ? results[1].reason : null;
-  if (blocksFailure && blk && !blk.children.length) {
-    const p = document.createElement("p");
-    p.className = "err";
-    p.textContent = `Recent blocks unavailable: ${String(blocksFailure)}`;
-    blk.innerHTML = "";
-    blk.appendChild(p);
-  }
   try {
     if (summaryFailure) throw summaryFailure;
   } catch (e) {
-    if (!readCache()) {
-      updateHeroStat("heroHead", "Offline");
-      updateHeroStat("heroFinality", "Unavailable");
-      updateHeroStat("heroTxs", "—");
-      sum.innerHTML = "";
-      const p = document.createElement("p");
-      p.className = "err";
-      p.textContent = String(e);
-      sum.appendChild(p);
-      blk.textContent = "";
-    }
+    void e;
+    await renderStoredSnapshot();
   } finally {
     if (button && !silent) button.disabled = false;
   }
@@ -657,6 +718,10 @@ if (fillH) {
 }
 window.addEventListener("load", () => {
   renderCachedSnapshot();
+  void renderStoredSnapshot();
   renderInitialSnapshot();
   void refresh({ silent: true });
+  window.setInterval(() => {
+    if (document.visibilityState === "visible") void refresh({ silent: true });
+  }, BACKGROUND_REFRESH_MS);
 });
