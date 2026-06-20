@@ -14,7 +14,9 @@ Deploy the contents of this folder as a static site:
 - `app.js`
 - `assets/fractal-explorer-hero.png`
 
-The page defaults to the built-in same-origin `/rpc` endpoint. The production nginx config proxies `/rpc` to the deployed FractalChain RPC server (`http://192.3.47.245:8545`), so public/mobile visitors do not need a query parameter and browsers avoid mixed-content blocking. Public deployments can still pass a different RPC endpoint with:
+The page defaults to the built-in same-origin `/rpc` endpoint. In production, nginx proxies `/rpc` to the local `fractal-explorer-rpc-cache` service, and that service forwards to the deployed FractalChain RPC server (`http://192.3.47.245:8545`).
+
+The cache proxy stores the latest successful read-only JSON-RPC responses on disk. If the chain RPC stalls, the proxy returns the last good value instead of surfacing a transient upstream failure to visitors. Public/mobile visitors do not need a query parameter and browsers avoid mixed-content blocking. Public deployments can still pass a different RPC endpoint with:
 
 ```text
 https://blockexplorer.fractalsociety.org/?rpc=https://YOUR_RPC_HOST
@@ -47,6 +49,31 @@ EXPLORER_HOST=0.0.0.0 ./scripts/serve-explorer.sh
 ```
 
 Use `http://YOUR_COMPUTER_LAN_IP:3333/?rpc=http://YOUR_COMPUTER_LAN_IP:8545` if your node is also bound on the LAN, or omit `?rpc=` to test the dev server's `/rpc` proxy.
+
+## Backend RPC cache
+
+Run the cache proxy locally:
+
+```bash
+node tools/explorer/rpc-cache-server.mjs
+```
+
+Useful environment variables:
+
+- `EXPLORER_RPC_CACHE_PORT` — default `18546`
+- `EXPLORER_RPC_UPSTREAM` — default `http://192.3.47.245:8545`
+- `EXPLORER_RPC_CACHE_FILE` — default `/var/lib/fractal-explorer/rpc-cache.json`
+- `EXPLORER_RPC_TIMEOUT_MS` — default `4500`
+
+Production systemd unit:
+
+```bash
+sudo cp tools/explorer/fractal-explorer-rpc-cache.service /etc/systemd/system/
+sudo mkdir -p /opt/fractal-explorer
+sudo cp tools/explorer/rpc-cache-server.mjs /opt/fractal-explorer/
+sudo systemctl daemon-reload
+sudo systemctl enable --now fractal-explorer-rpc-cache
+```
 
 ## What it shows
 

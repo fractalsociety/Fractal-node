@@ -1,0 +1,26 @@
+[Unit]
+Description=Fractal Explorer JSON-RPC cache proxy
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+Environment=EXPLORER_RPC_CACHE_HOST=127.0.0.1
+Environment=EXPLORER_RPC_CACHE_PORT=18546
+Environment=EXPLORER_RPC_UPSTREAM=http://192.3.47.245:8545
+Environment=EXPLORER_RPC_CACHE_FILE=/var/lib/fractal-explorer/rpc-cache.json
+Environment=EXPLORER_RPC_TIMEOUT_MS=4500
+ExecStart=/usr/bin/node /opt/fractal-explorer/rpc-cache-server.mjs
+Restart=always
+RestartSec=3
+User=www-data
+Group=www-data
+StateDirectory=fractal-explorer
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/fractal-explorer
+
+[Install]
+WantedBy=multi-user.target
