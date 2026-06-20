@@ -1,4 +1,4 @@
-const DEFAULT_RPC_URL = "http://192.3.47.245:8545";
+const DEFAULT_RPC_URL = "/rpc";
 
 function rpcUrl() {
   const p = new URLSearchParams(window.location.search);
