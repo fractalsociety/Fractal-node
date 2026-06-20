@@ -6,6 +6,8 @@
 //! are supplied by the caller (a future live source feeds this normalizer; see
 //! package 75).
 
+pub mod store;
+
 use serde::{Deserialize, Serialize};
 
 use crate::adapters::trading::{Asset, MarketBar};
