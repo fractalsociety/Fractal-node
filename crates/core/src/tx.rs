@@ -78,6 +78,11 @@ pub enum NativeCall {
         commitment: Hash256,
         receipt_witness: Vec<u8>,
     },
+    /// Anchor a Fractal Society research proof/package hash as a first-class
+    /// native transaction so explorers and indexers can audit it from blocks.
+    ProofCommitmentV1 {
+        proof_hash: Hash256,
+    },
 }
 
 #[derive(BorshSerialize, BorshDeserialize, Clone, Debug, PartialEq, Eq)]
@@ -110,6 +115,7 @@ pub enum OwnedObjectId {
     Agent(u64),
     Receipt(Hash256),
     WalletTaskReceipt(Hash256),
+    ProofCommitment(Hash256),
 }
 
 #[derive(BorshSerialize, BorshDeserialize, Clone, Debug, PartialEq, Eq)]
@@ -509,6 +515,9 @@ impl Transaction {
                 VmKind::Native,
                 TxBody::Native(NativeCall::WalletTaskReceiptAnchorV1 { commitment, .. }),
             ) => owned(vec![OwnedObjectId::WalletTaskReceipt(*commitment)]),
+            (VmKind::Native, TxBody::Native(NativeCall::ProofCommitmentV1 { proof_hash })) => {
+                owned(vec![OwnedObjectId::ProofCommitment(*proof_hash)])
+            }
             (VmKind::Native, TxBody::Native(NativeCall::NoOp)) => owned(Vec::new()),
             _ => TxExecutionScope::Consensus,
         }

@@ -356,6 +356,7 @@ fn native_call_opcode(call: &fractal_core::NativeCall) -> u8 {
         fractal_core::NativeCall::WalletTaskReceiptAnchorV1 { .. } => 0x0e,
         fractal_core::NativeCall::NoOp => 0x00,
         fractal_core::NativeCall::SetChainEconomics { .. } => 0x0f,
+        fractal_core::NativeCall::ProofCommitmentV1 { .. } => 0x10,
     }
 }
 

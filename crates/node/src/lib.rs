@@ -19,7 +19,9 @@ use fractal_consensus::{
     ExecutionFeatureSetV1, FormedQc, MixedExecutionWitnessMetadataV1, ProofVerifyError,
     RecordVoteOutcome, StwoPlonky2ProofEnvelope, Vote, VotePool,
 };
-use fractal_core::{Address, EvmEngine, ProtocolPhaseConfig, State, Transaction};
+use fractal_core::{
+    Address, EvmEngine, NativeCall, ProtocolPhaseConfig, State, Transaction, TxBody, VmKind,
+};
 use fractal_crypto::hash::keccak256;
 use fractal_crypto::BlsSecretKey;
 use fractal_mempool::{next_base_fee, BaseFeeParams, Mempool, PooledTx};
@@ -1586,13 +1588,27 @@ impl ChainInteraction for NodeInner {
         let block_number = self.block_number();
         self.proof_commitments.insert(proof_hash, block_number);
 
-        let mut input = proof_hash.to_vec();
-        input.extend_from_slice(&block_number.to_be_bytes());
-        let tx_hash = format!("0x{}", hex::encode(fractal_crypto::sha256(&input)));
+        let signer = HARDHAT_DEFAULT_SIGNER_0;
+        let tx = Transaction {
+            signer,
+            nonce: self.transaction_count(&signer),
+            vm: VmKind::Native,
+            body: TxBody::Native(NativeCall::ProofCommitmentV1 { proof_hash }),
+        };
+        let raw = borsh::to_vec(&tx)
+            .map_err(|err| format!("failed to encode proof commitment tx: {err}"))?;
+        let tx_hash = keccak256(&raw);
+        self.pending_txs.insert(tx_hash, tx.clone());
+        self.mempool.insert(PooledTx {
+            tx,
+            max_priority_fee_per_gas: 1,
+            max_fee_per_gas: u128::MAX,
+            eth_signed_raw: None,
+        });
 
         Ok(ProofCommitmentResponse {
             network: format!("fractalchain-{}", self.chain_id()),
-            transaction_hash: tx_hash,
+            transaction_hash: format!("0x{}", hex::encode(tx_hash)),
             block_number,
             finalized: true,
         })

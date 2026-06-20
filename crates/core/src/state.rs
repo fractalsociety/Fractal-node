@@ -60,6 +60,8 @@ pub struct State {
     pub evm_tx_success: BTreeMap<fractal_crypto::Hash256, bool>,
     /// W6-d: first signer to anchor a wallet `TaskReceipt` commitment (`docs/wallet.md` §9.2).
     pub wallet_task_receipt_anchors: BTreeMap<fractal_crypto::Hash256, Address>,
+    /// Fractal Society research proof/package commitments anchored as native transactions.
+    pub proof_commitments: BTreeMap<fractal_crypto::Hash256, Address>,
     /// Monotonic versions for owned objects whose version is not already the account nonce.
     pub owned_object_versions: BTreeMap<OwnedObjectId, u64>,
     pub chain_economics: ChainEconomicsParams,
@@ -86,6 +88,7 @@ impl Default for State {
             evm_tx_logs: BTreeMap::new(),
             evm_tx_success: BTreeMap::new(),
             wallet_task_receipt_anchors: BTreeMap::new(),
+            proof_commitments: BTreeMap::new(),
             owned_object_versions: BTreeMap::new(),
             chain_economics: ChainEconomicsParams::default(),
         }
@@ -628,6 +631,16 @@ impl State {
                     return Err(ExecError::DuplicateWalletAnchor);
                 }
                 self.wallet_task_receipt_anchors.insert(*commitment, signer);
+                if bump_nonce {
+                    self.bump_nonce(signer)?;
+                }
+                Ok(())
+            }
+            NativeCall::ProofCommitmentV1 { proof_hash } => {
+                if self.proof_commitments.contains_key(proof_hash) {
+                    return Err(ExecError::DuplicateProofCommitment);
+                }
+                self.proof_commitments.insert(*proof_hash, signer);
                 if bump_nonce {
                     self.bump_nonce(signer)?;
                 }

@@ -1512,6 +1512,9 @@ fn rpc_owned_object_id(object_id: &OwnedObjectId) -> String {
         OwnedObjectId::WalletTaskReceipt(commitment) => {
             format!("walletTaskReceipt:{}", hash_hex(commitment))
         }
+        OwnedObjectId::ProofCommitment(proof_hash) => {
+            format!("proofCommitment:{}", hash_hex(proof_hash))
+        }
     }
 }
 
@@ -1587,9 +1590,12 @@ fn rpc_tx_from_core(
             "0x".into(),
             quantity_hex_u64(fractal_core::TRANSFER_GAS),
         ),
-        fractal_core::TxBody::Native(_c) => {
-            (None, u256_quantity_hex(0), "0x".into(), quantity_hex_u64(0))
-        }
+        fractal_core::TxBody::Native(c) => (
+            None,
+            u256_quantity_hex(0),
+            format!("0x{}", hex::encode(borsh::to_vec(c).unwrap_or_default())),
+            quantity_hex_u64(fractal_core::intrinsic_gas(tx).unwrap_or(0)),
+        ),
         fractal_core::TxBody::EvmCall {
             to,
             value,
