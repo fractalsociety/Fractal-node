@@ -16,6 +16,9 @@ use chrono::{DateTime, Utc};
 
 use crate::adapters::trading::{build_scorecard, TradingAdapter, TradingConfig};
 use crate::kernel::{self, KernelConfig, RunOutcome};
+use crate::persistence::artifact_store::ArtifactStore;
+use crate::persistence::event_log::EventLog;
+use crate::pkgs::chain_commitment::CommitmentAdapter;
 use crate::pkgs::pipeline_contract::PipelineOutcome;
 use crate::pkgs::proof_manifest;
 use crate::pkgs::reward_gate;
@@ -66,6 +69,39 @@ pub async fn run_pipeline(
     signer: &AuthorSigner,
     timestamp: DateTime<Utc>,
 ) -> crate::Result<PipelineResult> {
+    run_pipeline_with_commitment(
+        adapter,
+        agent,
+        seed,
+        kernel_config,
+        trading_config,
+        baselines,
+        verifiers,
+        signer,
+        timestamp,
+        None,
+    )
+    .await
+}
+
+/// Run the full research pipeline and optionally commit the proof hash on-chain.
+///
+/// When `commitment_adapter` is supplied, the pipeline submits the pre-chain
+/// proof hash, attaches the returned chain reference, re-signs the proof
+/// manifest, and builds the final bundle from that signed manifest.
+#[allow(clippy::too_many_arguments)] // orchestrator entry point; inputs are genuinely independent
+pub async fn run_pipeline_with_commitment(
+    adapter: TradingAdapter,
+    agent: impl Agent<TradingAdapter>,
+    seed: u64,
+    kernel_config: KernelConfig,
+    trading_config: TradingConfig,
+    baselines: Vec<(String, RunOutcome)>,
+    verifiers: Vec<VerifierFn>,
+    signer: &AuthorSigner,
+    timestamp: DateTime<Utc>,
+    commitment_adapter: Option<&dyn CommitmentAdapter>,
+) -> crate::Result<PipelineResult> {
     // 1. Run the candidate through the generic kernel.
     let run = kernel::run(adapter, agent, seed, &kernel_config).await?;
 
@@ -85,7 +121,12 @@ pub async fn run_pipeline(
     );
 
     // 5. Build and sign the proof manifest.
-    let proof_manifest = proof_manifest::build(&run, &scorecard, signer, timestamp)?;
+    let mut proof_manifest = proof_manifest::build(&run, &scorecard, signer, timestamp)?;
+    if let Some(adapter) = commitment_adapter {
+        let proof_hash = Hash::of(&proof_manifest)?;
+        proof_manifest.chain_reference = Some(adapter.submit(&proof_hash)?);
+        proof_manifest.author_signature = proof_manifest.author_signature_hex(signer)?;
+    }
 
     // 6. Assemble the pipeline outcome + portable bundle.
     let scorecard_hash = Hash::of(&scorecard)?;
@@ -177,4 +218,35 @@ pub async fn run_pipeline_default(
         timestamp,
     )
     .await
+}
+
+/// Run the full research pipeline and persist its durable artifacts.
+#[allow(clippy::too_many_arguments)] // persisted orchestrator entry point
+pub async fn run_pipeline_persisted(
+    adapter: TradingAdapter,
+    agent: impl Agent<TradingAdapter>,
+    seed: u64,
+    kernel_config: KernelConfig,
+    trading_config: TradingConfig,
+    baselines: Vec<(String, RunOutcome)>,
+    verifiers: Vec<VerifierFn>,
+    signer: &AuthorSigner,
+    timestamp: DateTime<Utc>,
+    artifact_store: &mut dyn ArtifactStore,
+    event_log: &mut dyn EventLog,
+) -> crate::Result<PipelineResult> {
+    let result = run_pipeline(
+        adapter,
+        agent,
+        seed,
+        kernel_config,
+        trading_config,
+        baselines,
+        verifiers,
+        signer,
+        timestamp,
+    )
+    .await?;
+    crate::persistence::persist_pipeline_result(&result, artifact_store, event_log)?;
+    Ok(result)
 }

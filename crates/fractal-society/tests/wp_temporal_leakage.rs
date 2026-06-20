@@ -1,6 +1,6 @@
 use fractal_society::adapters::{ReferenceAdapter, ReferenceAgent};
-use fractal_society::kernel::{KernelConfig, run};
-use fractal_society::pkgs::temporal_leakage::{VERIFIER_ID, verify};
+use fractal_society::kernel::{run, KernelConfig};
+use fractal_society::pkgs::temporal_leakage::{verify, VERIFIER_ID};
 use fractal_society::protocol::EvidenceBundle;
 
 async fn clean_evidence() -> EvidenceBundle {
@@ -49,12 +49,10 @@ async fn fails_for_duplicate_step() {
     let report = verify(&evidence);
 
     assert!(!report.passed);
-    assert!(
-        report
-            .errors
-            .iter()
-            .any(|error| error.contains("non-monotonic"))
-    );
+    assert!(report
+        .errors
+        .iter()
+        .any(|error| error.contains("non-monotonic")));
 }
 
 #[tokio::test]

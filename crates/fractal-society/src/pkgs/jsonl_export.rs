@@ -1,7 +1,13 @@
-//! Work-package stub (architect-owned). **Package 59 — jsonl_export.**
+//! JSONL export package.
 //!
 //! Serialize a slice of serializable records to newline-delimited JSON (JSONL)
 //! bytes for export/bulk ingest.
-//!
-//! See `crates/fractal-society/WORK_PACKAGES.md` (fifth batch). Replace this
-//! stub. Edit ONLY this file and `tests/wp_jsonl_export.rs`.
+
+/// Serialize records to newline-delimited JSON.
+pub fn to_jsonl<T: serde::Serialize>(records: &[T]) -> crate::Result<String> {
+    let mut lines = Vec::with_capacity(records.len());
+    for record in records {
+        lines.push(serde_json::to_string(record)?);
+    }
+    Ok(lines.join("\n"))
+}

@@ -1,4 +1,4 @@
-use fractal_society::pkgs::review_conflicts::{ConflictOutcome, ReviewRequest, check};
+use fractal_society::pkgs::review_conflicts::{check, ConflictOutcome, ReviewRequest};
 
 fn request(reviewer: &str, author: &str, interests: Vec<&str>) -> ReviewRequest {
     ReviewRequest {
