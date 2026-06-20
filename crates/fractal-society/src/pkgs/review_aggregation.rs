@@ -1,7 +1,39 @@
-//! Work-package stub (architect-owned). **Package 44 — review_aggregation.**
+//! Review-aggregation package.
 //!
-//! Aggregate multiple `Review` records into a consensus decision (e.g. majority
-//! Approve) with quorum rules.
-//!
-//! See `crates/fractal-society/WORK_PACKAGES.md` (fourth batch). Replace this
-//! stub. Edit ONLY this file and `tests/wp_review_aggregation.rs`.
+//! Aggregates review records into a quorum-gated consensus decision.
+
+use crate::verifier::{Review, ReviewDecision};
+
+/// Consensus decision from a review set.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Consensus {
+    /// Approvals are a strict majority of non-abstaining reject votes.
+    Approved,
+    /// Rejections tie or outnumber approvals once quorum is met.
+    Rejected,
+    /// Not enough review records to meet quorum.
+    NoQuorum,
+}
+
+/// Aggregate reviews with a quorum; ties resolve to rejected.
+pub fn aggregate(reviews: &[Review], quorum: usize) -> Consensus {
+    if reviews.len() < quorum {
+        return Consensus::NoQuorum;
+    }
+
+    let mut approvals = 0usize;
+    let mut rejections = 0usize;
+    for review in reviews {
+        match review.decision {
+            ReviewDecision::Approve => approvals += 1,
+            ReviewDecision::RequestChanges | ReviewDecision::Reject => rejections += 1,
+            ReviewDecision::Abstain => {}
+        }
+    }
+
+    if approvals > rejections {
+        Consensus::Approved
+    } else {
+        Consensus::Rejected
+    }
+}
