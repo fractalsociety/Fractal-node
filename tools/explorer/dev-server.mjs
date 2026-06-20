@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url';
 
 const root = fileURLToPath(new URL('.', import.meta.url));
 const port = Number(process.env.EXPLORER_PORT || 3333);
+const host = process.env.EXPLORER_HOST || '127.0.0.1';
 const rpcUrl = process.env.EXPLORER_RPC_URL || 'http://127.0.0.1:8545';
 
 const types = {
@@ -83,7 +84,7 @@ createServer((req, res) => {
     'content-type': types[extname(filePath)] || 'application/octet-stream',
   });
   createReadStream(filePath).pipe(res);
-}).listen(port, '127.0.0.1', () => {
-  console.log(`FractalChain explorer: http://127.0.0.1:${port}/`);
+}).listen(port, host, () => {
+  console.log(`FractalChain explorer: http://${host}:${port}/`);
   console.log('RPC proxy: /rpc -> configured upstream');
 });

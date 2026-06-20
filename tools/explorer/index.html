@@ -729,8 +729,9 @@
       }
 
       .hero {
-        min-height: 720px;
-        padding-top: 112px;
+        min-height: auto;
+        padding-top: 104px;
+        padding-bottom: 38px;
       }
 
       .hero-art {
@@ -745,11 +746,32 @@
         border-radius: 18px;
       }
 
-      .hero-stats,
       .dashboard-grid,
       .lookup-grid,
       .explainer-grid {
         grid-template-columns: 1fr;
+      }
+
+      .hero-stats {
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 8px;
+        margin-top: 14px;
+      }
+
+      .stat-card {
+        min-height: 76px;
+        padding: 10px;
+      }
+
+      .stat-card span {
+        font-size: 9px;
+        line-height: 1.15;
+      }
+
+      .stat-card strong {
+        margin-top: 8px;
+        font-size: 16px;
+        overflow-wrap: anywhere;
       }
 
       .section-header {
@@ -779,7 +801,12 @@
       }
 
       h1 {
-        font-size: clamp(48px, 15vw, 66px);
+        font-size: clamp(42px, 13vw, 58px);
+      }
+
+      .hero-copy {
+        margin-bottom: 18px;
+        font-size: 16px;
       }
 
       .panel {

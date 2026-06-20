@@ -14,7 +14,7 @@ Deploy the contents of this folder as a static site:
 - `app.js`
 - `assets/fractal-explorer-hero.png`
 
-The page defaults to a same-origin `/rpc` route so deployments can keep the upstream RPC target in infrastructure config instead of the static repo. Public deployments can pass a different RPC endpoint with:
+The page defaults to the built-in FractalChain RPC endpoint in `app.js` (`http://192.3.47.245:8545`), so public/mobile visitors do not need a query parameter or same-origin proxy. Public deployments can still pass a different RPC endpoint with:
 
 ```text
 https://blockexplorer.fractalsociety.org/?rpc=https://YOUR_RPC_HOST
@@ -35,9 +35,18 @@ cd tools/explorer
 python3 -m http.server 3333
 ```
 
-Open **`http://127.0.0.1:3333/?rpc=http://127.0.0.1:8545`** when testing against a local node. Without the `rpc` query parameter, the explorer uses the same-origin **`/rpc`** route expected in production.
+Open **`http://127.0.0.1:3333/?rpc=http://127.0.0.1:8545`** when testing against a local node. Without the `rpc` query parameter, the explorer uses the built-in public RPC endpoint from `app.js`.
 
 Override port: **`EXPLORER_PORT=4000 ./scripts/serve-explorer.sh`**
+
+For testing from a phone on the same network, bind the dev server to all interfaces and open the
+computer's LAN IP on the phone:
+
+```bash
+EXPLORER_HOST=0.0.0.0 ./scripts/serve-explorer.sh
+```
+
+Use `http://YOUR_COMPUTER_LAN_IP:3333/?rpc=http://YOUR_COMPUTER_LAN_IP:8545` if your node is also bound on the LAN, or omit `?rpc=` to test the built-in public RPC endpoint.
 
 ## What it shows
 
