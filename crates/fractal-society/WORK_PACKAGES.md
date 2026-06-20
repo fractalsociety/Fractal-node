@@ -1823,3 +1823,138 @@ Checks: `Hash::of(scorecard) == bundle.scorecard_hash == manifest.scorecard_hash
 - **67 + 68 = Bar B: the research pipeline works end-to-end on synthetic data.**
 - 69–72 add defaults, a runnable demo, trustless offline verification, and replay determinism — the credibility/usability layer before the cross-repo TS port (Bar C).
 - After this track, the remaining work to a *product* is cross-repo (fractalwork TS schema port), infrastructure (persistence, live data recorder P03), and the arena launch — none of which is more Rust packages.
+
+---
+
+# Cross-repo / infrastructure track — Packages 73–84
+
+> These are **NOT** the zero-overlap parallel `pkgs/` leaves, and not the pure-Rust
+> serial track. They are the work that turns the working synthetic pipeline into a
+> real system: **real data, a TS app that consumes it, persistence, and live chain
+> commitment.** Read the flags per task:
+> - **Repo:** `fractalchain` (Rust) or `fractalwork` (TS).
+> - **Live/CI:** most are deterministic/CI-testable; the genuinely-live pieces
+>   (75, 82/83) are **feature-gated** and **cannot be fully CI-tested** — they
+>   need real infra/credentials and are verified manually + with mocks.
+> - Dependencies are listed; some tasks are serial within a priority, the four
+>   priorities are largely independent of each other.
+
+## Priority 1 — real market data (PHASE-03 recorder)
+
+### ☐ Package 73 — market_data_schema (Rust, fractalchain)
+**Goal:** A normalized market-data layer: define `MarketRecord`/raw-payload types and a `normalize(...)` that converts a raw exchange payload (Hyperliquid trade + L2 snapshot + funding) into the trading adapter's existing `MarketBar` (populating `stale`, `funding_rate`, ohlcv). The deterministic core of the recorder.
+**Repo/files:** `crates/fractal-society/src/market_data.rs` (+ register in `lib.rs`); `tests/wp_market_data.rs`.
+**Dependencies:** `adapters::trading::MarketBar`.
+**Acceptance:** normalize a fixture raw Hyperliquid payload → correct `MarketBar`s; ohlcv aggregation correct; `bar_validation` (pkg 53) passes on outputs.
+**Live/CI:** fully CI-testable (fixture payloads). **Complexity:** ~2 h.
+
+### ☐ Package 74 — bar_dataset_store (Rust, fractalchain)
+**Goal:** Append-only recording of normalized bars to disk (JSONL or borsh) + a reader yielding `Vec<BarSet>` consumable by `TradingAdapter::with_bars`. Lets the pipeline run on a *recorded* dataset.
+**Repo/files:** `crates/fractal-society/src/market_data/store.rs`; `tests/wp_bar_dataset_store.rs`.
+**Dependencies:** package 73; `adapters::trading::{BarSet, TradingAdapter}`.
+**Acceptance:** write fixture bars → read back → feed `TradingAdapter::with_bars` → `run_pipeline_default` deterministic; round-trip is byte-stable.
+**Live/CI:** CI-testable (temp files). **Complexity:** ~2 h.
+
+### ☐ Package 75 — hyperliquid_source (Rust, fractalchain, FEATURE-GATED, LIVE)
+**Goal:** A `HyperliquidSource` adapter (REST snapshot + WS subscription) that emits raw events into the normalizer (73) → store (74). The genuinely-live piece.
+**Repo/files:** `crates/fractal-society/src/market_data/hyperliquid.rs`; gate behind a new `live-data` cargo feature.
+**Dependencies:** packages 73, 74; a working Hyperliquid client (the optional `hyperliquid` crate or a hand-written WS client — **verify the client lib works before scoping**).
+**Acceptance:** with the feature off, the crate builds and existing tests pass; with a **mock** source, record→normalize→store works; a manual run against live Hyperliquid (founder-supplied endpoint) produces a real dataset. **Not CI-verifiable end-to-end.**
+**Live/CI:** live infra + creds required for real use; CI uses mocks only. **Complexity:** ~4 h + live-integration risk.
+
+## Priority 2 — fractalwork TS schema port (Bar C)
+
+### ☐ Package 76 — ts_schema_port (TS, fractalwork)
+**Goal:** Port the canonical Rust schemas to TypeScript (interfaces + zod/valibot validators) matching Rust field names **exactly**: `ResearchProject`, `Protocol`, `DatasetManifest`, `EnvironmentManifest`, `AgentManifest`, `ExperimentRun`, `EvidenceBundle`, `ProofManifest`, `RunManifest`, `Scorecard`, `Hash`, `Visibility`.
+**Repo/files:** `~/fractalwork/packages/society-schema/` (new package) — `src/index.ts` types + `src/schemas.ts` validators + `package.json`.
+**Dependencies:** none (mirrors `crates/fractal-society/src/protocol.rs`).
+**Acceptance:** `pnpm test` passes; types round-trip a Rust-exported JSON fixture (names/shape match).
+**Live/CI:** CI-testable. **Complexity:** ~3 h.
+
+### ☐ Package 77 — ts_canonical_conformance (TS + Rust golden, fractalwork)
+**Goal:** The cross-language hash lock. A conformance test asserting `hashObjectJcs(obj)` (TS) == `Hash::of(obj)` (Rust) for a golden set of objects.
+**Repo/files:** `~/fractalwork/packages/society-schema/test/canonical.test.ts`; a Rust helper (or `examples/emit_golden_hashes.rs`) that emits `(json, sha256-jcs-hash)` pairs; the TS test imports those pairs and checks `hashObjectJcs` reproduces each hash.
+**Dependencies:** package 76; Rust `canonical::content_hash` + `Hash::of`.
+**Acceptance:** every golden object's TS hash == the Rust-emitted hash, byte-for-byte; a one-field mutation changes the hash.
+**Live/CI:** CI-testable (the lock that catches future drift). **Complexity:** ~2 h.
+
+### ☐ Package 78 — ts_offline_verifier (TS, fractalwork)
+**Goal:** A TS port of `offline_verify.rs` so the TS app can trustlessly verify a Rust-produced proof using `@noble/ed25519` + `hashObjectJcs`.
+**Repo/files:** `~/fractalwork/packages/society-schema/src/offline_verify.ts`; `test/offline_verify.test.ts`.
+**Dependencies:** packages 76, 77; a Rust-produced golden proof (from `examples/run_research` or a test fixture).
+**Acceptance:** `verify(bundle, manifest, scorecard, pubkey)` returns `Valid` for the golden proof; `Invalid` for a tampered scorecard / wrong key — mirroring the Rust tests.
+**Live/CI:** CI-testable. **Complexity:** ~3 h.
+
+## Priority 3 — persistence layer
+
+### ☐ Package 79 — event_log_append (Rust, fractalchain)
+**Goal:** An append-only event-log trait (`append(event)`, `replay()`) + an in-memory and a file-backed implementation. Events = the pipeline's durable writes (run recorded, proof committed, etc.).
+**Repo/files:** `crates/fractal-society/src/persistence/event_log.rs` (+ register); `tests/wp_event_log.rs`.
+**Dependencies:** none (define a local `Event` type or reuse protocol events).
+**Acceptance:** append N events to the file log → reopen → replay yields the same N in order; idempotent append (same event id not duplicated).
+**Live/CI:** CI-testable (temp files). **Complexity:** ~2 h.
+
+### ☐ Package 80 — artifact_store (Rust, fractalchain)
+**Goal:** A content-addressed store trait (`put(hash, bytes)`, `get(hash) -> bytes`, `contains`) + a filesystem impl. Stores serialized evidence/manifests/scorecards.
+**Repo/files:** `crates/fractal-society/src/persistence/artifact_store.rs`; `tests/wp_artifact_store.rs`.
+**Dependencies:** none.
+**Acceptance:** `put(h, b)` then `get(h) == b`; content-addressed (same bytes → same hash key); missing hash → `None`.
+**Live/CI:** CI-testable (temp dir). **Complexity:** ~2 h.
+
+### ☐ Package 81 — pipeline_persistence (Rust, fractalchain, SERIAL)
+**Goal:** Wire the pipeline to persist. After `run_pipeline`, write evidence/manifest/scorecard/bundle to the artifact store (80) and record events (79); add a `load_proof(store, bundle)` that reloads and re-verifies.
+**Repo/files:** extend `src/pipeline.rs` (add `run_pipeline_persisted`) or `src/persistence/mod.rs`; `tests/wp_pipeline_persistence.rs`.
+**Dependencies:** packages 67, 79, 80, 71 (offline_verify).
+**Acceptance:** run → persist → reload → `offline_verify::verify(...)` still `Valid`; reloading a tampered artifact → `Invalid`.
+**Live/CI:** CI-testable. **Complexity:** ~3 h.
+
+## Priority 4 — real chain commitment (PHASE-07 — "posts to a blockchain")
+
+> **Decision needed:** which chain? (a) FractalChain's own RPC, or (b) an EVM
+> chain via the existing `BatchSettlement.sol` (fractalwork). The PRD prefers an
+> established low-cost chain via adapter. 82 and 83 are **alternatives** — pick
+> one; 84 wires the chosen one.
+
+### ☐ Package 82 — chain_adapter_fractalchain (Rust, FEATURE-GATED, LIVE)
+**Goal:** A real `CommitmentAdapter` (the trait from pkg 16) that submits a proof hash to a running **FractalChain** node via jsonrpsee RPC, returning a real `ChainReference`.
+**Repo/files:** `crates/fractal-society/src/chain/fractalchain_adapter.rs`; gate behind `live-chain`; `tests/wp_chain_adapter_mock.rs`.
+**Dependencies:** pkg 16 (`CommitmentAdapter`); `crates/rpc` jsonrpsee client types; a running FractalChain node for real use.
+**Acceptance:** against an **in-process jsonrpsee mock server**, `submit(hash)` returns a `ChainReference` with the node's network/tx/block; signature of submission matches the node's expected call. **Not CI-verifiable against a real node.**
+**Live/CI:** live node required for real use; CI uses a mock RPC. **Complexity:** ~4 h + node-integration risk.
+
+### ☐ Package 83 — chain_adapter_evm (Rust, FEATURE-GATED, LIVE) — alternative to 82
+**Goal:** A real `CommitmentAdapter` that submits the proof hash as a batch root to `BatchSettlement.sol` (already in fractalwork) via an ethers/alloy client on an EVM chain.
+**Repo/files:** `crates/fractal-society/src/chain/evm_adapter.rs`; gate behind `live-chain`; `tests/wp_evm_adapter_mock.rs`.
+**Dependencies:** pkg 16; `BatchSettlement.sol` ABI; an EVM client crate (ethers/alloy — **add to workspace deps**).
+**Acceptance:** against a local **anvil** devnet (or a mock), `submit(hash)` calls `submitBatchRoot` and returns a `ChainReference` with the tx hash + block.
+**Live/CI:** anvil devnet for CI-able smoke; real EVM needs RPC + funded wallet. **Complexity:** ~4 h.
+
+### ☐ Package 84 — pipeline_commitment (Rust, SERIAL)
+**Goal:** Wire the chosen chain adapter into `run_pipeline`: after building the proof manifest, optionally submit its hash and populate `manifest.chain_reference` (today it's `None`). Adapter is `Option<&dyn CommitmentAdapter>` — `None` keeps current (off-chain) behavior.
+**Repo/files:** extend `src/pipeline.rs`; `tests/wp_pipeline_commitment.rs`.
+**Dependencies:** packages 67, (82 **or** 83); 71.
+**Acceptance:** with a mock adapter, `run_pipeline` populates `chain_reference` (non-`None`), the manifest still verifies, and `offline_verify` passes including the chain ref; with `adapter = None`, behavior is unchanged from today.
+**Live/CI:** CI-testable with a mock; a real commit is a manual, founder-authorized step. **Complexity:** ~2 h.
+
+---
+
+## Dependency graph (73–84)
+
+```
+P1 real data:     73 ─▶ 74 ─▶ 75(live)
+P2 TS port:       76 ─▶ 77   ;  76 ─▶ 78
+P3 persistence:   79 ─┐
+                   80 ─┴─▶ 81 ─▶ (uses 71)
+P4 chain:     82 | 83 (alt) ─▶ 84 ─▶ (uses 71)
+```
+
+- The **four priorities are largely independent** — P1, P2, P3, P4 can proceed in parallel (different files/repos).
+- Within each priority, tasks are **ordered** (arrows).
+- **Genuinely serial across everything:** nothing — 81 and 84 both consume the already-built pipeline (67) and offline_verify (71), which exist.
+- **Live-infra / not-CI tasks:** 75 (Hyperliquid), 82/83 (real chain). Everything else is deterministic and CI-testable.
+
+## Honest notes
+- **P4 needs a founder decision** (FractalChain RPC vs EVM) and, per the PRD, on-chain commitment of *real value* is gated; this track only commits a *proof hash* (tamper-evidence), not funds.
+- **P2 (TS port) is the unlock for "a product"** — until schemas are mirrored in fractalwork, no user-facing app can consume these proofs.
+- **P1 (real data) is the unlock for "credible trading proof"** — synthetic S0 bars can't support a public claim better than "preliminary."
+- This track is what stands between "working synthetic pipeline" (Bar B, done) and "a product + real proofs" (Bar C).
