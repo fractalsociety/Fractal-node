@@ -271,15 +271,15 @@ function codeByteLen(hex) {
 }
 
 async function loadSummary(el) {
-  const [chainId, netVer, bnHex, gasPrice, client, signerNonce] = await Promise.all([
-    rpc("eth_chainId"),
-    rpc("net_version"),
-    rpc("eth_blockNumber"),
-    rpc("eth_gasPrice"),
-    rpc("web3_clientVersion"),
+  const bnHex = await rpc("eth_blockNumber");
+  const [chainId, netVer, gasPrice, client, signerNonce] = await Promise.all([
+    rpc("eth_chainId").catch(() => null),
+    rpc("net_version").catch(() => null),
+    rpc("eth_gasPrice").catch(() => null),
+    rpc("web3_clientVersion").catch(() => null),
     rpc("eth_getTransactionCount", [DEV_SIGNER_0, "latest"]).catch(() => null),
   ]);
-  const block = await rpc("eth_getBlockByNumber", [bnHex, false]);
+  const block = await rpc("eth_getBlockByNumber", [bnHex, false]).catch(() => null);
   const finality = finalityStatus(block);
   updateHeroStat("heroHead", hexToBigInt(bnHex).toString());
   updateHeroStat("heroFinality", finalityLabel(finality));
@@ -290,11 +290,11 @@ async function loadSummary(el) {
   };
   if (typeof signerNonce === "string") updateHeroStat("heroTxs", hero.txs);
   const rows = [
-    ["Chain ID", chainId],
-    ["net_version", netVer],
+    ["Chain ID", chainId ?? "—"],
+    ["net_version", netVer ?? "—"],
     ["Head block", `${bnHex} (${hexToBigInt(bnHex).toString()})`],
-    ["Gas price (stub)", gasPrice],
-    ["Client", client],
+    ["Gas price (stub)", gasPrice ?? "—"],
+    ["Client", client ?? "—"],
     ["Head hash", block?.hash || "—"],
     ["Head finality", finalityLabel(finalityStatus(block))],
     ["Head gas used", block?.gasUsed ?? "—"],
@@ -322,13 +322,13 @@ async function loadBlocks(el) {
   const bnHex = await rpc("eth_blockNumber");
   const head = hexToBigInt(bnHex);
   const displayCount = 10;
-  const scanCount = 160n;
+  const scanCount = 36n;
   const low = head + 1n > scanCount ? head - (scanCount - 1n) : 0n;
   const scanTags = [];
   for (let h = head; h >= low; h--) scanTags.push(numToHex(h));
 
   const scanned = [];
-  const batchSize = 6;
+  const batchSize = 3;
   for (let i = 0; i < scanTags.length; i += batchSize) {
     const batchTags = scanTags.slice(i, i + batchSize);
     const batch = await Promise.all(
@@ -536,8 +536,18 @@ async function refresh(options = {}) {
   const blk = document.getElementById("blocks");
   const button = document.getElementById("refresh");
   if (button && !silent) button.disabled = true;
+  const results = await Promise.allSettled([loadSummary(sum), loadBlocks(blk)]);
+  const summaryFailure = results[0].status === "rejected" ? results[0].reason : null;
+  const blocksFailure = results[1].status === "rejected" ? results[1].reason : null;
+  if (blocksFailure && blk && !blk.children.length) {
+    const p = document.createElement("p");
+    p.className = "err";
+    p.textContent = `Recent blocks unavailable: ${String(blocksFailure)}`;
+    blk.innerHTML = "";
+    blk.appendChild(p);
+  }
   try {
-    await Promise.all([loadSummary(sum), loadBlocks(blk)]);
+    if (summaryFailure) throw summaryFailure;
   } catch (e) {
     if (!readCache()) {
       updateHeroStat("heroHead", "Offline");
