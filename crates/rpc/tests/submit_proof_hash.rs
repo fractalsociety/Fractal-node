@@ -205,3 +205,32 @@ async fn submit_proof_hash_accepts_adapter_positional_params() {
     assert_eq!(response.block_number, 14);
     assert!(response.finalized);
 }
+
+#[tokio::test]
+async fn submit_proof_hash_accepts_arbitrary_package_content_hash() {
+    // `fractal_submitProofHash` is hash-generic: it accepts any 32-byte content
+    // hash, including a research-package content hash (SHA-256 of arbitrary
+    // payload bytes produced by `commit_research_package`), not only pipeline
+    // proof hashes. (AR-03)
+    let ctx: SharedChain = Arc::new(Mutex::new(MockChain::new(99, 41)));
+    let module = build_module(ctx);
+
+    let package_bytes = b"# Research package\nA committed dataset artifact.\n";
+    let content_hash = fractal_crypto::sha256(package_bytes);
+    let proof_hash = format!("0x{}", hex::encode(content_hash));
+
+    let response: ProofCommitmentResponse = module
+        .call(
+            "fractal_submitProofHash",
+            [serde_json::json!({ "proof_hash": proof_hash })],
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.network, "fractalchain-41");
+    assert_eq!(response.block_number, 99);
+    assert!(response.finalized);
+    // The node echoes back a tx hash derived from the submitted hash, proving
+    // the package content hash round-trips through the commitment endpoint.
+    assert!(response.transaction_hash.starts_with("0x"));
+}

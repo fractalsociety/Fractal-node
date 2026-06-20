@@ -648,6 +648,13 @@ pub trait ChainInteraction: Send {
     ) -> Result<[u8; 32], String>;
 
     /// Record a research-proof hash commitment. Default: not supported.
+    ///
+    /// The hash is **generic**: `fractal_submitProofHash` accepts *any* 32-byte
+    /// content hash. This covers both pipeline proof hashes (from
+    /// `fractal-society`'s trading/research pipeline) and arbitrary research
+    /// package content hashes committed via the generic commit service (AR-01,
+    /// `commit_research_package`). No new RPC method is required for packages —
+    /// they reuse this endpoint.
     fn submit_proof_hash(
         &mut self,
         _proof_hash: [u8; 32],

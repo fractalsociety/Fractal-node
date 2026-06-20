@@ -385,6 +385,28 @@ pub struct EvidenceBundle {
     pub timestamp: chrono::DateTime<chrono::Utc>,
 }
 
+/// Who originated a recorded entry (AR-08). Distinguishes human-confirmed
+/// decisions from AI-suggested/executed ones, both in decision traces and in
+/// exploration-graph nodes ([`crate::exploration::ExplorationNode`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProvenanceTag {
+    /// A human decision.
+    Human,
+    /// AI-suggested, not yet confirmed by a human.
+    AiSuggested,
+    /// AI-executed autonomously.
+    AiExecuted,
+    /// AI-proposed then revised/confirmed by a human.
+    HumanRevised,
+}
+
+impl Default for ProvenanceTag {
+    fn default() -> Self {
+        Self::Human
+    }
+}
+
 /// Decision trace
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DecisionTrace {
@@ -398,6 +420,9 @@ pub struct DecisionTrace {
     pub risk_decision: RiskDecision,
     /// Outcome
     pub outcome: serde_json::Value,
+    /// Who originated this decision (AR-08). Defaults to [`ProvenanceTag::Human`]
+    /// for human-authored agents.
+    pub provenance: Option<ProvenanceTag>,
     /// Timestamp
     pub timestamp: chrono::DateTime<chrono::Utc>,
 }

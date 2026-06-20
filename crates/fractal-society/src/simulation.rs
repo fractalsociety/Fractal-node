@@ -352,6 +352,7 @@ impl RunTrace {
                 action: s.action,
                 risk_decision: crate::protocol::RiskDecision::Approved,
                 outcome: s.outcome,
+                provenance: Some(crate::protocol::ProvenanceTag::Human),
                 timestamp: s.timestamp,
             });
         }

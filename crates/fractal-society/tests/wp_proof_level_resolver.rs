@@ -21,6 +21,7 @@ fn evidence(trace_count: u64) -> EvidenceBundle {
                 action: serde_json::json!({ "step": step }),
                 risk_decision: RiskDecision::Approved,
                 outcome: serde_json::json!({ "reward": 1.0 }),
+                provenance: None,
                 timestamp: ts(),
             })
             .collect(),

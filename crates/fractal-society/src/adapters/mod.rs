@@ -4,6 +4,7 @@
 //! canonical schema modules. This is what gate P02-N09's architecture boundary
 //! guards: the kernel must not import anything from this module.
 
+pub mod forecasting;
 pub mod reference;
 pub mod trading;
 

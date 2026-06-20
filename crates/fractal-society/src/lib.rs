@@ -21,10 +21,13 @@
 
 pub mod adapters;
 pub mod artifact;
+pub mod artifact_format;
 pub mod canonical;
 #[cfg(feature = "live-chain")]
 pub mod chain;
+pub mod commit_service;
 pub mod error;
+pub mod exploration;
 pub mod kernel;
 pub mod market_data;
 pub mod offline_verify;
@@ -32,6 +35,7 @@ pub mod persistence;
 pub mod pipeline;
 pub mod pkgs;
 pub mod protocol;
+pub mod rigor;
 pub mod signing;
 pub mod simulation;
 pub mod verifier;
@@ -47,6 +51,10 @@ pub mod prelude {
     pub use crate::adapters::{ReferenceAdapter, ReferenceAgent};
     pub use crate::artifact::{ArtifactHash, ArtifactId, ArtifactManifest};
     pub use crate::canonical::content_hash;
+    pub use crate::commit_service::{
+        commit_research_package, retrieve_payload, retrieve_research_package, PackageKind,
+        PackageMetadata, PublishedPackage, RetrievedPackage,
+    };
     pub use crate::error::{Error, Result};
     pub use crate::kernel::{run, KernelConfig, RunManifest};
     pub use crate::protocol::{

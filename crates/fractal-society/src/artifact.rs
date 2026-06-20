@@ -69,6 +69,11 @@ pub enum ArtifactType {
     Review,
     /// Replication
     Replication,
+    /// Generic research package (AR-01): any committed research artifact that
+    /// is not one of the specific categories above (e.g. a science paper, a
+    /// code artifact, a non-trading agent). The precise kind is preserved in the
+    /// manifest's `metadata.kind` as a [`crate::commit_service::PackageKind`].
+    ResearchPackage,
 }
 
 /// Artifact registry entry
