@@ -284,6 +284,8 @@ impl TradingAdapter {
             }
         }
         let marks = marks_for(&bars)?;
+        let funding_rates = funding_rates_for(&bars);
+        self.ledger.apply_funding(&marks, &funding_rates);
         let liquidation_threshold = (self.ledger.initial_equity_micro() as f64
             * self.config.liquidation_equity_fraction)
             .round() as i64;
@@ -412,7 +414,7 @@ impl DomainAdapter for TradingAdapter {
         Ok(ValidationReport {
             is_valid: errors.is_empty(),
             errors,
-            warnings: vec!["funding accrual is deferred in PHASE-04 Slice A".to_string()],
+            warnings: Vec::new(),
         })
     }
 
@@ -657,4 +659,11 @@ fn marks_for(bars: &BarSet) -> Result<HashMap<Asset, i64>> {
     marks.insert(Asset::Btc, bars.btc.close_micro()?);
     marks.insert(Asset::Eth, bars.eth.close_micro()?);
     Ok(marks)
+}
+
+fn funding_rates_for(bars: &BarSet) -> HashMap<Asset, f64> {
+    let mut rates = HashMap::new();
+    rates.insert(Asset::Btc, bars.btc.funding_rate);
+    rates.insert(Asset::Eth, bars.eth.funding_rate);
+    rates
 }

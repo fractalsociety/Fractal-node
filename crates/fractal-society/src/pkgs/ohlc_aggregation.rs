@@ -36,5 +36,6 @@ fn aggregate_group(group: &[MarketBar]) -> MarketBar {
         close: last.close,
         volume: group.iter().map(|bar| bar.volume).sum(),
         stale: first.stale,
+        funding_rate: first.funding_rate,
     }
 }

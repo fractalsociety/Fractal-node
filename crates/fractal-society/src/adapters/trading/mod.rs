@@ -21,7 +21,7 @@ pub mod types;
 
 pub use adapter::{TradingAdapter, TradingAgent, STARTER_TRADING_AGENT_ID, TRADING_ADAPTER_ID};
 pub use baselines::{BuyAndHoldBaseline, CashBaseline, MovingAverageBaseline, RandomBaseline};
-pub use fixtures::{golden_bars, liquidation_bars, outage_bars, synthetic_bars};
+pub use fixtures::{funding_bars, golden_bars, liquidation_bars, outage_bars, synthetic_bars};
 pub use ledger::Ledger;
 pub use scorecard::build_scorecard;
 pub use types::{

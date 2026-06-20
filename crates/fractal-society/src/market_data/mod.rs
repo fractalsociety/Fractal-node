@@ -71,9 +71,8 @@ pub struct BarWindow {
 /// every OHLCV field is set to the snapshot mid (or 0.0 if no snapshot) and
 /// `volume` is 0. The bar's `ts` is the window start.
 ///
-/// Note: `MarketBar` currently has no `funding_rate` field (funding accrual is
-/// not yet wired into the trading adapter). The window's funding rate is exposed
-/// separately via [`funding_rate`] for the future wiring task.
+/// The window funding rate is copied into the returned bar for per-step trading
+/// ledger accrual.
 pub fn normalize_bar(window: &BarWindow) -> Result<MarketBar, NormalizeError> {
     if window.start >= window.end {
         return Err(NormalizeError::InvalidWindow);
@@ -105,6 +104,11 @@ pub fn normalize_bar(window: &BarWindow) -> Result<MarketBar, NormalizeError> {
         close,
         volume,
         stale: window.stale,
+        funding_rate: window
+            .funding
+            .as_ref()
+            .map(|f| f.funding_rate)
+            .unwrap_or(0.0),
     })
 }
 

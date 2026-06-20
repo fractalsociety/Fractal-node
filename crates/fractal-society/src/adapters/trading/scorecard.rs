@@ -132,7 +132,8 @@ pub fn build_scorecard(
         limitations: vec![
             "Simulation results are not live trading results.".to_string(),
             "Tier S0: deterministic synthetic fixtures, not recorded market data.".to_string(),
-            "funding rate accrual is not modeled.".to_string(),
+            "funding is accrued per step at each bar's funding rate (simplified; not time-aware)."
+                .to_string(),
             "Fill model is optimistic (fills at bar close; no slippage or queue position)."
                 .to_string(),
             "Liquidation uses a flat equity floor, not a per-position maintenance-margin model."

@@ -49,6 +49,7 @@ pub fn synthetic_bars(seed: u64, steps: u64) -> Vec<BarSet> {
                 160.0,
                 10.0 + step as f64,
                 false,
+                0.0,
             ),
             eth: make_bar(
                 step,
@@ -58,6 +59,7 @@ pub fn synthetic_bars(seed: u64, steps: u64) -> Vec<BarSet> {
                 28.0,
                 50.0 + step as f64,
                 false,
+                0.0,
             ),
         });
     }
@@ -76,8 +78,8 @@ pub fn liquidation_bars(steps: u64) -> Vec<BarSet> {
         eth -= 50.0;
         out.push(BarSet {
             step,
-            btc: make_bar(step, Asset::Btc, btc_open, btc, 1_000.0, 25.0, false),
-            eth: make_bar(step, Asset::Eth, eth_open, eth, 20.0, 25.0, false),
+            btc: make_bar(step, Asset::Btc, btc_open, btc, 1_000.0, 25.0, false, 0.0),
+            eth: make_bar(step, Asset::Eth, eth_open, eth, 20.0, 25.0, false, 0.0),
         });
     }
     out
@@ -97,6 +99,7 @@ pub fn golden_bars() -> Vec<BarSet> {
                 close: 100.0,
                 volume: 1_000.0,
                 stale: false,
+                funding_rate: 0.0,
             },
             eth: MarketBar {
                 ts: 0,
@@ -107,6 +110,7 @@ pub fn golden_bars() -> Vec<BarSet> {
                 close: 10.0,
                 volume: 1_000.0,
                 stale: false,
+                funding_rate: 0.0,
             },
         },
         BarSet {
@@ -120,6 +124,7 @@ pub fn golden_bars() -> Vec<BarSet> {
                 close: 110.0,
                 volume: 1_000.0,
                 stale: false,
+                funding_rate: 0.0,
             },
             eth: MarketBar {
                 ts: 1,
@@ -130,9 +135,24 @@ pub fn golden_bars() -> Vec<BarSet> {
                 close: 11.0,
                 volume: 1_000.0,
                 stale: false,
+                funding_rate: 0.0,
             },
         },
     ]
+}
+
+/// Deterministic fixture with a known positive BTC funding rate (0.001/step)
+/// and a flat price, for hand-verifiable funding accounting.
+pub fn funding_bars(steps: u64) -> Vec<BarSet> {
+    let mut out = Vec::with_capacity(steps as usize);
+    for step in 0..steps {
+        out.push(BarSet {
+            step,
+            btc: make_bar(step, Asset::Btc, 100.0, 100.0, 0.5, 10.0, false, 0.001),
+            eth: make_bar(step, Asset::Eth, 10.0, 10.0, 0.2, 10.0, false, 0.0),
+        });
+    }
+    out
 }
 
 /// Deterministic fixture where BTC experiences data outages (stale bars) on even
@@ -149,13 +169,14 @@ pub fn outage_bars(steps: u64) -> Vec<BarSet> {
         let btc_stale = step % 2 == 0;
         out.push(BarSet {
             step,
-            btc: make_bar(step, Asset::Btc, btc_open, btc, 1.0, 10.0, btc_stale),
-            eth: make_bar(step, Asset::Eth, eth_open, eth, 0.5, 10.0, false),
+            btc: make_bar(step, Asset::Btc, btc_open, btc, 1.0, 10.0, btc_stale, 0.0),
+            eth: make_bar(step, Asset::Eth, eth_open, eth, 0.5, 10.0, false, 0.0),
         });
     }
     out
 }
 
+#[allow(clippy::too_many_arguments)]
 fn make_bar(
     step: u64,
     asset: Asset,
@@ -164,6 +185,7 @@ fn make_bar(
     spread: f64,
     volume: f64,
     stale: bool,
+    funding_rate: f64,
 ) -> MarketBar {
     MarketBar {
         ts: step as i64,
@@ -174,5 +196,6 @@ fn make_bar(
         close,
         volume,
         stale,
+        funding_rate,
     }
 }

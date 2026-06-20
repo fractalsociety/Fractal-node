@@ -11,6 +11,7 @@ fn bar(ts: i64, open: f64, high: f64, low: f64, close: f64, volume: f64) -> Mark
         close,
         volume,
         stale: ts == 1,
+        funding_rate: 0.0,
     }
 }
 

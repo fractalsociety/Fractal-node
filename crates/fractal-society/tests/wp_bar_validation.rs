@@ -11,6 +11,7 @@ fn bar() -> MarketBar {
         close: 105.0,
         volume: 1_000.0,
         stale: false,
+        funding_rate: 0.0,
     }
 }
 
@@ -26,11 +27,9 @@ fn high_below_close_is_rejected() {
 
     let errors = validate(&malformed).expect_err("high below close should fail");
 
-    assert!(
-        errors
-            .iter()
-            .any(|error| error.contains("max(open, close)"))
-    );
+    assert!(errors
+        .iter()
+        .any(|error| error.contains("max(open, close)")));
 }
 
 #[test]
@@ -40,9 +39,7 @@ fn negative_price_is_rejected() {
 
     let errors = validate(&malformed).expect_err("negative prices should fail");
 
-    assert!(
-        errors
-            .iter()
-            .any(|error| error == "low price must be non-negative")
-    );
+    assert!(errors
+        .iter()
+        .any(|error| error == "low price must be non-negative"));
 }

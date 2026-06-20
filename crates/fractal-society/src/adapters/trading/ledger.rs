@@ -54,6 +54,7 @@ pub struct Ledger {
     cash_micro: i64,
     realized_pnl_micro: i64,
     fees_micro: i64,
+    funding_paid_micro: i64,
     positions: HashMap<Asset, Position>,
 }
 
@@ -66,6 +67,7 @@ impl Ledger {
             cash_micro: initial_equity_micro,
             realized_pnl_micro: 0,
             fees_micro: 0,
+            funding_paid_micro: 0,
             positions: HashMap::new(),
         })
     }
@@ -98,6 +100,16 @@ impl Ledger {
     /// Fees in micro-USDC.
     pub fn fees_micro(&self) -> i64 {
         self.fees_micro
+    }
+
+    /// Total signed funding paid in micro-USDC (positive = net paid).
+    pub fn funding_paid_micro(&self) -> i64 {
+        self.funding_paid_micro
+    }
+
+    /// Total signed funding paid in USDC (positive = net paid).
+    pub fn funding_paid(&self) -> f64 {
+        micro_to_f64(self.funding_paid_micro)
     }
 
     /// Current position for an asset.
@@ -199,6 +211,32 @@ impl Ledger {
             fee: micro_to_f64(fee_micro),
             liquidation: request.liquidation,
         })
+    }
+
+    /// Apply per-step funding at the given marks and funding rates.
+    ///
+    /// Convention: a positive funding rate means longs pay shorts. The signed
+    /// payment is subtracted from cash, folded into realized PnL, and added to
+    /// `funding_paid`. Folding funding into realized PnL keeps the invariant
+    /// `total_pnl == realized_pnl + unrealized_pnl - fees`.
+    pub fn apply_funding(
+        &mut self,
+        marks: &HashMap<Asset, i64>,
+        funding_rates: &HashMap<Asset, f64>,
+    ) {
+        for asset in [Asset::Btc, Asset::Eth] {
+            let pos = self.position(asset);
+            if pos.qty_micro == 0 {
+                continue;
+            }
+            let mark = *marks.get(&asset).unwrap_or(&pos.avg_entry_price_micro);
+            let notional_signed_micro = mul_micro(pos.qty_micro, mark);
+            let rate = funding_rates.get(&asset).copied().unwrap_or(0.0);
+            let payment = (notional_signed_micro as f64 * rate).round() as i64;
+            self.cash_micro -= payment;
+            self.realized_pnl_micro -= payment;
+            self.funding_paid_micro += payment;
+        }
     }
 
     fn update_position(&mut self, asset: Asset, delta_qty: i64, price_micro: i64) -> Result<()> {

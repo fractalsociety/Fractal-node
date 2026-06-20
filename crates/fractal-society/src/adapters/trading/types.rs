@@ -78,6 +78,8 @@ pub struct MarketBar {
     pub volume: f64,
     /// Data-quality flag: true when this bar represents a data outage (stale/gapped).
     pub stale: bool,
+    /// Per-step funding rate (positive = longs pay shorts). 0.0 in most fixtures.
+    pub funding_rate: f64,
 }
 
 impl MarketBar {
