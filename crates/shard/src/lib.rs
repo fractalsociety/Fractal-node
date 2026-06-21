@@ -12,8 +12,9 @@ use fractal_core::{
     forced_inclusion_penalty_wei, sequencer_reward_wei, SequencerRewardParams, SequencerWorkReceipt,
 };
 use fractal_core::{merkle_proof, merkle_root, verify_merkle_proof};
+use fractal_core::{Address, OwnedObjectId, Transaction, TxExecutionScope};
 use fractal_crypto::hash::{keccak256, Hash256};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use thiserror::Error;
 
 /// Logical execution shard (0 .. shard_count-1).
@@ -34,6 +35,15 @@ pub const ENV_SHARD_ID: &str = "FRACTAL_SHARD_ID";
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ShardTopology {
     pub shard_count: u32,
+}
+
+#[derive(BorshSerialize, BorshDeserialize, Clone, Debug, PartialEq, Eq)]
+pub struct RoutingDiagnosticsV1 {
+    pub source_shard: ShardId,
+    pub expected_shard: ShardId,
+    pub shard_count: u32,
+    pub route_key: String,
+    pub accepted: bool,
 }
 
 impl ShardTopology {
@@ -72,6 +82,59 @@ pub enum ShardRoutingError {
     WrongShard { home: ShardId, node: ShardId },
 }
 
+#[derive(BorshSerialize, BorshDeserialize, Clone, Debug, PartialEq, Eq)]
+pub enum ScopeRouteKey {
+    Signer(Address),
+    Agent(u64),
+    Receipt(Hash256),
+    WalletTaskReceipt(Hash256),
+    ProofCommitment(Hash256),
+}
+
+impl ScopeRouteKey {
+    #[must_use]
+    pub fn stable_bytes(&self) -> Vec<u8> {
+        match self {
+            Self::Signer(addr) => addr.to_vec(),
+            Self::Agent(agent_id) => {
+                let mut out = b"agent:".to_vec();
+                out.extend_from_slice(&agent_id.to_be_bytes());
+                out
+            }
+            Self::Receipt(receipt_id) => {
+                let mut out = b"receipt:".to_vec();
+                out.extend_from_slice(receipt_id);
+                out
+            }
+            Self::WalletTaskReceipt(commitment) => {
+                let mut out = b"wallet-task-receipt:".to_vec();
+                out.extend_from_slice(commitment);
+                out
+            }
+            Self::ProofCommitment(proof_hash) => {
+                let mut out = b"proof-commitment:".to_vec();
+                out.extend_from_slice(proof_hash);
+                out
+            }
+        }
+    }
+
+    #[must_use]
+    pub fn display_key(&self) -> String {
+        match self {
+            Self::Signer(addr) => format!("signer:0x{}", hex::encode(addr)),
+            Self::Agent(agent_id) => format!("agent:{agent_id}"),
+            Self::Receipt(receipt_id) => format!("receipt:0x{}", hex::encode(receipt_id)),
+            Self::WalletTaskReceipt(commitment) => {
+                format!("wallet-task-receipt:0x{}", hex::encode(commitment))
+            }
+            Self::ProofCommitment(proof_hash) => {
+                format!("proof-commitment:0x{}", hex::encode(proof_hash))
+            }
+        }
+    }
+}
+
 /// `keccak256(signer)[0..4] mod shard_count` — deterministic home shard for an account.
 #[must_use]
 pub fn home_shard_for_address(signer: &[u8; 20], shard_count: u32) -> ShardId {
@@ -100,6 +163,72 @@ pub fn home_shard_for_signer(signer: &[u8; 20], shard_count: u32) -> ShardId {
     home_shard_for_address(signer, shard_count)
 }
 
+#[must_use]
+pub fn route_key_for_execution_scope(scope: &TxExecutionScope, signer: &Address) -> ScopeRouteKey {
+    match scope {
+        TxExecutionScope::Owned { objects, .. } => route_key_for_owned_objects(objects, signer),
+        TxExecutionScope::Mixed { .. } | TxExecutionScope::Consensus => {
+            ScopeRouteKey::Signer(*signer)
+        }
+    }
+}
+
+#[must_use]
+pub fn route_key_for_transaction(tx: &Transaction) -> ScopeRouteKey {
+    route_key_for_execution_scope(&tx.execution_scope(), &tx.signer)
+}
+
+#[must_use]
+pub fn home_shard_for_route_key(route_key: &ScopeRouteKey, shard_count: u32) -> ShardId {
+    match route_key {
+        ScopeRouteKey::Signer(addr) => home_shard_for_address(addr, shard_count),
+        other => home_shard_for_bytes(&other.stable_bytes(), shard_count),
+    }
+}
+
+#[must_use]
+pub fn home_shard_for_transaction(tx: &Transaction, shard_count: u32) -> ShardId {
+    home_shard_for_route_key(&route_key_for_transaction(tx), shard_count)
+}
+
+#[must_use]
+pub fn signer_route_key(signer: &[u8; 20]) -> String {
+    format!("signer:0x{}", hex::encode(signer))
+}
+
+#[must_use]
+pub fn routing_diagnostics_for_signer(
+    signer: &[u8; 20],
+    node_shard_id: ShardId,
+    topology: &ShardTopology,
+) -> RoutingDiagnosticsV1 {
+    let expected_shard = home_shard_for_signer(signer, topology.shard_count);
+    RoutingDiagnosticsV1 {
+        source_shard: node_shard_id,
+        expected_shard,
+        shard_count: topology.shard_count,
+        route_key: signer_route_key(signer),
+        accepted: accepts_transaction(signer, node_shard_id, topology),
+    }
+}
+
+#[must_use]
+pub fn routing_diagnostics_for_transaction(
+    tx: &Transaction,
+    node_shard_id: ShardId,
+    topology: &ShardTopology,
+) -> RoutingDiagnosticsV1 {
+    let route_key = route_key_for_transaction(tx);
+    let expected_shard = home_shard_for_route_key(&route_key, topology.shard_count);
+    RoutingDiagnosticsV1 {
+        source_shard: node_shard_id,
+        expected_shard,
+        shard_count: topology.shard_count,
+        route_key: route_key.display_key(),
+        accepted: accepts_scoped_transaction(tx, node_shard_id, topology),
+    }
+}
+
 /// Whether this node should accept a tx for its mempool.
 #[must_use]
 pub fn accepts_transaction(
@@ -111,6 +240,19 @@ pub fn accepts_transaction(
         return node_shard_id == DEFAULT_SHARD_ID;
     }
     home_shard_for_signer(signer, topology.shard_count) == node_shard_id
+}
+
+/// Whether this node should accept a tx using its execution-scope route key.
+#[must_use]
+pub fn accepts_scoped_transaction(
+    tx: &Transaction,
+    node_shard_id: ShardId,
+    topology: &ShardTopology,
+) -> bool {
+    if topology.is_monolith() {
+        return node_shard_id == DEFAULT_SHARD_ID;
+    }
+    home_shard_for_transaction(tx, topology.shard_count) == node_shard_id
 }
 
 /// Validate block header shard tag vs this node.
@@ -159,6 +301,73 @@ pub fn check_accepts_transaction(
     })
 }
 
+/// Reject txs routed to another shard using the execution-scope route key.
+pub fn check_accepts_scoped_transaction(
+    tx: &Transaction,
+    node_shard_id: ShardId,
+    topology: &ShardTopology,
+) -> Result<(), ShardRoutingError> {
+    if accepts_scoped_transaction(tx, node_shard_id, topology) {
+        return Ok(());
+    }
+    let home = home_shard_for_transaction(tx, topology.shard_count);
+    Err(ShardRoutingError::WrongShard {
+        home,
+        node: node_shard_id,
+    })
+}
+
+pub fn check_accepts_transaction_with_diagnostics(
+    signer: &[u8; 20],
+    node_shard_id: ShardId,
+    topology: &ShardTopology,
+) -> Result<RoutingDiagnosticsV1, (ShardRoutingError, RoutingDiagnosticsV1)> {
+    let diagnostics = routing_diagnostics_for_signer(signer, node_shard_id, topology);
+    if diagnostics.accepted {
+        Ok(diagnostics)
+    } else {
+        Err((
+            ShardRoutingError::WrongShard {
+                home: diagnostics.expected_shard,
+                node: diagnostics.source_shard,
+            },
+            diagnostics,
+        ))
+    }
+}
+
+fn route_key_for_owned_objects(objects: &[OwnedObjectId], signer: &Address) -> ScopeRouteKey {
+    objects
+        .iter()
+        .find_map(|object| match object {
+            OwnedObjectId::Agent(agent_id) => Some(ScopeRouteKey::Agent(*agent_id)),
+            _ => None,
+        })
+        .or_else(|| {
+            objects.iter().find_map(|object| match object {
+                OwnedObjectId::Receipt(receipt_id) => Some(ScopeRouteKey::Receipt(*receipt_id)),
+                _ => None,
+            })
+        })
+        .or_else(|| {
+            objects.iter().find_map(|object| match object {
+                OwnedObjectId::WalletTaskReceipt(commitment) => {
+                    Some(ScopeRouteKey::WalletTaskReceipt(*commitment))
+                }
+                _ => None,
+            })
+        })
+        .or_else(|| {
+            objects.iter().find_map(|object| match object {
+                OwnedObjectId::ProofCommitment(proof_hash) => {
+                    Some(ScopeRouteKey::ProofCommitment(*proof_hash))
+                }
+                _ => None,
+            })
+        })
+        .unwrap_or(ScopeRouteKey::Signer(*signer))
+}
+
 // --- Masterchain wire types (Track B; not yet executed on-chain) ---
 
 /// Default shard blocks between masterchain anchors (`docs/prd.md` §7.10.2).
@@ -194,6 +403,7 @@ pub struct MasterchainBlockV1 {
     pub zone_proof_commitments: Vec<ZoneProofCommitmentV1>,
     pub global_state_root: Hash256,
     pub global_zk_root: Hash256,
+    pub forced_inclusion_queue_root: Hash256,
     pub cross_shard_messages: Vec<CrossShardMessageV1>,
 }
 
@@ -416,6 +626,17 @@ pub enum ExecutionZoneError {
     ForcedInclusionRootMismatch,
     #[error("cross-zone source message root is not proven")]
     SourceMessageRootMismatch,
+    #[error("cross-zone message inclusion proof is invalid")]
+    InvalidCrossZoneMessageProof,
+    #[error(
+        "cross-zone message destination {message_to_zone} does not match consuming zone {to_zone}"
+    )]
+    CrossZoneMessageDestinationMismatch {
+        message_to_zone: ZoneId,
+        to_zone: ZoneId,
+    },
+    #[error("cross-zone message was already consumed")]
+    CrossZoneMessageAlreadyConsumed,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -423,8 +644,10 @@ pub struct ExecutionZoneRegistryV1 {
     pub masterchain_height: u64,
     pub zones: BTreeMap<ZoneId, ExecutionZoneRecordV1>,
     pub pending_cross_zone_messages: Vec<AsyncCrossZoneMessageV1>,
+    pub consumed_cross_zone_messages: BTreeSet<Hash256>,
     pub pending_forced_inclusions: Vec<ForcedInclusionRequestV1>,
     pub forced_inclusion_events: Vec<ForcedInclusionEventV1>,
+    pub proven_forced_inclusion_request_ids: BTreeSet<Hash256>,
 }
 
 impl ExecutionZoneRegistryV1 {
@@ -459,12 +682,57 @@ impl ExecutionZoneRegistryV1 {
         self.zones.get(&zone_id)
     }
 
+    #[must_use]
+    pub fn unresolved_forced_inclusion_requests_for_zone(
+        &self,
+        zone_id: ZoneId,
+    ) -> Vec<ForcedInclusionRequestV1> {
+        self.forced_inclusion_events
+            .iter()
+            .filter(|event| {
+                event.request.zone_id == zone_id
+                    && !self
+                        .proven_forced_inclusion_request_ids
+                        .contains(&event.request.request_id)
+            })
+            .map(|event| event.request.clone())
+            .collect()
+    }
+
+    #[must_use]
+    pub fn required_forced_inclusion_root_for_zone(&self, zone_id: ZoneId) -> Hash256 {
+        forced_inclusion_queue_root(&self.unresolved_forced_inclusion_requests_for_zone(zone_id))
+    }
+
+    #[must_use]
+    pub fn forced_inclusion_queue_root(&self) -> Hash256 {
+        let mut requests = self.pending_forced_inclusions.clone();
+        requests.extend(
+            self.forced_inclusion_events
+                .iter()
+                .filter(|event| {
+                    !self
+                        .proven_forced_inclusion_request_ids
+                        .contains(&event.request.request_id)
+                })
+                .map(|event| event.request.clone()),
+        );
+        forced_inclusion_queue_root(&requests)
+    }
+
     pub fn submit_proof_final_update(
         &mut self,
         update: ZoneProofFinalUpdateV1,
     ) -> Result<ExecutionZoneRecordV1, ExecutionZoneError> {
         if update.proof_digest == [0u8; 32] {
             return Err(ExecutionZoneError::EmptyZoneProofDigest);
+        }
+        let required_forced_inclusions =
+            self.unresolved_forced_inclusion_requests_for_zone(update.zone_id);
+        if update.required_forced_inclusion_root
+            != forced_inclusion_queue_root(&required_forced_inclusions)
+        {
+            return Err(ExecutionZoneError::ForcedInclusionRootMismatch);
         }
         let zone = self
             .zones
@@ -481,7 +749,12 @@ impl ExecutionZoneRegistryV1 {
         zone.latest_proof_final_height = update.zone_block_height;
         zone.latest_state_root = update.state_root;
         zone.latest_message_root = update.message_root;
-        Ok(zone.clone())
+        let updated = zone.clone();
+        for request in required_forced_inclusions {
+            self.proven_forced_inclusion_request_ids
+                .insert(request.request_id);
+        }
+        Ok(updated)
     }
 
     pub fn submit_verified_proof_final_update(
@@ -507,6 +780,24 @@ impl ExecutionZoneRegistryV1 {
         Ok(())
     }
 
+    pub fn outbound_cross_zone_messages_for(
+        &self,
+        from_zone: ZoneId,
+    ) -> Result<Vec<AsyncCrossZoneMessageV1>, ExecutionZoneError> {
+        if !self.zones.contains_key(&from_zone) {
+            return Err(ExecutionZoneError::UnknownZone(from_zone));
+        }
+        let mut messages = self
+            .pending_cross_zone_messages
+            .iter()
+            .filter(|msg| msg.from_zone == from_zone)
+            .cloned()
+            .collect::<Vec<_>>();
+        messages.sort();
+        messages.dedup();
+        Ok(messages)
+    }
+
     pub fn drain_cross_zone_messages_for(
         &mut self,
         to_zone: ZoneId,
@@ -527,6 +818,46 @@ impl ExecutionZoneRegistryV1 {
         }
         self.pending_cross_zone_messages = pending;
         Ok(delivered)
+    }
+
+    pub fn consume_cross_zone_message(
+        &mut self,
+        to_zone: ZoneId,
+        proof: CrossZoneMessageInclusionProofV1,
+        expected_message_root: Hash256,
+    ) -> Result<AsyncCrossZoneMessageV1, ExecutionZoneError> {
+        if !self.zones.contains_key(&to_zone) {
+            return Err(ExecutionZoneError::UnknownZone(to_zone));
+        }
+        if !self.zones.contains_key(&proof.source_zone) {
+            return Err(ExecutionZoneError::UnknownZone(proof.source_zone));
+        }
+        if proof.message.to_zone != to_zone {
+            return Err(ExecutionZoneError::CrossZoneMessageDestinationMismatch {
+                message_to_zone: proof.message.to_zone,
+                to_zone,
+            });
+        }
+        if !verify_cross_zone_message_inclusion_proof(&proof, expected_message_root) {
+            return Err(ExecutionZoneError::InvalidCrossZoneMessageProof);
+        }
+        let message_id = cross_zone_message_leaf_hash(&proof.message);
+        if !self.consumed_cross_zone_messages.insert(message_id) {
+            return Err(ExecutionZoneError::CrossZoneMessageAlreadyConsumed);
+        }
+        Ok(proof.message)
+    }
+
+    pub fn consume_cross_zone_message_from_latest_source(
+        &mut self,
+        to_zone: ZoneId,
+        proof: CrossZoneMessageInclusionProofV1,
+    ) -> Result<AsyncCrossZoneMessageV1, ExecutionZoneError> {
+        let source = self
+            .zones
+            .get(&proof.source_zone)
+            .ok_or(ExecutionZoneError::UnknownZone(proof.source_zone))?;
+        self.consume_cross_zone_message(to_zone, proof, source.latest_message_root)
     }
 
     pub fn submit_forced_inclusion(
@@ -824,6 +1155,20 @@ pub fn zone_forced_inclusion_root(requests: &[ForcedInclusionRequestV1]) -> Hash
 }
 
 #[must_use]
+pub fn forced_inclusion_queue_root(requests: &[ForcedInclusionRequestV1]) -> Hash256 {
+    let mut ordered = requests.to_vec();
+    ordered.sort_by_key(|request| {
+        (
+            request.zone_id,
+            request.deadline_masterchain_height,
+            request.submitted_at_masterchain_height,
+            request.request_id,
+        )
+    });
+    zone_forced_inclusion_root(&ordered)
+}
+
+#[must_use]
 pub fn forced_inclusion_was_proven(update: &ZoneProofFinalUpdateV1) -> bool {
     update.forced_inclusion_root == update.required_forced_inclusion_root
 }
@@ -1090,6 +1435,7 @@ pub fn masterchain_block_from_anchors(
         zone_proof_commitments: Vec::new(),
         global_state_root,
         global_zk_root,
+        forced_inclusion_queue_root: [0u8; 32],
         cross_shard_messages: Vec::new(),
     }
 }
@@ -1110,6 +1456,7 @@ pub fn masterchain_block_from_anchors_and_zone_proofs(
         zone_proof_commitments,
         global_state_root,
         global_zk_root,
+        forced_inclusion_queue_root: [0u8; 32],
         cross_shard_messages: Vec::new(),
     }
 }
@@ -1136,6 +1483,7 @@ pub fn masterchain_block_from_anchors_and_messages(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use fractal_core::{NativeCall, OnChainTaskReceipt, Transaction, TxBody, VmKind};
 
     fn zone_metadata(timeout_blocks: u64, namespace: [u8; 8]) -> ExecutionZoneMetadataV1 {
         ExecutionZoneMetadataV1 {
@@ -1144,6 +1492,38 @@ mod tests {
             da_namespace: namespace,
             sequencer_policy: 1,
             forced_inclusion_timeout_masterchain_blocks: timeout_blocks,
+        }
+    }
+
+    fn signer(byte: u8) -> Address {
+        [byte; 20]
+    }
+
+    fn tx(signer: Address, body: TxBody) -> Transaction {
+        Transaction {
+            signer,
+            nonce: 0,
+            vm: VmKind::Native,
+            body,
+        }
+    }
+
+    fn receipt(receipt_id: Hash256) -> OnChainTaskReceipt {
+        OnChainTaskReceipt {
+            receipt_id,
+            job_id: [1u8; 32],
+            requester: signer(2),
+            worker: 3,
+            verifier: 4,
+            artifact_root: [5u8; 32],
+            output_hash: [6u8; 32],
+            score: 100,
+            payout_amount: 10,
+            verifier_fee: 1,
+            protocol_fee: 1,
+            final_status: 1,
+            finalized_at: 123,
+            schema_version: 1,
         }
     }
 
@@ -1158,7 +1538,7 @@ mod tests {
             tx_root: [0x44; 32],
             da_namespace: *b"zone0001",
             da_root: [0x55; 32],
-            forced_inclusion_root: [0x66; 32],
+            forced_inclusion_root: [0u8; 32],
             timestamp_ms: 1_000,
             sequencer: [0x77; 20],
         }
@@ -1183,6 +1563,139 @@ mod tests {
         assert!(h0 < 4 && h1 < 4);
         assert_eq!(accepts_transaction(&s0, h0, &topo), true);
         assert_eq!(accepts_transaction(&s0, h1, &topo), h0 == h1);
+    }
+
+    #[test]
+    fn owned_agent_ops_route_by_agent_id() {
+        let tx0 = tx(
+            signer(1),
+            TxBody::Native(NativeCall::UpdateAgent {
+                agent_id: 42,
+                new_metadata_uri: "ipfs://agent".into(),
+                new_pubkey: None,
+            }),
+        );
+        let tx1 = tx(
+            signer(9),
+            TxBody::Native(NativeCall::UpdateAgent {
+                agent_id: 42,
+                new_metadata_uri: "ipfs://agent-v2".into(),
+                new_pubkey: Some([7u8; 32]),
+            }),
+        );
+
+        assert_eq!(route_key_for_transaction(&tx0), ScopeRouteKey::Agent(42));
+        assert_eq!(
+            route_key_for_transaction(&tx0),
+            route_key_for_transaction(&tx1)
+        );
+        assert_eq!(
+            home_shard_for_transaction(&tx0, 16),
+            home_shard_for_transaction(&tx1, 16)
+        );
+        assert_ne!(
+            route_key_for_transaction(&tx0),
+            ScopeRouteKey::Signer(tx0.signer)
+        );
+    }
+
+    #[test]
+    fn owned_receipt_ops_route_by_receipt_id() {
+        let receipt_id = [0x22; 32];
+        let tx0 = tx(
+            signer(1),
+            TxBody::Native(NativeCall::SettleReceipt(receipt(receipt_id))),
+        );
+        let tx1 = tx(
+            signer(8),
+            TxBody::Native(NativeCall::SettleReceipt(receipt(receipt_id))),
+        );
+
+        assert_eq!(
+            route_key_for_transaction(&tx0),
+            ScopeRouteKey::Receipt(receipt_id)
+        );
+        assert_eq!(
+            home_shard_for_transaction(&tx0, 16),
+            home_shard_for_transaction(&tx1, 16)
+        );
+    }
+
+    #[test]
+    fn wallet_anchors_route_by_commitment() {
+        let commitment = [0x33; 32];
+        let tx0 = tx(
+            signer(1),
+            TxBody::Native(NativeCall::WalletTaskReceiptAnchorV1 {
+                commitment,
+                receipt_witness: vec![],
+            }),
+        );
+        let tx1 = tx(
+            signer(4),
+            TxBody::Native(NativeCall::WalletTaskReceiptAnchorV1 {
+                commitment,
+                receipt_witness: vec![1, 2, 3],
+            }),
+        );
+
+        assert_eq!(
+            route_key_for_transaction(&tx0),
+            ScopeRouteKey::WalletTaskReceipt(commitment)
+        );
+        assert_eq!(
+            home_shard_for_transaction(&tx0, 16),
+            home_shard_for_transaction(&tx1, 16)
+        );
+    }
+
+    #[test]
+    fn shared_and_evm_transactions_keep_signer_consensus_route() {
+        let shared = tx(
+            signer(5),
+            TxBody::Native(NativeCall::SuspendAgent {
+                agent_id: 99,
+                reason: "shared".into(),
+            }),
+        );
+        let evm = Transaction {
+            signer: signer(6),
+            nonce: 0,
+            vm: VmKind::Evm,
+            body: TxBody::EvmCall {
+                to: signer(7),
+                value: 0,
+                calldata: vec![],
+                gas_limit: 21_000,
+            },
+        };
+
+        assert_eq!(
+            route_key_for_transaction(&shared),
+            ScopeRouteKey::Signer(shared.signer)
+        );
+        assert_eq!(
+            home_shard_for_transaction(&shared, 16),
+            home_shard_for_signer(&shared.signer, 16)
+        );
+        assert_eq!(
+            route_key_for_transaction(&evm),
+            ScopeRouteKey::Signer(evm.signer)
+        );
+        assert_eq!(
+            home_shard_for_transaction(&evm, 16),
+            home_shard_for_signer(&evm.signer, 16)
+        );
+    }
+
+    #[test]
+    fn route_key_bytes_are_deterministic() {
+        let key = ScopeRouteKey::Receipt([0x44; 32]);
+        assert_eq!(key.stable_bytes(), key.stable_bytes());
+        assert_eq!(
+            home_shard_for_route_key(&key, 32),
+            home_shard_for_route_key(&key, 32)
+        );
     }
 
     #[test]
@@ -1425,6 +1938,73 @@ mod tests {
     }
 
     #[test]
+    fn cross_zone_message_root_payload_round_trip_submit_order_consume() {
+        let mut registry = ExecutionZoneRegistryV1::default();
+        registry
+            .create_zone(201, [0x11; 20], zone_metadata(3, *b"zone0201"))
+            .unwrap();
+        registry
+            .create_zone(202, [0x22; 20], zone_metadata(3, *b"zone0202"))
+            .unwrap();
+
+        let message = AsyncCrossZoneMessageV1 {
+            from_zone: 201,
+            to_zone: 202,
+            nonce: 1,
+            payload_hash: [0xAB; 32],
+            payload: vec![0xAB, 0xCD],
+        };
+        registry.submit_cross_zone_message(message.clone()).unwrap();
+        registry.submit_cross_zone_message(message.clone()).unwrap();
+
+        let outbound = registry.outbound_cross_zone_messages_for(201).unwrap();
+        assert_eq!(outbound, vec![message.clone()]);
+        let message_root = cross_zone_message_root(&outbound);
+        let proof = build_cross_zone_message_inclusion_proof(201, 11, &outbound, 0).unwrap();
+
+        let mut header = zone_header(201, 11);
+        header.message_root = message_root;
+        let update = zone_proof_final_update_from_header(&header, [0x51; 32], [0x55; 20]);
+
+        let base_payload_update = fractal_consensus::ZoneProofUpdateV1 {
+            zone_id: update.zone_id,
+            height: update.zone_block_height,
+            parent_root: [0u8; 32],
+            new_root: update.state_root,
+            tx_root: update.tx_root,
+            da_root: update.da_root,
+            message_root: update.message_root,
+            forced_inclusion_root: update.required_forced_inclusion_root,
+            circuit_version: update.circuit_version,
+            feature_set: update.feature_set,
+            proof_digest: update.proof_digest,
+        };
+        let payload_root =
+            fractal_consensus::BlockPayload::ProofUpdates(vec![base_payload_update.clone()])
+                .payload_root()
+                .unwrap();
+        assert_ne!(payload_root, [0u8; 32]);
+        let mut changed = base_payload_update.clone();
+        changed.message_root = [0xEE; 32];
+        assert_ne!(
+            payload_root,
+            fractal_consensus::BlockPayload::ProofUpdates(vec![changed])
+                .payload_root()
+                .unwrap()
+        );
+
+        registry.submit_proof_final_update(update).unwrap();
+        let consumed = registry
+            .consume_cross_zone_message_from_latest_source(202, proof.clone())
+            .unwrap();
+        assert_eq!(consumed, message);
+        assert_eq!(
+            registry.consume_cross_zone_message_from_latest_source(202, proof),
+            Err(ExecutionZoneError::CrossZoneMessageAlreadyConsumed)
+        );
+    }
+
+    #[test]
     fn zone_proof_final_update_rejects_missing_or_bad_masterchain_commitment() {
         let header = zone_header(100, 8);
         let update = zone_proof_final_update_from_header(&header, [0x44; 32], [0x55; 20]);
@@ -1610,6 +2190,85 @@ mod tests {
     }
 
     #[test]
+    fn forced_inclusion_queue_root_commits_pending_and_due_requests() {
+        let mut registry = ExecutionZoneRegistryV1::default();
+        registry
+            .create_zone(9, [0x11; 20], zone_metadata(2, *b"zone0009"))
+            .unwrap();
+
+        let request = registry
+            .submit_forced_inclusion(9, [0xAA; 20], [0xCC; 32], vec![1, 2, 3])
+            .expect("forced inclusion request");
+        let pending_root = registry.forced_inclusion_queue_root();
+
+        assert_ne!(pending_root, [0u8; 32]);
+        assert_eq!(
+            pending_root,
+            forced_inclusion_queue_root(&[request.clone()])
+        );
+
+        let mut block = masterchain_block_from_anchors(1, Vec::new(), Vec::new(), [0u8; 32]);
+        block.forced_inclusion_queue_root = pending_root;
+        assert_eq!(block.forced_inclusion_queue_root, pending_root);
+
+        registry.advance_masterchain_height(2);
+        assert_eq!(registry.forced_inclusion_queue_root(), pending_root);
+        assert_eq!(
+            registry.required_forced_inclusion_root_for_zone(9),
+            forced_inclusion_queue_root(&[request])
+        );
+    }
+
+    #[test]
+    fn zone_finality_rejects_missing_forced_inclusion_after_timeout() {
+        let mut registry = ExecutionZoneRegistryV1::default();
+        registry
+            .create_zone(9, [0x11; 20], zone_metadata(2, *b"zone0009"))
+            .unwrap();
+        registry
+            .submit_forced_inclusion(9, [0xAA; 20], [0xCC; 32], vec![1, 2, 3])
+            .unwrap();
+        registry.advance_masterchain_height(2);
+
+        let mut header = zone_header(9, 1);
+        header.forced_inclusion_root = [0u8; 32];
+        let update = zone_proof_final_update_from_header(&header, [0x70; 32], [0x55; 20]);
+
+        assert_eq!(
+            registry.submit_proof_final_update(update),
+            Err(ExecutionZoneError::ForcedInclusionRootMismatch)
+        );
+    }
+
+    #[test]
+    fn zone_finality_accepts_satisfied_forced_inclusion_after_timeout() {
+        let mut registry = ExecutionZoneRegistryV1::default();
+        registry
+            .create_zone(9, [0x11; 20], zone_metadata(2, *b"zone0009"))
+            .unwrap();
+        registry
+            .submit_forced_inclusion(9, [0xAA; 20], [0xCC; 32], vec![1, 2, 3])
+            .unwrap();
+        registry.advance_masterchain_height(2);
+
+        let required_root = registry.required_forced_inclusion_root_for_zone(9);
+        let mut header = zone_header(9, 1);
+        header.forced_inclusion_root = required_root;
+        let update = zone_proof_final_update_from_header(&header, [0x71; 32], [0x55; 20]);
+        let updated = registry
+            .submit_proof_final_update(update)
+            .expect("forced inclusion satisfied");
+
+        assert_eq!(updated.latest_proof_final_height, 1);
+        assert!(registry.proven_forced_inclusion_request_ids.len() == 1);
+        assert_eq!(
+            registry.required_forced_inclusion_root_for_zone(9),
+            [0u8; 32]
+        );
+        assert_eq!(registry.forced_inclusion_queue_root(), [0u8; 32]);
+    }
+
+    #[test]
     fn sequencer_epoch_settlement_applies_forced_inclusion_penalties() {
         let mut registry = ExecutionZoneRegistryV1::default();
         registry
@@ -1647,5 +2306,42 @@ mod tests {
         assert_eq!(settlement.net_reward_wei, 300);
         assert_eq!(settlement.unpaid_penalty_wei, 0);
         assert_eq!(settlement.forced_inclusion_count, 1);
+    }
+
+    #[test]
+    fn routing_diagnostics_report_home_shard_and_route_key() {
+        let signer = [0x42u8; 20];
+        let topology = ShardTopology { shard_count: 4 };
+        let expected = home_shard_for_signer(&signer, topology.shard_count);
+        let diagnostics = routing_diagnostics_for_signer(&signer, expected, &topology);
+
+        assert!(diagnostics.accepted);
+        assert_eq!(diagnostics.source_shard, expected);
+        assert_eq!(diagnostics.expected_shard, expected);
+        assert_eq!(diagnostics.shard_count, 4);
+        assert_eq!(
+            diagnostics.route_key,
+            format!("signer:0x{}", hex::encode(signer))
+        );
+        assert_eq!(diagnostics.route_key, signer_route_key(&signer));
+    }
+
+    #[test]
+    fn wrong_shard_diagnostics_include_source_expected_and_route_key() {
+        let signer = [0x24u8; 20];
+        let topology = ShardTopology { shard_count: 3 };
+        let expected = home_shard_for_signer(&signer, topology.shard_count);
+        let wrong = (expected + 1) % topology.shard_count;
+
+        let (_err, diagnostics) =
+            check_accepts_transaction_with_diagnostics(&signer, wrong, &topology).unwrap_err();
+
+        assert!(!diagnostics.accepted);
+        assert_eq!(diagnostics.source_shard, wrong);
+        assert_eq!(diagnostics.expected_shard, expected);
+        assert_eq!(
+            diagnostics.route_key,
+            format!("signer:0x{}", hex::encode(signer))
+        );
     }
 }

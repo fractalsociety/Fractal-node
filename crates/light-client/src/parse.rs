@@ -257,6 +257,12 @@ pub fn parse_light_client_head_json(v: &Value) -> Result<LightClientHeadV1, Ligh
             .ok_or_else(|| LightClientError::Json("globalZkRoot missing".into()))?,
         "globalZkRoot",
     )?;
+    let forced_inclusion_queue_root = v
+        .get("forcedInclusionQueueRoot")
+        .and_then(Value::as_str)
+        .map(|s| parse_hash32(s, "forcedInclusionQueueRoot"))
+        .transpose()?
+        .unwrap_or([0u8; 32]);
     let cross_shard_messages =
         parse_cross_shard_messages(v.get("crossShardMessages").unwrap_or(&Value::Array(vec![])))?;
     let plonky2 = v.get("plonky2").map(parse_plonky2_bundle).transpose()?;
@@ -280,8 +286,10 @@ pub fn parse_light_client_head_json(v: &Value) -> Result<LightClientHeadV1, Ligh
             height,
             shard_anchors,
             validity_proofs,
+            zone_proof_commitments: vec![],
             global_state_root,
             global_zk_root,
+            forced_inclusion_queue_root,
             cross_shard_messages,
         },
         plonky2,

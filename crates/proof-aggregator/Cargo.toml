@@ -9,10 +9,14 @@ description = "Tier-2 Plonky2 recursive SNARK aggregation → globalZkRoot (PRD 
 anyhow = "1"
 borsh.workspace = true
 fractal-crypto = { path = "../crypto" }
-fractal-proof-condenser = { path = "../proof-condenser" }
+fractal-proof-condenser = { path = "../proof-condenser", optional = true }
 fractal-shard = { path = "../shard" }
 plonky2 = { version = "1.1", default-features = true }
 thiserror.workspace = true
+
+[features]
+default = []
+stwo = ["dep:fractal-proof-condenser"]
 
 [dev-dependencies]
 fractal-consensus = { path = "../consensus" }

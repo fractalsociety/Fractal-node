@@ -19,9 +19,17 @@ pub fn verify_stwo_artifact_submission(
     artifact
         .verify(&sub.proof_digest)
         .map_err(|e| AggregatorError::StwoArtifactInvalid(e.to_string()))?;
-    Ok(VerifiedStwoStatementV1::from_checkpoint_job(
+    Ok(VerifiedStwoStatementV1::from_checkpoint_parts(
         sub.shard_id,
-        &artifact.job,
+        artifact.job.chain_id,
+        artifact.job.start_block,
+        artifact.job.end_block,
+        artifact.job.height,
+        artifact.job.header_hash,
+        artifact.job.parent_hash,
+        artifact.job.state_root,
+        artifact.job.tx_root,
+        artifact.job.gas_used,
         sub.proof_digest,
     ))
 }

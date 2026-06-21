@@ -1,0 +1,608 @@
+{
+  "meta": {
+    "title": "Proof-Ingestion Decoupling — Parallel Task Breakdown (Tasks 1–22)",
+    "source_prd": "docs/proof-ingestion-decoupling-prd.md",
+    "repo": "/Users/jamesstar/fractalchain2",
+    "created": "2026-06-21",
+    "scope": "Tasks 1–22 cover the full PRD: A (Block Payload Refactor), B (Proof Pool & Ingestion), C (Replay-Free Apply Path), D (DA Decoupling), E (Owned-Object Certificate Fast Path), F (Scope-Aware Routing), G (Cross-Zone Messages & Forced Inclusion), H (Benchmark Harness).",
+    "wave_summary": {
+      "0_run_now": [1, 3, 4, 7, 9, 11, 12, 13, 14, 16, 17, 20],
+      "1_after_A1": [2, 5, 10, 15, 18, 19],
+      "2_after_A2": [6],
+      "3_after_verify": [8],
+      "4_after_proof_path": [21],
+      "5_final_report": [22]
+    },
+    "critical_path": [1, 2, 6, 8],
+    "how_to_use": "1) Pick a task whose blocked_by are all completed (status=completed). 2) Read its anchor files to understand current code. 3) Implement the build spec, satisfying EVERY acceptance criterion with tests. 4) Set status=completed. 5) If you changed a shared interface (the BlockPayload enum, header fields, apply seam), update the tasks listed in your 'blocks' array. Default mode FRACTAL_BLOCK_PAYLOAD_MODE=legacy MUST keep legacy blocks encoding byte-identically and tx_root deterministic.",
+    "global_invariants": [
+      "Do NOT remove the current full-transaction block path (legacy mode stays).",
+      "Do NOT weaken proof verification into trusted-sequencer assertions (fail closed).",
+      "Unsupported production proof systems MUST fail closed; dev-digest mode only for local benchmarking.",
+      "Legacy block encoding and tx_root must remain byte-for-byte stable."
+    ]
+  },
+  "tasks": [
+    {
+      "id": 1,
+      "prd_ref": "A1",
+      "workstream": "A: Block Payload Refactor",
+      "subject": "Add BlockPayload variants (legacy vs proof-ingestion)",
+      "status": "completed",
+      "wave": 0,
+      "blocked_by": [],
+      "blocks": [2, 5, 10, 15, 18, 19],
+      "anchor": {
+        "block_struct": "crates/consensus/src/lib.rs:235-243",
+        "current_fields": "Block carries transactions: Vec<Transaction>, eth_signed_raw: Vec<Option<Vec<u8>>>, da_sidecar: DaSidecar directly"
+      },
+      "build": "New module crates/consensus/src/payload.rs introducing the shared payload contract (see shared_contract). Wrap the existing block body behind this enum so legacy full-tx blocks encode/decode byte-identically and tx_root stays deterministic. Add a versioned payload-root slot in the block header. Add an RpcBlock payload-type field.",
+      "shared_contract": "pub enum BlockPayload { FullTransactions { transactions: Vec<Transaction>, eth_signed_raw: Vec<Option<Vec<u8>>> }, ProofUpdates(Vec<ZoneProofUpdateV1>), CertificateBatches(Vec<OwnedObjectCertificateBatchV1>), Mixed(Vec<BlockPayloadItem>) } | pub enum BlockPayloadItem { Transaction(Transaction), ProofUpdate(ZoneProofUpdateV1), CertificateBatch(OwnedObjectCertificateBatchV1) }",
+      "acceptance": [
+        "Legacy full-transaction blocks still encode/decode unchanged.",
+        "tx_root deterministic for legacy blocks (regression test vs current).",
+        "New payload variants are committable in the header via a versioned payload root.",
+        "RPC reports the payload type for a block."
+      ],
+      "dependencies": "none — foundational shared interface",
+      "files_likely_touched": [
+        "crates/consensus/src/payload.rs (new)",
+        "crates/consensus/src/lib.rs",
+        "crates/consensus/src/header.rs (payload-root slot)",
+        "crates/rpc (payload-type field)"
+      ]
+    },
+    {
+      "id": 2,
+      "prd_ref": "A2",
+      "workstream": "A: Block Payload Refactor",
+      "subject": "Add proof-update payload root",
+      "status": "completed",
+      "wave": 1,
+      "blocked_by": [1],
+      "blocks": [6],
+      "anchor": {
+        "zone_proof_update": "ZoneProofUpdateV1 already exists in crates/shard"
+      },
+      "build": "Deterministic Merkle/root commitment fn proof_updates_root(updates: &[ZoneProofUpdateV1]) in crates/consensus/src/payload.rs binding, per leaf: zone_id, parent_root, new_root, da_root, message_root, circuit_version, proof_digest. Implement the root fn standalone; wire into BlockPayload::ProofUpdates once A1 lands.",
+      "acceptance": [
+        "Root is stable across nodes (pure function of ordered leaves).",
+        "Root binds zone_id, parent_root, new_root, da_root, message_root, circuit_version, proof_digest.",
+        "Header hash changes if any proof-update field changes (mutation test).",
+        "Unit tests: single, multi, empty, field-tamper cases."
+      ],
+      "dependencies": "A1 (#1) for the enum variant",
+      "files_likely_touched": [
+        "crates/consensus/src/payload.rs"
+      ]
+    },
+    {
+      "id": 3,
+      "prd_ref": "A3",
+      "workstream": "A: Block Payload Refactor",
+      "subject": "Compatibility mode env flag (FRACTAL_BLOCK_PAYLOAD_MODE)",
+      "status": "completed",
+      "wave": 0,
+      "blocked_by": [],
+      "blocks": [],
+      "anchor": {
+        "node_init": "crates/node/src/lib.rs"
+      },
+      "build": "Read env FRACTAL_BLOCK_PAYLOAD_MODE=legacy|proof_ingestion|mixed at node init and gate block-proposal payload selection. Default legacy.",
+      "acceptance": [
+        "legacy matches current behavior exactly.",
+        "proof_ingestion produces proof/certificate payloads when available, else empty.",
+        "mixed can include shared-state transactions plus proof updates.",
+        "Mode is logged at startup and queryable via RPC/health."
+      ],
+      "dependencies": "none — gate added independently; payload producers (B/E) land separately",
+      "files_likely_touched": [
+        "crates/node/src/lib.rs",
+        "crates/consensus (proposal path)"
+      ]
+    },
+    {
+      "id": 4,
+      "prd_ref": "B1",
+      "workstream": "B: Proof Pool & Ingestion",
+      "subject": "Add ProofPool separate from tx mempool",
+      "status": "completed",
+      "wave": 0,
+      "blocked_by": [],
+      "blocks": [5],
+      "anchor": {
+        "tx_mempool": "crates/mempool/src/lib.rs:19-49",
+        "drain": "crates/mempool/src/lib.rs:126-165",
+        "metrics": "MempoolLaneMetrics",
+        "proof_into_mempool_today": "crates/node/src/lib.rs:1584 (ProofCommitmentV1 as PooledTx)"
+      },
+      "build": "New module crates/mempool/src/proof_pool.rs (or small crate): ProofPool storing pending ZoneProofUpdateV1 keyed by (zone_id, height). Conflicting same-key updates rejected or retained as evidence. Own metrics struct ProofPoolMetrics independent of MempoolLaneMetrics.",
+      "acceptance": [
+        "ProofPool stores/evicts updates by (zone_id, height).",
+        "Conflicting same-key updates rejected or retained as slashable evidence (configurable).",
+        "Metrics (pending count, insert rate, conflict count) independent of tx mempool metrics."
+      ],
+      "dependencies": "none — standalone pool + tests",
+      "files_likely_touched": [
+        "crates/mempool/src/proof_pool.rs (new)",
+        "crates/mempool/src/lib.rs"
+      ]
+    },
+    {
+      "id": 5,
+      "prd_ref": "B2",
+      "workstream": "B: Proof Pool & Ingestion",
+      "subject": "Add fractal_submitProofUpdate RPC (direct proof-update path)",
+      "status": "completed",
+      "wave": 1,
+      "blocked_by": [1, 4],
+      "blocks": [],
+      "anchor": {
+        "current_submit": "crates/node/src/lib.rs:1584-1613 (submit_proof_hash wraps ProofCommitmentV1 into mempool PooledTx)",
+        "native_call": "crates/core/src/tx.rs:83 (NativeCall::ProofCommitmentV1)"
+      },
+      "build": "New RPC fractal_submitProofUpdate that pushes a ZoneProofUpdateV1 directly into ProofPool (B1) so it is includable in a proof-ingestion block WITHOUT consuming transaction gas. Keep fractal_submitProofHash as a compatibility wrapper.",
+      "acceptance": [
+        "New fractal_submitProofUpdate RPC method registered.",
+        "fractal_submitProofHash remains as compat wrapper / legacy method.",
+        "Direct proof submission includable in a proof-ingestion block without consuming tx gas.",
+        "Tests for both paths."
+      ],
+      "dependencies": "B1 (#4 ProofPool), A1 (#1 payload variant)",
+      "files_likely_touched": [
+        "crates/node/src/lib.rs",
+        "crates/rpc"
+      ]
+    },
+    {
+      "id": 6,
+      "prd_ref": "B3",
+      "workstream": "B: Proof Pool & Ingestion",
+      "subject": "Verify proof public inputs against block payload",
+      "status": "completed",
+      "wave": 2,
+      "blocked_by": [2],
+      "blocks": [8],
+      "anchor": {},
+      "build": "Verification routine binding a ZoneProofUpdateV1 proof's public inputs to the committed payload root (A2) and DA commitment. Implement the verifier fn standalone; wire once A2 lands.",
+      "acceptance": [
+        "Verification FAILS if parent_state_root, state_root, tx_root, da_root, message_root, or circuit metadata mismatch committed values.",
+        "Unsupported production proof systems FAIL CLOSED.",
+        "Dev-digest proof mode available ONLY for local benchmarking (non-default flag), never on by default.",
+        "Unit tests: each field mismatch rejects; digest-mode rejected unless flag set."
+      ],
+      "dependencies": "A2 (#2 payload root to bind against)",
+      "files_likely_touched": [
+        "crates/consensus or crates/shard (verifier module)"
+      ]
+    },
+    {
+      "id": 7,
+      "prd_ref": "C1",
+      "workstream": "C: Replay-Free Apply Path",
+      "subject": "Split block application into BlockApplyMode verification modes",
+      "status": "completed",
+      "wave": 0,
+      "blocked_by": [],
+      "blocks": [8],
+      "anchor": {
+        "apply_synced_block": "crates/node/src/lib.rs:1018-1062 (reconstructs DA + replays txs)",
+        "execution_entry": "crates/core/src/lib.rs:78-90 (apply_block_with_evm)"
+      },
+      "build": "New enum BlockApplyMode { ReplayFullTransactions, VerifyProofAndDa, HeaderOnlyAfterProofFinal } in a consensus/core module, plus dispatch skeleton in the apply path selecting mode by payload type. Introduce a trait/seam so C2 fills the verify branch. Keep all three paths callable.",
+      "shared_contract": "pub enum BlockApplyMode { ReplayFullTransactions, VerifyProofAndDa, HeaderOnlyAfterProofFinal }",
+      "acceptance": [
+        "Legacy blocks use replay mode (existing behavior).",
+        "Proof-ingestion blocks use VerifyProofAndDa.",
+        "Replay mode remains available for archival/full-verifier nodes.",
+        "Consensus validators can SKIP transaction replay for proof-covered zone updates.",
+        "Mode selection testable in isolation."
+      ],
+      "dependencies": "none — enum + dispatch seam; verify-mode body filled by C2",
+      "files_likely_touched": [
+        "crates/consensus/src/apply.rs (new) or crates/core",
+        "crates/node/src/lib.rs"
+      ]
+    },
+    {
+      "id": 8,
+      "prd_ref": "C2",
+      "workstream": "C: Replay-Free Apply Path",
+      "subject": "Update state roots from verified proof updates",
+      "status": "pending",
+      "wave": 3,
+      "blocked_by": [7, 6],
+      "blocks": [],
+      "anchor": {},
+      "build": "Implement the VerifyProofAndDa branch of BlockApplyMode (C1): for proof-ingestion blocks, state transition comes from accepted proof updates (B3), NOT local tx execution.",
+      "acceptance": [
+        "Zone state root advances ONLY if proof verification (B3) succeeds.",
+        "Global/masterchain root derives deterministically from accepted zone roots.",
+        "Rejected proof updates do NOT mutate state (rollback / no-op).",
+        "Tests: accepted update advances root; rejected update leaves state unchanged; deterministic masterchain derivation."
+      ],
+      "dependencies": "C1 (#7 apply seam), B3 (#6 proof verifier)",
+      "files_likely_touched": [
+        "crates/consensus/src/apply.rs",
+        "crates/core/src/lib.rs"
+      ]
+    },
+    {
+      "id": 9,
+      "prd_ref": "C3",
+      "workstream": "C: Replay-Free Apply Path",
+      "subject": "Add proof-finality indexing (per-zone/update)",
+      "status": "completed",
+      "wave": 0,
+      "blocked_by": [],
+      "blocks": [],
+      "anchor": {
+        "finality_check": "crates/rpc/src/module.rs:575-584 (settlement_finality_for_block_hash)",
+        "finality_rpc": "crates/rpc/src/module.rs:843-897 (fractal_getSettlementBlock)",
+        "proof_submit_finality": "crates/rpc/src/module.rs:835"
+      },
+      "build": "Extend finality tracking from block-level to zone/UPDATE-level proof finality. New RPC e.g. fractal_getProofFinalHeight(zone_id). Persist a small index in storage so it survives restart.",
+      "acceptance": [
+        "RPC exposes soft/proof finality for individual proof updates (per (zone_id, height)).",
+        "RPC can query latest proof-final height per zone.",
+        "Proof-finality survives restart once persistence is enabled.",
+        "No regression to existing block finality RPC."
+      ],
+      "dependencies": "none — extends existing RPC/storage",
+      "files_likely_touched": [
+        "crates/rpc/src/module.rs",
+        "crates/storage"
+      ]
+    },
+    {
+      "id": 10,
+      "prd_ref": "D1",
+      "workstream": "D: DA Decoupling",
+      "subject": "Replace transaction-list DA with zone-blob DA",
+      "status": "completed",
+      "wave": 1,
+      "blocked_by": [1],
+      "blocks": [],
+      "anchor": {
+        "build_da_sidecar": "crates/consensus/src/lib.rs:1861-1863",
+        "builder": "crates/consensus/src/lib.rs:1317-1374",
+        "current_method": "borsh::to_vec(&transactions) then chunk + Reed-Solomon",
+        "da_root": "da_root",
+        "reconstruct": "reconstruct_da_payload"
+      },
+      "build": "Add a zone-blob DA path submitted INDEPENDENTLY of the base-chain tx list (not derived from borsh(transactions)). Header commits namespace, DA root, byte count, share count, sampling params. Proof finality requires DA verification. Legacy tx-list DA still works for legacy blocks. Implement zone-blob encoding/commitment standalone; wire header once A1 lands.",
+      "acceptance": [
+        "Zone blob DA can be submitted independently of base-chain tx list.",
+        "Header commits namespace, da_root, byte count, share count, sampling params.",
+        "Proof finality (C3/B3) requires DA verification of the zone blob.",
+        "Legacy tx-list DA path still works for legacy blocks."
+      ],
+      "dependencies": "A1 (#1 header commitment fields)",
+      "files_likely_touched": [
+        "crates/consensus/src/lib.rs",
+        "crates/consensus/src/payload.rs",
+        "crates/storage or new da module"
+      ]
+    },
+    {
+      "id": 11,
+      "prd_ref": "D2",
+      "workstream": "D: DA Decoupling",
+      "subject": "Add DA sampling receipt / certificate",
+      "status": "completed",
+      "wave": 0,
+      "blocked_by": [],
+      "blocks": [],
+      "anchor": {},
+      "build": "DaSamplingReceipt type + verifier so validators confirm availability WITHOUT reconstructing every payload. Self-contained (operates over commitments/indices).",
+      "acceptance": [
+        "Sampling receipt binds sampled share indexes and the commitments sampled against.",
+        "DA verification can PASS using only the receipt (no full payload reconstruction).",
+        "Full reconstruction remains available for archive/debug nodes.",
+        "Tests: valid receipt verifies; tampered index/commitment rejects; insufficient samples rejects."
+      ],
+      "dependencies": "none — receipt type + verifier self-contained",
+      "files_likely_touched": [
+        "crates/consensus (new sampling module)"
+      ]
+    },
+    {
+      "id": 12,
+      "prd_ref": "D3",
+      "workstream": "D: DA Decoupling",
+      "subject": "Split DA fee accounting from execution gas",
+      "status": "completed",
+      "wave": 0,
+      "blocked_by": [],
+      "blocks": [],
+      "anchor": {},
+      "build": "Split DA fee accounting from EVM/native execution gas. Separate fee/metrics channels. Fee-policy module exposing three cost categories: DA bytes, proof verify, shared-state execution.",
+      "acceptance": [
+        "DA fee metrics reported separately from execution gas metrics.",
+        "Proof updates pay proof-verification cost separately (not execution gas).",
+        "Shared-state transactions continue using execution gas.",
+        "Fee-policy module exposes the three cost categories for the benchmark to read."
+      ],
+      "dependencies": "none — accounting/metrics module, standalone + unit tests",
+      "files_likely_touched": [
+        "new fee-policy module (e.g. crates/core or crates/consensus/src/fees.rs)"
+      ]
+    },
+    {
+      "id": 13,
+      "prd_ref": "E1",
+      "workstream": "E: Owned-Object Certificate Fast Path",
+      "subject": "Add owned-object certificate request + countersign RPC",
+      "status": "completed",
+      "wave": 0,
+      "blocked_by": [],
+      "blocks": [],
+      "anchor": {
+        "cert": "crates/core/src/tx.rs:244-385 (OwnedObjectCertificate)",
+        "countersign": "crates/core/src/tx.rs:286",
+        "aggregate": "crates/core/src/tx.rs:298",
+        "verify": "crates/core/src/tx.rs:314",
+        "conflict_evidence": "crates/core/src/tx.rs:256-266"
+      },
+      "build": "Missing network/RPC path around existing cert types. Client requests owned-object precheck data; validators countersign eligible owned txs; client aggregates 2f+1 signatures into a certificate (uses existing aggregate).",
+      "acceptance": [
+        "User/client can request owned-object precheck data (new RPC).",
+        "Validators countersign eligible owned transactions (network handler).",
+        "Client can aggregate 2f+1 signatures into a certificate.",
+        "Tests cover request -> countersign -> aggregate round trip."
+      ],
+      "dependencies": "none — builds on existing cert crypto; new RPC + network handlers",
+      "files_likely_touched": [
+        "crates/rpc",
+        "crates/network",
+        "crates/node/src/lib.rs"
+      ]
+    },
+    {
+      "id": 14,
+      "prd_ref": "E2",
+      "workstream": "E: Owned-Object Certificate Fast Path",
+      "subject": "Add CertificatePool + direct owned-object finality",
+      "status": "completed",
+      "wave": 0,
+      "blocked_by": [],
+      "blocks": [15],
+      "anchor": {
+        "cert": "crates/core/src/tx.rs:244",
+        "conflict_evidence": "crates/core/src/tx.rs:256-266 (slashable detection already implemented)"
+      },
+      "build": "New CertificatePool that accepts valid certificates and gives them direct (object-local) finality without waiting for global tx ordering. Hook point for block cert-batch roots (root math is E3).",
+      "acceptance": [
+        "CertificatePool accepts valid certificates (verify via existing verify).",
+        "Conflicting object versions rejected and exposed as slashable evidence.",
+        "RPC reports certificate finality for the object.",
+        "Blocks include certificate batch roots for history/proof inputs (hook point)."
+      ],
+      "dependencies": "none — standalone pool + tests using existing cert/evidence types",
+      "files_likely_touched": [
+        "crates/core/src/cert_pool.rs (new) or crates/mempool"
+      ]
+    },
+    {
+      "id": 15,
+      "prd_ref": "E3",
+      "workstream": "E: Owned-Object Certificate Fast Path",
+      "subject": "Add certificate batch payload root",
+      "status": "completed",
+      "wave": 1,
+      "blocked_by": [1, 14],
+      "blocks": [],
+      "anchor": {},
+      "build": "Deterministic batch root for OwnedObjectCertificateBatchV1 (the CertificateBatches payload variant from A1) so certs are committed in proof-ingestion blocks WITHOUT replaying the underlying transactions. Implement root fn standalone; wire once A1/E2 land.",
+      "acceptance": [
+        "Batch root is deterministic (pure function of ordered certificates).",
+        "Batch root binds all certificate hashes AND object versions.",
+        "Conflicting certificates CANNOT appear in one accepted batch (validation rejects; test it).",
+        "Unit tests: empty, single, multi, duplicate-object-version rejection."
+      ],
+      "dependencies": "A1 (#1 CertificateBatches variant), E2 (#14 CertificatePool supplies accepted batches)",
+      "files_likely_touched": [
+        "crates/consensus/src/payload.rs",
+        "crates/core/src/tx.rs"
+      ]
+    },
+    {
+      "id": 16,
+      "prd_ref": "F1",
+      "workstream": "F: Scope-Aware Routing",
+      "subject": "Route by execution scope, not only signer",
+      "status": "completed",
+      "wave": 0,
+      "blocked_by": [],
+      "blocks": [],
+      "anchor": {
+        "home_shard": "crates/shard/src/lib.rs:75-114 (home_shard_for_address, home_shard_for_signer, accepts_transaction)",
+        "gateway": "crates/rpc/src/gateway.rs:105-143 (route_for_method, signer-based)",
+        "scope": "crates/core/src/tx.rs:131 (TxExecutionScope::Owned), 112-119 (OwnedObjectId)"
+      },
+      "build": "Add scope-aware routing alongside existing signer-based home-shard routing. Owned Agent(agent_id) ops route by agent id; Owned Receipt(receipt_id) ops route by receipt id; wallet anchors route by commitment; Shared/EVM txs keep consensus routing. Introduce a deterministic route_key from TxExecutionScope + OwnedObjectId so owned objects land on a home shard independent of the signer address.",
+      "acceptance": [
+        "Owned Agent(agent_id) operations route by agent id.",
+        "Owned Receipt(receipt_id) operations route by receipt id.",
+        "Wallet anchors route by commitment.",
+        "Shared/EVM transactions keep consensus routing.",
+        "Route key deterministic and unit-tested per scope."
+      ],
+      "dependencies": "none - extends existing shard routing; soft link to E1/E2 for the owned-object fast path",
+      "files_likely_touched": [
+        "crates/shard/src/lib.rs",
+        "crates/rpc/src/gateway.rs",
+        "crates/core/src/tx.rs"
+      ]
+    },
+    {
+      "id": 17,
+      "prd_ref": "F2",
+      "workstream": "F: Scope-Aware Routing",
+      "subject": "Add routing diagnostics",
+      "status": "completed",
+      "wave": 0,
+      "blocked_by": [],
+      "blocks": [],
+      "anchor": {
+        "accepts_check": "crates/shard/src/lib.rs:147 (check_accepts_transaction wrong-shard error)",
+        "gateway": "crates/rpc/src/gateway.rs:105-143"
+      },
+      "build": "Expose routing diagnostics: RPC reports computed home shard and route key; mempool rejects wrong-shard submissions with detailed route info; load tests report per-shard imbalance. Build the diagnostics layer on existing signer routing now; add scope-key (F1) reporting once #16 lands.",
+      "acceptance": [
+        "RPC reports computed home shard and route key for a submission.",
+        "Mempool rejects wrong-shard submissions with route details (source shard, expected shard, route key).",
+        "Load tests can report per-shard imbalance.",
+        "No behavior change to acceptance/rejection logic - observability only."
+      ],
+      "dependencies": "none - diagnostics layer; scope-key reporting layers on F1 (#16) when it lands",
+      "files_likely_touched": [
+        "crates/rpc/src/module.rs",
+        "crates/rpc/src/gateway.rs",
+        "crates/shard/src/lib.rs",
+        "tools/load-tps/src/main.rs"
+      ]
+    },
+    {
+      "id": 18,
+      "prd_ref": "G1",
+      "workstream": "G: Cross-Zone Messages & Forced Inclusion",
+      "subject": "Add message root payloads",
+      "status": "completed",
+      "wave": 1,
+      "blocked_by": [1],
+      "blocks": [],
+      "anchor": {
+        "message_type": "crates/shard/src/lib.rs:317-323 (AsyncCrossZoneMessageV1)",
+        "inclusion_proof": "crates/shard/src/lib.rs:326-338 (CrossZoneMessageInclusionProofV1)",
+        "registry": "crates/shard/src/lib.rs:422-428 (ExecutionZoneRegistryV1)",
+        "submit": "crates/shard/src/lib.rs:496 (submit_cross_zone_message)",
+        "drain": "crates/shard/src/lib.rs:510 (drain_cross_zone_messages_for)"
+      },
+      "build": "Make cross-zone interactions asynchronous via message roots. Zone proof update includes an outbound message root (merkle over queued AsyncCrossZoneMessageV1); base chain orders/commits message roots (via the versioned payload root from A1); destination zone consumes messages by CrossZoneMessageInclusionProofV1. Wire the existing message_root field already bound by A2 proof_updates_root.",
+      "acceptance": [
+        "Zone proof update includes outbound message root.",
+        "Base chain orders/commits message roots.",
+        "Destination zone consumes messages by inclusion proof.",
+        "Tests: round-trip submit -> root -> order -> consume."
+      ],
+      "dependencies": "A1 (#1) for base-chain payload commitment; message_root field already bound by A2 (#2)",
+      "files_likely_touched": [
+        "crates/shard/src/lib.rs",
+        "crates/consensus/src/payload.rs"
+      ]
+    },
+    {
+      "id": 19,
+      "prd_ref": "G2",
+      "workstream": "G: Cross-Zone Messages & Forced Inclusion",
+      "subject": "Add forced-inclusion queue root",
+      "status": "completed",
+      "wave": 1,
+      "blocked_by": [1],
+      "blocks": [],
+      "anchor": {
+        "forced_request": "crates/shard/src/lib.rs:341-361 (ForcedInclusionRequestV1, ForcedInclusionEventV1)",
+        "registry": "crates/shard/src/lib.rs:422-428 (ExecutionZoneRegistryV1)",
+        "submit_forced": "crates/shard/src/lib.rs:532 (submit_forced_inclusion, deadline_masterchain_height)"
+      },
+      "build": "Censorship escape hatch. Base chain accepts forced-inclusion requests and commits a forced_inclusion_queue_root (settlement-envelope field via A1). Zone proof MUST include required forced-inclusion items after their deadline_masterchain_height elapses; missing items reject zone proof finality (hook into B3/C3).",
+      "acceptance": [
+        "Base chain accepts forced-inclusion requests.",
+        "Base chain commits forced_inclusion_queue_root.",
+        "Zone proof must include required forced-inclusion items after timeout.",
+        "Missing forced-inclusion items reject zone proof finality.",
+        "Tests: timeout forces inclusion; inclusion satisfied -> finality ok."
+      ],
+      "completion_notes": "Added deterministic forced_inclusion_queue_root commitments to MasterchainBlockV1, registry/ledger queue-root helpers, per-zone due forced-inclusion root enforcement during proof-final updates, and tests for pending/due queue commitments, missing timed-out inclusion rejection, and satisfied inclusion finality. Verified with cargo test -p fractal-shard forced_inclusion --lib, cargo test -p fractal-shard --lib, and cargo check --workspace.",
+      "dependencies": "A1 (#1) for base-chain queue-root commitment; finality-rejection hooks into B3 (#6) / C3 (#9)",
+      "files_likely_touched": [
+        "crates/shard/src/lib.rs",
+        "crates/consensus/src/payload.rs"
+      ]
+    },
+    {
+      "id": 20,
+      "prd_ref": "H1",
+      "workstream": "H: Benchmark Harness",
+      "subject": "Baseline benchmark path (current fractalchain, full tx execution)",
+      "status": "completed",
+      "wave": 0,
+      "blocked_by": [],
+      "blocks": [22],
+      "anchor": {
+        "bench_lib": "crates/benchmarks/src/lib.rs (535-614 cert throughput, 616-659 DA sampling, 661-739 proof latency, 741 mixed SLO)",
+        "protocol_bin": "crates/benchmarks/src/bin/protocol.rs:1-81",
+        "load_tps": "tools/load-tps/src/main.rs:1-269 (chain TPS, submit TPS, block rate, tx/block)",
+        "paced_script": "scripts/load-tps-paced.sh"
+      },
+      "build": "Ensure the benchmark harness runs the BASELINE (current fractalchain, full transaction execution) across all H1 scenarios and emits the required metric set. Scenarios: native NoOp load; owned-object tx load; proof commitment load; mixed EVM/native load; BFT-7 validator lab. Metrics: submitted tx/sec, committed tx/sec, block p50/p95 production latency, CPU & memory, block bytes, DA bytes, validator replay time. Emit a stable JSON summary so H3 can diff against the proof-ingestion run.",
+      "acceptance": [
+        "All five baseline scenarios runnable with a single command.",
+        "Metrics captured: submitted/committed tx/sec, block p50/p95 latency, CPU/mem, block bytes, DA bytes, replay time.",
+        "Emits a JSON summary file for the baseline run.",
+        "BFT-7 validator lab scenario included."
+      ],
+      "completion_notes": "Added a one-command fractal-baseline-bench binary and stable BaselineBenchReport JSON schema covering native NoOp, owned-object tx, proof commitment, mixed EVM/native, and BFT-7 validator lab scenarios. Each scenario records submitted/committed tx/sec, block p50/p95 latency, cpuNanos, peakWorkingSetBytes, block/DA bytes, replay time, and BFT quorum metrics where applicable. Verified with cargo test -p fractal-bench and a JSON output smoke run.",
+      "dependencies": "none - benchmarks the existing baseline path; independent of proof-ingestion work",
+      "files_likely_touched": [
+        "crates/benchmarks/src/lib.rs",
+        "crates/benchmarks/src/bin/protocol.rs",
+        "tools/load-tps/src/main.rs",
+        "scripts/"
+      ]
+    },
+    {
+      "id": 21,
+      "prd_ref": "H2",
+      "workstream": "H: Benchmark Harness",
+      "subject": "Proof-ingestion benchmark path (fractalchain2)",
+      "status": "completed",
+      "wave": 4,
+      "blocked_by": [5, 8, 15],
+      "blocks": [22],
+      "anchor": {
+        "bench_lib": "crates/benchmarks/src/lib.rs (existing cert/DA/proof benchmarks to extend)",
+        "load_tps": "tools/load-tps/src/main.rs"
+      },
+      "build": "Benchmark fractalchain2 with proof-ingestion payloads. Scenarios: accepted proof updates/sec; accepted certificate updates/sec; mixed proof updates + shared-state txs; DA sampling enabled; BFT-7 validator lab. Metrics: accepted proof updates/sec, accepted certificate updates/sec, block p50/p95 production latency, proof verification time, DA sampling time, CPU/mem, payload bytes. Emits a JSON summary in the same shape as H1 for diffing in H3.",
+      "acceptance": [
+        "Proof-ingestion scenarios runnable (proof updates/sec, cert updates/sec, mixed, DA-sampling, BFT-7).",
+        "Metrics captured: accepted proof/cert updates/sec, block p50/p95, proof verify time, DA sampling time, CPU/mem, payload bytes.",
+        "Emits a JSON summary with the same schema as the baseline (H1).",
+        "Comparison shows whether proof ingestion raises throughput/lowers latency without weakening quorum safety."
+      ],
+      "completion_notes": "Added run_proof_ingestion_bench and a one-command fractal-proof-ingestion-bench binary using the same BaselineBenchReport schema as H1. Scenarios cover proof updates/sec, certificate updates/sec, mixed proof updates plus shared-state tx payloads, DA-sampling proof updates, and BFT-7 proof-ingestion quorum formation. Metrics include accepted proof/cert update rates, block p50/p95, proof verify time, DA sampling time, cpuNanos, peakWorkingSetBytes, payload bytes, replay time, and BFT quorum counts. Verified with cargo test -p fractal-bench and a JSON output smoke run.",
+      "dependencies": "B2 (#5 submitProofUpdate), C2 (#8 state roots from proof updates), E3 (#15 cert batch payload) - the proof-ingestion path must exist end-to-end to benchmark it; DA-sampling scenario layers on D2 (#11)",
+      "files_likely_touched": [
+        "crates/benchmarks/src/lib.rs",
+        "crates/benchmarks/src/bin/protocol.rs",
+        "tools/load-tps/src/main.rs",
+        "scripts/"
+      ]
+    },
+    {
+      "id": 22,
+      "prd_ref": "H3",
+      "workstream": "H: Benchmark Harness",
+      "subject": "Comparison report (baseline vs proof-ingestion)",
+      "status": "completed",
+      "wave": 5,
+      "blocked_by": [20, 21],
+      "blocks": [],
+      "anchor": {},
+      "build": "Script that ingests the baseline (H1) and proof-ingestion (H2) JSON summaries and emits a comparison report: per-metric deltas, plus a bottleneck-category classification per scenario (consensus, proof verification, DA sampling, network, or storage). Human-readable output (markdown/HTML) generated from the two JSON files.",
+      "acceptance": [
+        "Script emits/reads JSON summaries for both repos.",
+        "Report includes baseline vs proof-ingestion deltas for every metric.",
+        "Report classifies the dominant bottleneck category per scenario.",
+        "Human-readable report generated from the two JSON files."
+      ],
+      "dependencies": "H1 (#20 baseline summary) and H2 (#21 proof-ingestion summary)",
+      "completion_notes": "Added scripts/compare-proof-ingestion-bench.py. The script reads H1 baseline and H2 proof-ingestion JSON summaries, canonicalizes comparable scenario names, computes per-metric deltas, classifies bottlenecks across consensus/proof verification/DA sampling/network/storage, and emits JSON, Markdown, and HTML reports. Verified with small fractal-baseline-bench and fractal-proof-ingestion-bench runs plus generated comparison JSON/Markdown/HTML.",
+      "files_likely_touched": [
+        "scripts/ (new compare/report script)"
+      ]
+    }
+  ]
+}

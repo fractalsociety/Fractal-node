@@ -9,8 +9,8 @@ use std::sync::Mutex;
 use borsh::{BorshDeserialize, BorshSerialize};
 use fractal_storage::RocksCheckpointProofStore;
 
+use crate::artifact::{CheckpointStwoArtifactV1, CHECKPOINT_STWO_ARTIFACT_VERSION};
 use crate::CheckpointJob;
-use crate::artifact::{CHECKPOINT_STWO_ARTIFACT_VERSION, CheckpointStwoArtifactV1};
 
 pub const PERSISTED_CHECKPOINT_PROOF_VERSION: u8 = 1;
 
@@ -238,7 +238,7 @@ impl ProofArtifactRegistry {
 mod tests {
     use super::*;
     use crate::checkpoint_job_from_block;
-    use fractal_consensus::{Block, BlockHeader, genesis_parent_qc};
+    use fractal_consensus::{genesis_parent_qc, Block, BlockHeader};
 
     fn job_at_height(height: u64) -> CheckpointJob {
         let block = Block {

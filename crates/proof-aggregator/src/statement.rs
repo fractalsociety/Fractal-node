@@ -1,7 +1,6 @@
 //! Canonical statement encoding for tier-2 aggregation (Poseidon preimage).
 
 use fractal_crypto::hash::Hash256;
-use fractal_proof_condenser::CheckpointJob;
 use fractal_shard::ProofSubmissionV1;
 
 /// Max tier-1 submissions hashed in one Plonky2 aggregation step.
@@ -42,18 +41,30 @@ pub struct VerifiedStwoStatementV1 {
 
 impl VerifiedStwoStatementV1 {
     #[must_use]
-    pub fn from_checkpoint_job(shard_id: u32, job: &CheckpointJob, proof_digest: Hash256) -> Self {
+    pub fn from_checkpoint_parts(
+        shard_id: u32,
+        chain_id: u64,
+        start_block: u64,
+        end_block: u64,
+        height: u64,
+        header_hash: Hash256,
+        parent_hash: Hash256,
+        state_root: Hash256,
+        tx_root: Hash256,
+        gas_used: u64,
+        proof_digest: Hash256,
+    ) -> Self {
         Self {
             shard_id,
-            chain_id: job.chain_id,
-            start_block: job.start_block,
-            end_block: job.end_block,
-            height: job.height,
-            header_hash: job.header_hash,
-            parent_hash: job.parent_hash,
-            state_root: job.state_root,
-            tx_root: job.tx_root,
-            gas_used: job.gas_used,
+            chain_id,
+            start_block,
+            end_block,
+            height,
+            header_hash,
+            parent_hash,
+            state_root,
+            tx_root,
+            gas_used,
             proof_digest,
         }
     }

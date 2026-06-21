@@ -1,16 +1,17 @@
 //! Masterchain anchor ledger (PRD §7.10, M10/M11).
 
 use borsh::{BorshDeserialize, BorshSerialize};
-use fractal_crypto::{Hash256, keccak256};
+use fractal_crypto::{keccak256, Hash256};
 use fractal_proof_aggregator::{
-    AggregatorError, GlobalZkStatementV1, Plonky2ProofBundleV1, SubmissionError,
-    VerifiedStwoStatementV1, dedupe_submissions, proof_submission_from_checkpoint_digest,
-    prove_and_aggregate, prove_and_aggregate_verified, validate_proof_submission,
+    dedupe_submissions, proof_submission_from_checkpoint_digest, prove_and_aggregate,
+    prove_and_aggregate_verified, validate_proof_submission, AggregatorError, GlobalZkStatementV1,
+    Plonky2ProofBundleV1, SubmissionError, VerifiedStwoStatementV1,
 };
 use fractal_shard::{
-    CrossShardMessageV1, MasterchainBlockV1, ProofSubmissionV1, ShardAnchor,
-    masterchain_block_from_anchors_and_messages, shard_anchor_from_header,
+    masterchain_block_from_anchors_and_messages, shard_anchor_from_header, CrossShardMessageV1,
+    MasterchainBlockV1, ProofSubmissionV1, ShardAnchor,
 };
+use std::collections::BTreeSet;
 
 pub type ZoneId = u64;
 
@@ -49,6 +50,8 @@ pub struct ZoneProofFinalUpdateV1 {
     pub zone_block_height: u64,
     pub state_root: Hash256,
     pub message_root: Hash256,
+    pub forced_inclusion_root: Hash256,
+    pub required_forced_inclusion_root: Hash256,
     pub proof_digest: Hash256,
     pub prover: [u8; 20],
 }
@@ -286,6 +289,7 @@ pub struct MasterchainLedger {
     pub pending_cross_zone_messages: Vec<AsyncCrossZoneMessageV1>,
     pub pending_forced_inclusions: Vec<ForcedInclusionRequestV1>,
     pub forced_inclusion_events: Vec<ForcedInclusionEventV1>,
+    pub proven_forced_inclusion_request_ids: BTreeSet<Hash256>,
     /// Set when a shard posts a newer anchor; cleared after `seal_round`.
     pub pending_anchor_updates: bool,
 }
@@ -328,6 +332,8 @@ pub enum MasterchainError {
     InvalidForcedInclusionTimeout,
     #[error("forced inclusion request already exists")]
     ForcedInclusionAlreadyExists,
+    #[error("zone proof forced-inclusion root is not proven")]
+    ForcedInclusionRootMismatch,
 }
 
 impl MasterchainLedger {
@@ -518,12 +524,43 @@ impl MasterchainLedger {
         self.execution_zones.get(&zone_id)
     }
 
+    #[must_use]
+    pub fn unresolved_forced_inclusion_requests_for_zone(
+        &self,
+        zone_id: ZoneId,
+    ) -> Vec<ForcedInclusionRequestV1> {
+        self.forced_inclusion_events
+            .iter()
+            .filter(|event| {
+                event.request.zone_id == zone_id
+                    && !self
+                        .proven_forced_inclusion_request_ids
+                        .contains(&event.request.request_id)
+            })
+            .map(|event| event.request.clone())
+            .collect()
+    }
+
+    #[must_use]
+    pub fn required_forced_inclusion_root_for_zone(&self, zone_id: ZoneId) -> Hash256 {
+        forced_inclusion_queue_root(&self.unresolved_forced_inclusion_requests_for_zone(zone_id))
+    }
+
     pub fn submit_zone_proof_final_update(
         &mut self,
         update: ZoneProofFinalUpdateV1,
     ) -> Result<ExecutionZoneRecordV1, MasterchainError> {
         if update.proof_digest == [0u8; 32] {
             return Err(MasterchainError::EmptyZoneProofDigest);
+        }
+        let required_forced_inclusions =
+            self.unresolved_forced_inclusion_requests_for_zone(update.zone_id);
+        let required_forced_inclusion_root =
+            forced_inclusion_queue_root(&required_forced_inclusions);
+        if update.required_forced_inclusion_root != required_forced_inclusion_root
+            || update.forced_inclusion_root != update.required_forced_inclusion_root
+        {
+            return Err(MasterchainError::ForcedInclusionRootMismatch);
         }
         let zone = self
             .execution_zones
@@ -538,8 +575,13 @@ impl MasterchainLedger {
         zone.latest_proof_final_height = update.zone_block_height;
         zone.latest_state_root = update.state_root;
         zone.latest_message_root = update.message_root;
+        let updated = zone.clone();
+        for request in required_forced_inclusions {
+            self.proven_forced_inclusion_request_ids
+                .insert(request.request_id);
+        }
         self.pending_anchor_updates = true;
-        Ok(zone.clone())
+        Ok(updated)
     }
 
     pub fn submit_cross_zone_message(
@@ -590,12 +632,8 @@ impl MasterchainLedger {
             .execution_zones
             .get(&zone_id)
             .ok_or(MasterchainError::UnknownZone(zone_id))?;
-        let request_id = forced_inclusion_request_id(
-            zone_id,
-            &requester,
-            &tx_hash,
-            self.masterchain_height,
-        );
+        let request_id =
+            forced_inclusion_request_id(zone_id, &requester, &tx_hash, self.masterchain_height);
         if self
             .pending_forced_inclusions
             .iter()
@@ -804,13 +842,14 @@ impl MasterchainLedger {
                 };
             (aggregated.global_zk_root, Some(aggregated))
         };
-        let mc = masterchain_block_from_anchors_and_messages(
+        let mut mc = masterchain_block_from_anchors_and_messages(
             self.masterchain_height,
             anchors,
             proofs.clone(),
             global_zk_root,
             cross_shard_messages,
         );
+        mc.forced_inclusion_queue_root = self.forced_inclusion_queue_root();
         self.credit_accepted_proofs(&proofs);
         self.last_plonky2_bundle = aggregated.map(|agg| {
             Plonky2ProofBundleV1::from_aggregated(
@@ -850,6 +889,22 @@ impl MasterchainLedger {
             }
         }
         self.pending_forced_inclusions = pending;
+    }
+
+    #[must_use]
+    pub fn forced_inclusion_queue_root(&self) -> Hash256 {
+        let mut requests = self.pending_forced_inclusions.clone();
+        requests.extend(
+            self.forced_inclusion_events
+                .iter()
+                .filter(|event| {
+                    !self
+                        .proven_forced_inclusion_request_ids
+                        .contains(&event.request.request_id)
+                })
+                .map(|event| event.request.clone()),
+        );
+        forced_inclusion_queue_root(&requests)
     }
 
     /// Shard-embedded path: ingest + seal in one step.
@@ -1095,6 +1150,37 @@ pub fn forced_inclusion_request_id(
 }
 
 #[must_use]
+pub fn forced_inclusion_queue_root(requests: &[ForcedInclusionRequestV1]) -> Hash256 {
+    #[derive(BorshSerialize)]
+    struct ForcedInclusionLeaf<'a> {
+        tag: [u8; 16],
+        request: &'a ForcedInclusionRequestV1,
+    }
+    let mut ordered = requests.to_vec();
+    ordered.sort_by_key(|request| {
+        (
+            request.zone_id,
+            request.deadline_masterchain_height,
+            request.submitted_at_masterchain_height,
+            request.request_id,
+        )
+    });
+    let leaves = ordered
+        .iter()
+        .map(|request| {
+            keccak256(
+                &borsh::to_vec(&ForcedInclusionLeaf {
+                    tag: *b"FRAC_FORCE_LEAF_",
+                    request,
+                })
+                .expect("forced inclusion leaf borsh"),
+            )
+        })
+        .collect::<Vec<_>>();
+    fractal_core::merkle_root(&leaves)
+}
+
+#[must_use]
 pub fn proof_range_len(sub: &ProofSubmissionV1) -> u64 {
     sub.end_block
         .saturating_sub(sub.start_block)
@@ -1118,5 +1204,5 @@ pub fn prover_reward_wei(params: &ProverEconomicsParamsV1, sub: &ProofSubmission
 
 #[must_use]
 pub fn anchor_from_block_header(header: &fractal_consensus::BlockHeader) -> ShardAnchor {
-    shard_anchor_from_header(header.shard_id, header)
+    shard_anchor_from_header(0, header)
 }

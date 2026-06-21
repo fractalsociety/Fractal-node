@@ -35,6 +35,15 @@ fn u256_quantity_hex(v: u128) -> String {
     format!("0x{:x}", v)
 }
 
+fn parse_u128_quantity_or_decimal(s: &str) -> Result<u128, ErrorObjectOwned> {
+    if let Some(hex) = s.strip_prefix("0x") {
+        u128::from_str_radix(hex, 16).map_err(|_| err_invalid_params("invalid u128 quantity"))
+    } else {
+        s.parse::<u128>()
+            .map_err(|_| err_invalid_params("invalid u128 quantity"))
+    }
+}
+
 fn parse_address_hex(s: &str) -> Result<Address, ErrorObjectOwned> {
     let s = s.strip_prefix("0x").unwrap_or(s);
     let bytes = hex::decode(s).map_err(|_| err_invalid_params("invalid address hex"))?;
@@ -59,6 +68,15 @@ pub(crate) fn parse_hash256_hex(s: &str) -> Result<[u8; 32], ErrorObjectOwned> {
 
 fn quantity_hex_u64(v: u64) -> String {
     format!("0x{:x}", v)
+}
+
+fn parse_u64_quantity_or_decimal(s: &str) -> Result<u64, ErrorObjectOwned> {
+    if let Some(hex) = s.strip_prefix("0x") {
+        u64::from_str_radix(hex, 16).map_err(|_| err_invalid_params("invalid u64 quantity"))
+    } else {
+        s.parse::<u64>()
+            .map_err(|_| err_invalid_params("invalid u64 quantity"))
+    }
 }
 
 fn circuit_version_label(version: fractal_consensus::CircuitVersion) -> String {
@@ -187,6 +205,7 @@ struct RpcBlock {
     proof_circuit_version: Option<String>,
     proof_coverage_manifest_digest: Option<String>,
     proof_covered_features: Option<String>,
+    payload_type: String,
     transactions: Vec<String>,
     uncles: Vec<String>,
 }
@@ -274,6 +293,16 @@ pub struct RpcTxScope {
     pub owned_objects: Vec<String>,
 }
 
+#[derive(Clone, Serialize, serde::Deserialize, Debug, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct RpcRoutingDiagnostics {
+    pub source_shard: String,
+    pub expected_shard: String,
+    pub shard_count: String,
+    pub route_key: String,
+    pub accepted: bool,
+}
+
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RpcChainConfig {
@@ -287,6 +316,7 @@ pub struct RpcChainConfig {
     pub forced_inclusion: bool,
     pub prover_rewards: bool,
     pub sequencer_rewards: bool,
+    pub block_payload_mode: String,
     pub settlement_finality: String,
 }
 
@@ -294,6 +324,60 @@ pub struct RpcChainConfig {
 #[serde(rename_all = "camelCase")]
 pub struct RpcProofSubmission {
     pub block_hash: String,
+    pub finality_status: String,
+}
+
+#[derive(Clone, Serialize, serde::Deserialize, Debug, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct RpcOwnedObjectPrecheck {
+    pub tx_hash: String,
+    pub owner: String,
+    pub signer_nonce: String,
+    pub object_versions: Vec<String>,
+    pub object_versions_borsh: String,
+    pub sign_body_borsh: String,
+    pub tx_gas: String,
+    pub max_fee_per_gas: String,
+    pub base_fee_per_gas: String,
+}
+
+#[derive(Clone, Serialize, serde::Deserialize, Debug, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct RpcOwnedObjectCountersignature {
+    pub validator_index: String,
+    pub signature_borsh: String,
+    pub sign_body_borsh: String,
+}
+
+#[derive(Clone, Serialize, serde::Deserialize, Debug, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct RpcOwnedObjectCertificate {
+    pub certificate_hash: String,
+    pub certificate_borsh: String,
+    pub signer_indices: Vec<String>,
+}
+
+#[derive(Clone, Serialize, serde::Deserialize, Debug, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct RpcOwnedObjectFinality {
+    pub object_version_borsh: String,
+    pub finality_status: String,
+    pub certificate_hash: Option<String>,
+    pub certificate_borsh: Option<String>,
+}
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RpcZoneProofFinalHeight {
+    pub zone_id: String,
+    pub proof_final_height: Option<String>,
+}
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RpcZoneUpdateFinality {
+    pub zone_id: String,
+    pub height: String,
     pub finality_status: String,
 }
 
@@ -308,6 +392,17 @@ pub struct ProofCommitmentResponse {
     pub block_number: u64,
     /// Whether the commitment is finalized.
     pub finalized: bool,
+}
+
+/// Response from `fractal_submitProofUpdate`.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RpcProofUpdateSubmission {
+    pub network: String,
+    pub proof_update_hash: String,
+    pub zone_id: String,
+    pub height: String,
+    pub pending_proof_updates: String,
 }
 
 #[derive(Clone, Serialize)]
@@ -551,6 +646,16 @@ pub trait ChainInteraction: Send {
     /// Hex is `0x` + raw **borsh** `Transaction` bytes (dev stub until RLP exists).
     fn submit_raw_tx(&mut self, raw: &[u8]) -> Result<(), String>;
 
+    fn routing_diagnostics_for_raw_tx(&self, raw: &[u8]) -> Result<RpcRoutingDiagnostics, String> {
+        let tx = fractal_core::Transaction::try_from_slice(raw)
+            .map_err(|e| format!("invalid Transaction borsh: {e}"))?;
+        Ok(rpc_routing_diagnostics_for_transaction(
+            &tx,
+            self.shard_id(),
+            self.shard_count(),
+        ))
+    }
+
     fn base_fee_per_gas(&self) -> u128;
 
     fn block_hash_by_number(&self, number: u64) -> Option<[u8; 32]>;
@@ -562,6 +667,22 @@ pub trait ChainInteraction: Send {
     }
 
     fn proof_for_block(&self, _hash: &[u8; 32]) -> Option<fractal_consensus::BlockValidityProof> {
+        None
+    }
+
+    fn latest_proof_final_height_for_zone(&self, _zone_id: u64) -> Option<u64> {
+        None
+    }
+
+    fn zone_update_finality(&self, _zone_id: u64, _height: u64) -> Option<String> {
+        None
+    }
+
+    fn owned_object_finality(
+        &self,
+        object_version: &fractal_core::OwnedObjectVersion,
+    ) -> Option<(String, String)> {
+        let _ = object_version;
         None
     }
 
@@ -647,6 +768,31 @@ pub trait ChainInteraction: Send {
         proof: fractal_consensus::BlockValidityProof,
     ) -> Result<[u8; 32], String>;
 
+    fn owned_object_precheck(
+        &self,
+        _raw_tx: &[u8],
+        _max_fee_per_gas: u128,
+    ) -> Result<RpcOwnedObjectPrecheck, String> {
+        Err("owned-object precheck unsupported".into())
+    }
+
+    fn countersign_owned_object_tx(
+        &self,
+        _raw_tx: &[u8],
+        _max_fee_per_gas: u128,
+    ) -> Result<RpcOwnedObjectCountersignature, String> {
+        Err("owned-object countersign unsupported".into())
+    }
+
+    fn aggregate_owned_object_certificate(
+        &self,
+        _raw_tx: &[u8],
+        _object_versions_borsh: &[u8],
+        _signatures_borsh: Vec<Vec<u8>>,
+    ) -> Result<RpcOwnedObjectCertificate, String> {
+        Err("owned-object certificate aggregation unsupported".into())
+    }
+
     /// Record a research-proof hash commitment. Default: not supported.
     ///
     /// The hash is **generic**: `fractal_submitProofHash` accepts *any* 32-byte
@@ -660,6 +806,14 @@ pub trait ChainInteraction: Send {
         _proof_hash: [u8; 32],
     ) -> Result<ProofCommitmentResponse, String> {
         Err("fractal_submitProofHash not supported on this node".to_string())
+    }
+
+    fn submit_proof_update(
+        &mut self,
+        _update: fractal_consensus::ZoneProofUpdateV1,
+        _max_priority_fee: u128,
+    ) -> Result<RpcProofUpdateSubmission, String> {
+        Err("fractal_submitProofUpdate not supported on this node".to_string())
     }
 }
 
@@ -793,6 +947,26 @@ pub fn build_module(ctx: SharedChain) -> RpcModule<SharedChain> {
 
     module
         .register_async_method(
+            "fractal_debugTxRouting",
+            |params: Params<'static>, ctx, _| {
+                let ctx = ctx.clone();
+                async move {
+                    let tx_hex: String = params
+                        .one()
+                        .map_err(|_| err_invalid_params("expected raw transaction hex"))?;
+                    let tx_bytes = parse_bytes_hex(&tx_hex)?;
+                    let g = ctx.lock().await;
+                    let diagnostics = g
+                        .routing_diagnostics_for_raw_tx(&tx_bytes)
+                        .map_err(|e| ErrorObjectOwned::owned(-32602, e, None::<()>))?;
+                    Ok::<RpcRoutingDiagnostics, ErrorObjectOwned>(diagnostics)
+                }
+            },
+        )
+        .expect("register fractal_debugTxRouting");
+
+    module
+        .register_async_method(
             "fractal_proofMetrics",
             |_params: Params<'static>, ctx, _| {
                 let ctx = ctx.clone();
@@ -838,6 +1012,184 @@ pub fn build_module(ctx: SharedChain) -> RpcModule<SharedChain> {
             },
         )
         .expect("register fractal_submitValidityProof");
+
+    module
+        .register_async_method(
+            "fractal_ownedObjectPrecheck",
+            |params: Params<'static>, ctx, _| {
+                let ctx = ctx.clone();
+                async move {
+                    let args: Vec<serde_json::Value> = params
+                        .parse()
+                        .map_err(|_| err_invalid_params("expected [rawTxHex, maxFeePerGas?]"))?;
+                    let raw_hex = args
+                        .first()
+                        .and_then(|v| v.as_str())
+                        .ok_or_else(|| err_invalid_params("missing rawTxHex"))?;
+                    let max_fee = args
+                        .get(1)
+                        .and_then(|v| v.as_str())
+                        .map(parse_u128_quantity_or_decimal)
+                        .transpose()?
+                        .unwrap_or(1);
+                    let raw = parse_bytes_hex(raw_hex)?;
+                    let g = ctx.lock().await;
+                    let response = g
+                        .owned_object_precheck(&raw, max_fee)
+                        .map_err(|e| ErrorObjectOwned::owned(-32000, e, None::<()>))?;
+                    Ok::<RpcOwnedObjectPrecheck, ErrorObjectOwned>(response)
+                }
+            },
+        )
+        .expect("register fractal_ownedObjectPrecheck");
+
+    module
+        .register_async_method(
+            "fractal_countersignOwnedObjectTx",
+            |params: Params<'static>, ctx, _| {
+                let ctx = ctx.clone();
+                async move {
+                    let args: Vec<serde_json::Value> = params
+                        .parse()
+                        .map_err(|_| err_invalid_params("expected [rawTxHex, maxFeePerGas?]"))?;
+                    let raw_hex = args
+                        .first()
+                        .and_then(|v| v.as_str())
+                        .ok_or_else(|| err_invalid_params("missing rawTxHex"))?;
+                    let max_fee = args
+                        .get(1)
+                        .and_then(|v| v.as_str())
+                        .map(parse_u128_quantity_or_decimal)
+                        .transpose()?
+                        .unwrap_or(1);
+                    let raw = parse_bytes_hex(raw_hex)?;
+                    let g = ctx.lock().await;
+                    let response = g
+                        .countersign_owned_object_tx(&raw, max_fee)
+                        .map_err(|e| ErrorObjectOwned::owned(-32000, e, None::<()>))?;
+                    Ok::<RpcOwnedObjectCountersignature, ErrorObjectOwned>(response)
+                }
+            },
+        )
+        .expect("register fractal_countersignOwnedObjectTx");
+
+    module
+        .register_async_method(
+            "fractal_aggregateOwnedObjectCertificate",
+            |params: Params<'static>, ctx, _| {
+                let ctx = ctx.clone();
+                async move {
+                    let args: Vec<serde_json::Value> = params.parse().map_err(|_| {
+                        err_invalid_params(
+                            "expected [rawTxHex, objectVersionsBorshHex, signatureBorshHexArray]",
+                        )
+                    })?;
+                    let raw_hex = args
+                        .first()
+                        .and_then(|v| v.as_str())
+                        .ok_or_else(|| err_invalid_params("missing rawTxHex"))?;
+                    let versions_hex = args
+                        .get(1)
+                        .and_then(|v| v.as_str())
+                        .ok_or_else(|| err_invalid_params("missing objectVersionsBorshHex"))?;
+                    let signatures = args
+                        .get(2)
+                        .and_then(|v| v.as_array())
+                        .ok_or_else(|| err_invalid_params("missing signatureBorshHexArray"))?
+                        .iter()
+                        .map(|v| {
+                            v.as_str()
+                                .ok_or_else(|| err_invalid_params("signature must be hex"))
+                                .and_then(parse_bytes_hex)
+                        })
+                        .collect::<Result<Vec<_>, _>>()?;
+                    let raw = parse_bytes_hex(raw_hex)?;
+                    let object_versions = parse_bytes_hex(versions_hex)?;
+                    let g = ctx.lock().await;
+                    let response = g
+                        .aggregate_owned_object_certificate(&raw, &object_versions, signatures)
+                        .map_err(|e| ErrorObjectOwned::owned(-32000, e, None::<()>))?;
+                    Ok::<RpcOwnedObjectCertificate, ErrorObjectOwned>(response)
+                }
+            },
+        )
+        .expect("register fractal_aggregateOwnedObjectCertificate");
+
+    module
+        .register_async_method(
+            "fractal_getOwnedObjectFinality",
+            |params: Params<'static>, ctx, _| {
+                let ctx = ctx.clone();
+                async move {
+                    let object_version_hex: String = params
+                        .one()
+                        .map_err(|_| err_invalid_params("expected borsh object version hex"))?;
+                    let object_version_bytes = parse_bytes_hex(&object_version_hex)?;
+                    let object_version =
+                        fractal_core::OwnedObjectVersion::try_from_slice(&object_version_bytes)
+                            .map_err(|_| err_invalid_params("invalid OwnedObjectVersion borsh"))?;
+                    let g = ctx.lock().await;
+                    let (finality_status, certificate_hash, certificate_borsh) = g
+                        .owned_object_finality(&object_version)
+                        .map(|(hash, cert)| ("certificate".to_owned(), Some(hash), Some(cert)))
+                        .unwrap_or_else(|| ("none".to_owned(), None, None));
+                    Ok::<RpcOwnedObjectFinality, ErrorObjectOwned>(RpcOwnedObjectFinality {
+                        object_version_borsh: format!("0x{}", hex::encode(object_version_bytes)),
+                        finality_status,
+                        certificate_hash,
+                        certificate_borsh,
+                    })
+                }
+            },
+        )
+        .expect("register fractal_getOwnedObjectFinality");
+
+    module
+        .register_async_method(
+            "fractal_getProofFinalHeight",
+            |params: Params<'static>, ctx, _| {
+                let ctx = ctx.clone();
+                async move {
+                    let zone_id_raw: String = params
+                        .one()
+                        .map_err(|_| err_invalid_params("expected zone id"))?;
+                    let zone_id = parse_u64_quantity_or_decimal(&zone_id_raw)?;
+                    let g = ctx.lock().await;
+                    Ok::<RpcZoneProofFinalHeight, ErrorObjectOwned>(RpcZoneProofFinalHeight {
+                        zone_id: quantity_hex_u64(zone_id),
+                        proof_final_height: g
+                            .latest_proof_final_height_for_zone(zone_id)
+                            .map(quantity_hex_u64),
+                    })
+                }
+            },
+        )
+        .expect("register fractal_getProofFinalHeight");
+
+    module
+        .register_async_method(
+            "fractal_getZoneUpdateFinality",
+            |params: Params<'static>, ctx, _| {
+                let ctx = ctx.clone();
+                async move {
+                    let (zone_id_raw, height_raw): (String, String) = params
+                        .parse()
+                        .map_err(|_| err_invalid_params("expected [zoneId, height]"))?;
+                    let zone_id = parse_u64_quantity_or_decimal(&zone_id_raw)?;
+                    let height = parse_u64_quantity_or_decimal(&height_raw)?;
+                    let g = ctx.lock().await;
+                    let finality = g
+                        .zone_update_finality(zone_id, height)
+                        .unwrap_or_else(|| "none".into());
+                    Ok::<RpcZoneUpdateFinality, ErrorObjectOwned>(RpcZoneUpdateFinality {
+                        zone_id: quantity_hex_u64(zone_id),
+                        height: quantity_hex_u64(height),
+                        finality_status: finality,
+                    })
+                }
+            },
+        )
+        .expect("register fractal_getZoneUpdateFinality");
 
     module
         .register_async_method(
@@ -1436,6 +1788,47 @@ pub fn build_module(ctx: SharedChain) -> RpcModule<SharedChain> {
 
     module
         .register_async_method(
+            "fractal_submitProofUpdate",
+            |params: Params<'static>, ctx, _| {
+                let ctx = ctx.clone();
+                async move {
+                    let arr: Vec<serde_json::Value> = params
+                        .parse()
+                        .map_err(|_| err_invalid_params("expected proof update borsh hex"))?;
+                    let first = arr
+                        .first()
+                        .ok_or(err_invalid_params("expected proof update borsh hex"))?;
+                    let update_hex = first
+                        .get("proofUpdate")
+                        .and_then(|v| v.as_str())
+                        .or_else(|| first.get("proof_update").and_then(|v| v.as_str()))
+                        .or_else(|| first.get("proofUpdateBorsh").and_then(|v| v.as_str()))
+                        .or_else(|| first.get("proof_update_borsh").and_then(|v| v.as_str()))
+                        .or_else(|| first.as_str())
+                        .ok_or(err_invalid_params("missing proof update borsh hex"))?;
+                    let max_priority_fee = first
+                        .get("maxPriorityFee")
+                        .and_then(|v| v.as_str())
+                        .or_else(|| first.get("max_priority_fee").and_then(|v| v.as_str()))
+                        .map(parse_u128_quantity_or_decimal)
+                        .transpose()?
+                        .unwrap_or(0);
+                    let update_bytes = parse_bytes_hex(update_hex)?;
+                    let update =
+                        fractal_consensus::ZoneProofUpdateV1::try_from_slice(&update_bytes)
+                            .map_err(|_| err_invalid_params("invalid ZoneProofUpdateV1 borsh"))?;
+                    let mut g = ctx.lock().await;
+                    let response = g
+                        .submit_proof_update(update, max_priority_fee)
+                        .map_err(|e| ErrorObjectOwned::owned(-32603, e, None::<()>))?;
+                    Ok::<RpcProofUpdateSubmission, ErrorObjectOwned>(response)
+                }
+            },
+        )
+        .expect("register fractal_submitProofUpdate");
+
+    module
+        .register_async_method(
             "fractal_submitProofHash",
             |params: Params<'static>, ctx, _| {
                 let ctx = ctx.clone();
@@ -1518,6 +1911,23 @@ fn rpc_owned_object_id(object_id: &OwnedObjectId) -> String {
     }
 }
 
+pub fn rpc_routing_diagnostics_for_transaction(
+    tx: &fractal_core::Transaction,
+    source_shard: u32,
+    shard_count: u32,
+) -> RpcRoutingDiagnostics {
+    let topology = fractal_shard::ShardTopology { shard_count };
+    let diagnostics =
+        fractal_shard::routing_diagnostics_for_transaction(tx, source_shard, &topology);
+    RpcRoutingDiagnostics {
+        source_shard: quantity_hex_u64(u64::from(diagnostics.source_shard)),
+        expected_shard: quantity_hex_u64(u64::from(diagnostics.expected_shard)),
+        shard_count: quantity_hex_u64(u64::from(diagnostics.shard_count)),
+        route_key: diagnostics.route_key,
+        accepted: diagnostics.accepted,
+    }
+}
+
 fn rpc_block_from_consensus(
     b: &fractal_consensus::Block,
     hash: Option<[u8; 32]>,
@@ -1572,6 +1982,7 @@ fn rpc_block_from_consensus(
                 fractal_consensus::coverage_manifest_for_circuit_version(p.circuit_version);
             quantity_hex_u64(manifest.covered_features.bits)
         }),
+        payload_type: b.payload_kind().as_str().into(),
         transactions: tx_hashes,
         uncles: Vec::new(),
     }

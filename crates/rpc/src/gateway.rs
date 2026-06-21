@@ -110,9 +110,9 @@ impl RpcGateway {
         match method {
             "eth_sendRawTransaction" => {
                 let raw_hex = first_param_string(params, "expected [rawTxHex]")?;
-                let signer = signer_from_raw_tx_hex(raw_hex)
+                let shard = shard_for_raw_tx_hex(raw_hex, self.shard_count)
                     .map_err(|e| ErrorObjectOwned::owned(-32000, e, None::<()>))?;
-                Ok(GatewayRoute::Shard(self.home_shard_for_address(&signer)))
+                Ok(GatewayRoute::Shard(shard))
             }
             "eth_getBalance" | "eth_getTransactionCount" | "eth_getCode" | "eth_getStorageAt" => {
                 let addr = first_param_address(params)?;
@@ -481,14 +481,15 @@ fn parse_quantity_result(v: &Value) -> Result<u64, ErrorObjectOwned> {
         .map_err(|_| ErrorObjectOwned::owned(-32000, "invalid hex quantity from shard", None::<()>))
 }
 
-fn signer_from_raw_tx_hex(raw_hex: &str) -> Result<Address, String> {
+fn shard_for_raw_tx_hex(raw_hex: &str, shard_count: u32) -> Result<u32, String> {
     let raw = hex::decode(raw_hex.trim_start_matches("0x"))
         .map_err(|e| format!("invalid raw tx hex: {e}"))?;
     if let Ok(tx) = Transaction::try_from_slice(&raw) {
-        return Ok(tx.signer);
+        return Ok(fractal_shard::home_shard_for_transaction(&tx, shard_count));
     }
     let env = fractal_eth_wire::decode_eip1559(&raw)?;
-    fractal_eth_wire::recover_sender_eip1559(&raw, &env)
+    let signer = fractal_eth_wire::recover_sender_eip1559(&raw, &env)?;
+    Ok(fractal_shard::home_shard_for_address(&signer, shard_count))
 }
 
 fn first_param_string<'a>(

@@ -8,13 +8,14 @@
 mod aggregate;
 mod plonky2_agg;
 mod statement;
+#[cfg(feature = "stwo")]
 mod stwo;
 mod submission;
 
 pub use aggregate::{
-    AggregatedZkProofV1, AggregatorError, GlobalZkStatementV1, PLONKY2_AGGREGATOR_VERSION,
     aggregate_global_zk_root, prove_and_aggregate, prove_and_aggregate_verified,
-    verify_global_zk_root, verify_global_zk_root_verified,
+    verify_global_zk_root, verify_global_zk_root_verified, AggregatedZkProofV1, AggregatorError,
+    GlobalZkStatementV1, PLONKY2_AGGREGATOR_VERSION,
 };
 pub use plonky2_agg::{
     hash_out_to_global_zk_root, poseidon_statement_digest, poseidon_verified_statement_digest,
@@ -22,14 +23,25 @@ pub use plonky2_agg::{
     verify_global_aggregation_verified_snark,
 };
 pub use statement::{
-    MAX_AGG_PROOFS, VerifiedStwoStatementV1, encode_statement_u64, encode_verified_statement_u64,
-    hash256_to_u64_limbs, statement_field_len, verified_statement_field_len,
+    encode_statement_u64, encode_verified_statement_u64, hash256_to_u64_limbs, statement_field_len,
+    verified_statement_field_len, VerifiedStwoStatementV1, MAX_AGG_PROOFS,
 };
+#[cfg(feature = "stwo")]
 pub use stwo::verify_stwo_artifact_submission;
 pub use submission::{
-    SubmissionError, dedupe_submissions, proof_submission_from_checkpoint_digest,
-    validate_proof_submission,
+    dedupe_submissions, proof_submission_from_checkpoint_digest, validate_proof_submission,
+    SubmissionError,
 };
+
+#[cfg(not(feature = "stwo"))]
+pub fn verify_stwo_artifact_submission(
+    _sub: &fractal_shard::ProofSubmissionV1,
+    _artifact_v1_borsh: &[u8],
+) -> Result<VerifiedStwoStatementV1, AggregatorError> {
+    Err(AggregatorError::StwoArtifactInvalid(
+        "fractal-proof-aggregator built without stwo feature".into(),
+    ))
+}
 
 /// Serialized tier-2 bundle (proof bytes + public inputs) for off-chain storage / bridges.
 #[derive(Debug, Clone, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
@@ -83,8 +95,12 @@ impl Plonky2ProofBundleV1 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use fractal_consensus::{Block, BlockHeader, genesis_parent_qc};
-    use fractal_proof_condenser::{CheckpointStwoArtifactV1, checkpoint_job_from_block};
+    #[cfg(feature = "stwo")]
+    use fractal_consensus::{
+        Block, BlockHeader, DaSidecar, ExecutionFeatureSetV1, DEFAULT_DA_NAMESPACE,
+    };
+    #[cfg(feature = "stwo")]
+    use fractal_proof_condenser::{checkpoint_job_from_block, CheckpointStwoArtifactV1};
     use fractal_shard::{ProofSubmissionV1, ShardAnchor};
 
     fn anchor(shard: u32, h: u64) -> ShardAnchor {
@@ -107,6 +123,7 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "stwo")]
     fn block(height: u64) -> Block {
         Block {
             header: BlockHeader {
@@ -124,15 +141,27 @@ mod tests {
                 receipt_root: [0u8; 32],
                 native_event_root: [0u8; 32],
                 evm_log_root: [0u8; 32],
+                zone_namespace: DEFAULT_DA_NAMESPACE,
+                da_root: [0u8; 32],
+                da_bytes: 0,
+                da_share_count: 0,
+                da_gas_used: 0,
+                da_fee_paid: 0,
                 gas_used: 21_000,
                 gas_limit: 30_000_000,
-                shard_id: 0,
+                feature_set: ExecutionFeatureSetV1::empty(),
                 extra: [6u8; 32],
             },
             transactions: vec![],
-            parent_qc: genesis_parent_qc(),
-            parent_qc_signer_indices: vec![],
             eth_signed_raw: vec![],
+            da_sidecar: DaSidecar {
+                namespace: DEFAULT_DA_NAMESPACE,
+                original_len: 0,
+                share_size: 0,
+                data_share_count: 0,
+                parity_share_count: 0,
+                shares: vec![],
+            },
         }
     }
 
@@ -161,6 +190,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "stwo")]
     fn verified_stwo_artifact_builds_plonky2_statement() {
         let job = checkpoint_job_from_block(41, &block(7)).expect("job");
         let Ok((artifact, digest)) = CheckpointStwoArtifactV1::prove(&job) else {

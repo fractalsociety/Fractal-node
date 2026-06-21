@@ -1,23 +1,23 @@
 [package]
 name = "fractal-proof-condenser"
-version.workspace = true
-edition.workspace = true
-license.workspace = true
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
 description = "Async STWO/RISC-V proof condenser hooks (PRD §7.8) — non-blocking background jobs."
 
 [dependencies]
-blake3.workspace = true
-borsh.workspace = true
+blake3 = "1.5"
+borsh = { version = "1.5", features = ["derive"] }
 fractal-consensus = { path = "../consensus" }
 fractal-core = { path = "../core" }
 fractal-crypto = { path = "../crypto" }
 fractal-storage = { path = "../storage" }
-hex.workspace = true
+hex = "0.4"
 itertools = { version = "0.12", default-features = false, features = ["use_std"] }
 num-traits = { version = "0.2", default-features = false, features = ["std"] }
-serde_json.workspace = true
+serde_json = "1"
 # `parallel` enables Rayon inside vendored `stwo` (faster on multi-core hosts, including riscv64).
 stwo = { version = "2.2", features = ["prover", "std", "parallel"] }
 stwo-constraint-framework = { version = "2.2", features = ["prover", "std"] }
-thiserror.workspace = true
-tokio = { workspace = true, features = ["rt-multi-thread", "macros", "sync"] }
+thiserror = "1.0"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync"] }

@@ -2,8 +2,19 @@
 
 use std::collections::BTreeSet;
 
+pub mod certificate_pool;
+pub mod proof_pool;
+
 use fractal_core::{
     OwnedObjectCertificate, OwnedObjectId, OwnedObjectVersion, Transaction, TxExecutionScope,
+};
+
+pub use certificate_pool::{
+    CertificateConflictRecord, CertificateFinalityRecord, CertificatePool, CertificatePoolError,
+};
+pub use proof_pool::{
+    PooledProofUpdate, ProofPool, ProofPoolConflictPolicy, ProofPoolError, ProofPoolMetrics,
+    ProofUpdateConflict, ProofUpdateKey,
 };
 
 #[derive(Clone, Debug)]
@@ -124,6 +135,15 @@ impl Mempool {
     }
 
     pub fn drain_ready_gas_budget(&mut self, max_gas: u64, base_fee: u128) -> Vec<PooledTx> {
+        self.drain_ready_gas_budget_filtered(max_gas, base_fee, |_| true)
+    }
+
+    pub fn drain_ready_gas_budget_filtered(
+        &mut self,
+        max_gas: u64,
+        base_fee: u128,
+        mut include: impl FnMut(&Transaction) -> bool,
+    ) -> Vec<PooledTx> {
         self.pending.sort_by(|a, b| {
             b.tx.is_owned_object_tx()
                 .cmp(&a.tx.is_owned_object_tx())
@@ -134,6 +154,10 @@ impl Mempool {
         let mut owned_objects = BTreeSet::<OwnedObjectId>::new();
         let mut used: u64 = 0;
         for p in self.pending.drain(..) {
+            if !include(&p.tx) {
+                rest.push(p);
+                continue;
+            }
             if p.max_fee_per_gas < base_fee {
                 rest.push(p);
                 continue;
@@ -298,6 +322,63 @@ mod tests {
         }
     }
 
+    fn validator_keys(
+        count: u8,
+    ) -> (
+        Vec<fractal_crypto::BlsSecretKey>,
+        Vec<fractal_crypto::BlsPublicKey>,
+    ) {
+        let secrets = (1..=count)
+            .map(|seed| fractal_crypto::BlsSecretKey::from_ikm(&[seed; 32]).unwrap())
+            .collect::<Vec<_>>();
+        let pubkeys = secrets
+            .iter()
+            .map(fractal_crypto::BlsSecretKey::public_key)
+            .collect();
+        (secrets, pubkeys)
+    }
+
+    fn update_agent_tx(signer: [u8; 20], nonce: u64, agent_id: u64, uri: &str) -> Transaction {
+        Transaction {
+            signer,
+            nonce,
+            vm: fractal_core::VmKind::Native,
+            body: fractal_core::TxBody::Native(fractal_core::NativeCall::UpdateAgent {
+                agent_id,
+                new_metadata_uri: uri.to_owned(),
+                new_pubkey: None,
+            }),
+        }
+    }
+
+    fn valid_certificate_for_tx(
+        tx: &Transaction,
+        agent_id: u64,
+        agent_version: u64,
+        validators: &[fractal_crypto::BlsSecretKey],
+    ) -> OwnedObjectCertificate {
+        let object_versions = vec![
+            OwnedObjectVersion {
+                object_id: OwnedObjectId::AccountNonce(tx.signer),
+                version: tx.nonce,
+            },
+            OwnedObjectVersion {
+                object_id: OwnedObjectId::Agent(agent_id),
+                version: agent_version,
+            },
+        ];
+        let unsigned =
+            OwnedObjectCertificate::from_owned_transaction(tx, object_versions.clone(), Vec::new())
+                .unwrap();
+        let body = unsigned.sign_body();
+        let signatures = (0..3)
+            .map(|idx| {
+                OwnedObjectCertificate::countersign(&body, idx as u32, &validators[idx]).unwrap()
+            })
+            .collect::<Vec<_>>();
+        OwnedObjectCertificate::aggregate(tx, object_versions, signatures, 3).unwrap()
+    }
+
     #[test]
     fn drain_keeps_conflicting_owned_object_queued() {
         let signer = [7u8; 20];
@@ -418,5 +499,52 @@ mod tests {
             mp.lane_metrics_with_certificates(&cp).pending_certificates,
             1
         );
+    }
+
+    #[test]
+    fn certificate_pool_accepts_valid_certificates_and_reports_finality() {
+        let (secrets, pubkeys) = validator_keys(4);
+        let tx = update_agent_tx([7u8; 20], 0, 42, "bench://a");
+        let cert = valid_certificate_for_tx(&tx, 42, 3, &secrets);
+        let target = cert.object_versions[1].clone();
+        let mut pool = CertificatePool::default();
+
+        let hash = pool.insert(cert.clone(), &pubkeys, 3).unwrap();
+
+        let finality = pool.finality_for_object_version(&target).unwrap();
+        assert_eq!(finality.certificate_hash, hash);
+        assert_eq!(finality.certificate, cert);
+        assert_eq!(pool.accepted_certificates(), vec![cert]);
+    }
+
+    #[test]
+    fn certificate_pool_rejects_conflicts_as_slashable_evidence() {
+        let (secrets, pubkeys) = validator_keys(4);
+        let signer = [7u8; 20];
+        let tx_a = update_agent_tx(signer, 0, 42, "bench://a");
+        let tx_b = update_agent_tx(signer, 1, 42, "bench://b");
+        let cert_a = valid_certificate_for_tx(&tx_a, 42, 3, &secrets);
+        let cert_b = valid_certificate_for_tx(&tx_b, 42, 3, &secrets);
+        let mut pool = CertificatePool::default();
+        pool.insert(cert_a, &pubkeys, 3).unwrap();
+
+        let err = pool.insert(cert_b, &pubkeys, 3).unwrap_err();
+
+        let CertificatePoolError::ObjectVersionConflict {
+            object_version,
+            conflict,
+        } = err
+        else {
+            panic!("expected conflict");
+        };
+        assert_eq!(
+            object_version,
+            OwnedObjectVersion {
+                object_id: OwnedObjectId::Agent(42),
+                version: 3,
+            }
+        );
+        assert_eq!(conflict.finding.slashable_validator_indices, vec![0, 1, 2]);
+        assert_eq!(pool.conflict_count(), 1);
     }
 }

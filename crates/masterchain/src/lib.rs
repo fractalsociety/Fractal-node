@@ -3,32 +3,41 @@
 //! Run via `fractal-masterchain` binary. Shard validators set `FRACTAL_MASTERCHAIN_RPC`
 //! to post anchors instead of sealing masterchain blocks locally.
 
+#[cfg(feature = "runtime")]
 pub mod bft;
 pub mod client;
 pub mod ledger;
+#[cfg(feature = "runtime")]
 pub mod network;
+#[cfg(feature = "runtime")]
 pub mod node;
+#[cfg(feature = "runtime")]
 mod rpc;
 
+#[cfg(feature = "runtime")]
 pub use bft::{MasterchainTimeoutGossipV1, MasterchainVoteGossipV1};
 pub use ledger::{
-    AsyncCrossZoneMessageV1, ExecutionZoneMetadataV1, ExecutionZoneRecordV1,
-    ForcedInclusionEventV1, ForcedInclusionRequestV1,
+    anchor_from_block_header, forced_inclusion_request_id, invalid_proof_evidence_hash,
+    submission_reason_code, AsyncCrossZoneMessageV1, ExecutionZoneMetadataV1,
+    ExecutionZoneRecordV1, ForcedInclusionEventV1, ForcedInclusionRequestV1,
+    InvalidProofSlashEventV1, MasterchainError, MasterchainLedger, ProofSlashingPolicyV1,
+    ProverIdentityV1, ProverMarketParamsV1, ZoneId, ZoneProofFinalUpdateV1,
     INVALID_PROOF_AGGREGATOR_REJECTED, INVALID_PROOF_BAD_RANGE, INVALID_PROOF_DUPLICATE,
     INVALID_PROOF_EMPTY_DIGEST, INVALID_PROOF_MISSING_VERIFIED_STWO,
-    INVALID_PROOF_RANGE_EXCEEDS_ANCHOR, INVALID_PROOF_UNKNOWN_SHARD, InvalidProofSlashEventV1,
-    MasterchainError, MasterchainLedger, ProofSlashingPolicyV1, ProverIdentityV1,
-    ProverMarketParamsV1, anchor_from_block_header, invalid_proof_evidence_hash,
-    forced_inclusion_request_id, submission_reason_code, ZoneId, ZoneProofFinalUpdateV1,
+    INVALID_PROOF_RANGE_EXCEEDS_ANCHOR, INVALID_PROOF_UNKNOWN_SHARD,
 };
+#[cfg(feature = "runtime")]
 pub use network::{masterchain_gossip_task, parse_masterchain_bootstraps};
+#[cfg(feature = "runtime")]
 pub use node::{
-    MasterchainBftNode, MasterchainHandle, configure_proof_slashing_from_env,
-    masterchain_bft_producer_loop, masterchain_block_time_ms_from_env, masterchain_ledger_from_env,
+    configure_proof_slashing_from_env, masterchain_bft_producer_loop,
+    masterchain_block_time_ms_from_env, masterchain_ledger_from_env,
     masterchain_validator_index_from_env, masterchain_validator_set_from_env,
-    prover_address_from_env, prover_reward_treasury_from_env,
+    prover_address_from_env, prover_reward_treasury_from_env, MasterchainBftNode,
+    MasterchainHandle,
 };
 
+#[cfg(feature = "runtime")]
 pub async fn run_masterchain_bft() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let shard_count = std::env::var(fractal_shard::ENV_SHARD_COUNT)
         .ok()
@@ -99,4 +108,9 @@ pub async fn run_masterchain_bft() -> Result<(), Box<dyn std::error::Error + Sen
     tokio::signal::ctrl_c().await?;
     handle.stop()?;
     Ok(())
+}
+
+#[cfg(not(feature = "runtime"))]
+pub async fn run_masterchain_bft() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    Err("fractal-masterchain built without runtime feature".into())
 }

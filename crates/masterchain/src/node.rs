@@ -3,17 +3,17 @@
 use std::sync::Arc;
 
 use fractal_consensus::{
-    FormedTimeoutCert, QuorumCertificate, Timeout, TimeoutPool, ValidatorSet, Vote,
-    genesis_parent_qc, hash_qc,
+    genesis_parent_qc, hash_qc, FormedTimeoutCert, QuorumCertificate, Timeout, TimeoutPool,
+    ValidatorSet, Vote,
 };
 use fractal_crypto::{BlsSecretKey, Hash256};
 use fractal_shard::{MasterchainBlockV1, ProofSubmissionV1, ShardAnchor};
-use tokio::sync::Mutex;
 use tokio::sync::mpsc::UnboundedSender;
+use tokio::sync::Mutex;
 
 use crate::bft::{
-    MasterchainTimeoutGossipV1, MasterchainVoteGossipV1, record_masterchain_timeout,
-    record_masterchain_vote_message, sign_masterchain_timeout, sign_masterchain_vote,
+    record_masterchain_timeout, record_masterchain_vote_message, sign_masterchain_timeout,
+    sign_masterchain_vote, MasterchainTimeoutGossipV1, MasterchainVoteGossipV1,
 };
 use crate::ledger::{
     MasterchainError, MasterchainLedger, ProofSlashingPolicyV1, ProverEconomicsParamsV1,

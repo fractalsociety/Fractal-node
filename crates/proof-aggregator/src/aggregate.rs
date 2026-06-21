@@ -8,7 +8,7 @@ use crate::plonky2_agg::{
     hash_out_to_global_zk_root, poseidon_statement_digest, poseidon_verified_statement_digest,
     prove_global_aggregation, prove_global_aggregation_verified,
 };
-use crate::statement::{MAX_AGG_PROOFS, VerifiedStwoStatementV1};
+use crate::statement::{VerifiedStwoStatementV1, MAX_AGG_PROOFS};
 
 /// Plonky2 aggregation wire version (Poseidon + SNARK verify).
 pub const PLONKY2_AGGREGATOR_VERSION: u8 = 2;

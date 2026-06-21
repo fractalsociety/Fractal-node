@@ -21,10 +21,19 @@ path = "src/bin/verifier.rs"
 name = "fractal-protocol-bench"
 path = "src/bin/protocol.rs"
 
+[[bin]]
+name = "fractal-baseline-bench"
+path = "src/bin/baseline.rs"
+
+[[bin]]
+name = "fractal-proof-ingestion-bench"
+path = "src/bin/proof_ingestion.rs"
+
 [dependencies]
 borsh.workspace = true
 fractal-consensus = { path = "../consensus" }
 fractal-core = { path = "../core" }
 fractal-crypto = { path = "../crypto" }
+fractal-evm = { path = "../evm" }
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true

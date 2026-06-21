@@ -20,9 +20,9 @@ use itertools::Itertools;
 use num_traits::{One, Zero};
 use stwo::core::air::Component;
 use stwo::core::channel::{Blake2sM31Channel, Channel};
-use stwo::core::fields::FieldExpOps;
 use stwo::core::fields::m31::BaseField;
 use stwo::core::fields::qm31::SecureField;
+use stwo::core::fields::FieldExpOps;
 use stwo::core::pcs::{CommitmentSchemeVerifier, PcsConfig};
 use stwo::core::poly::circle::CanonicCoset;
 use stwo::core::proof::StarkProof;
@@ -30,9 +30,9 @@ use stwo::core::vcs_lifted::blake2_merkle::{Blake2sM31MerkleChannel, Blake2sM31M
 use stwo::core::verifier::verify;
 use stwo::prover::backend::cpu::CpuBackend;
 use stwo::prover::backend::{Col, Column};
-use stwo::prover::poly::BitReversedOrder;
 use stwo::prover::poly::circle::{CircleEvaluation, PolyOps};
-use stwo::prover::{CommitmentSchemeProver, prove};
+use stwo::prover::poly::BitReversedOrder;
+use stwo::prover::{prove, CommitmentSchemeProver};
 use stwo_constraint_framework::{
     EvalAtRow, FrameworkComponent, FrameworkEval, TraceLocationAllocator,
 };
@@ -278,7 +278,7 @@ pub fn prove_and_verify_checkpoint_stwo(
 mod tests {
     use super::*;
     use crate::checkpoint_job_from_block;
-    use fractal_consensus::{Block, BlockHeader, genesis_parent_qc};
+    use fractal_consensus::{genesis_parent_qc, Block, BlockHeader};
 
     fn job_fixture() -> CheckpointJob {
         let block = Block {

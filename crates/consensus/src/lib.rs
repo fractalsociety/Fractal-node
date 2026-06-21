@@ -17,12 +17,21 @@ use reed_solomon_erasure::galois_8::ReedSolomon;
 use std::collections::BTreeMap;
 use thiserror::Error;
 
+pub mod fees;
+pub mod payload;
 pub mod proof;
 pub mod qc;
 pub mod validators;
 pub mod vote;
 
+pub use fees::{default_fee_policy, FeeCostCategory, FeePolicyV1};
 pub use fractal_core::Transaction as Tx;
+pub use payload::{
+    certificate_batch_conflicts, certificate_batch_leaf_hash, certificate_batch_root,
+    certificate_batches_root, payload_leaf_hash, proof_update_leaf_hash, proof_updates_root,
+    versioned_payload_root, BlockPayload, BlockPayloadItem, BlockPayloadKind,
+    OwnedObjectCertificateBatchV1, ZoneProofUpdateV1,
+};
 pub use proof::{
     canonical_recursive_proof_fixture_v1, evm_zkvm_proof_envelope_v1, evm_zkvm_proof_fixture_v1,
     evm_zkvm_transition_statement_v1, mixed_intrablock_aggregate_fixture_v1,
@@ -162,6 +171,8 @@ pub enum DaVerifyError {
     ShareCommitment,
     #[error("data availability sampled share missing")]
     SampleMissing,
+    #[error("data availability sampling receipt has insufficient samples")]
+    InsufficientSamples,
     #[error("data availability erasure coding failed")]
     ErasureCoding,
     #[error("data availability insufficient shares for reconstruction")]
@@ -232,6 +243,49 @@ pub struct DaSidecar {
 }
 
 #[derive(BorshSerialize, BorshDeserialize, Clone, Debug, PartialEq, Eq)]
+pub struct DaSamplingReceiptSample {
+    pub index: u32,
+    pub is_parity: bool,
+    pub commitment: Hash256,
+    pub merkle_path: Vec<Hash256>,
+}
+
+#[derive(BorshSerialize, BorshDeserialize, Clone, Debug, PartialEq, Eq)]
+pub struct DaSamplingReceipt {
+    pub namespace: DaNamespace,
+    pub da_root: Hash256,
+    pub share_count: u32,
+    pub seed: u64,
+    pub sample_count: u32,
+    pub samples: Vec<DaSamplingReceiptSample>,
+}
+
+#[derive(BorshSerialize, BorshDeserialize, Clone, Debug, PartialEq, Eq)]
+pub struct DaSamplingParamsV1 {
+    pub seed: u64,
+    pub sample_count: u32,
+    pub min_samples: u32,
+}
+
+#[derive(BorshSerialize, BorshDeserialize, Clone, Debug, PartialEq, Eq)]
+pub struct ZoneBlobDaV1 {
+    pub namespace: DaNamespace,
+    pub payload: Vec<u8>,
+    pub share_size: u32,
+    pub sampling: DaSamplingParamsV1,
+}
+
+#[derive(BorshSerialize, BorshDeserialize, Clone, Debug, PartialEq, Eq)]
+pub struct ZoneBlobDaCommitmentV1 {
+    pub namespace: DaNamespace,
+    pub da_root: Hash256,
+    pub byte_count: u64,
+    pub share_count: u32,
+    pub share_size: u32,
+    pub sampling: DaSamplingParamsV1,
+}
+
+#[derive(BorshSerialize, BorshDeserialize, Clone, Debug, PartialEq, Eq)]
 pub struct Block {
     pub header: BlockHeader,
     pub transactions: Vec<Transaction>,
@@ -240,6 +294,26 @@ pub struct Block {
     pub eth_signed_raw: Vec<Option<Vec<u8>>>,
     /// Initial DA sidecar: chunked transaction payload committed by `header.da_root`.
     pub da_sidecar: DaSidecar,
+}
+
+impl Block {
+    /// View the legacy block body through the versioned payload contract.
+    ///
+    /// This does not alter the legacy block wire shape; it is the compatibility
+    /// bridge that lets proof-ingestion payloads land without breaking existing
+    /// full-transaction blocks.
+    #[must_use]
+    pub fn payload(&self) -> BlockPayload {
+        BlockPayload::FullTransactions {
+            transactions: self.transactions.clone(),
+            eth_signed_raw: self.eth_signed_raw.clone(),
+        }
+    }
+
+    #[must_use]
+    pub fn payload_kind(&self) -> BlockPayloadKind {
+        self.payload().kind()
+    }
 }
 
 #[derive(BorshSerialize, BorshDeserialize, Clone, Debug, PartialEq, Eq)]
@@ -1286,6 +1360,137 @@ pub fn da_root(sidecar: &DaSidecar) -> Hash256 {
     merkle_root_from_hashes(&commits)
 }
 
+fn merkle_path_len_for_leaf_count(mut leaf_count: usize) -> usize {
+    let mut len = 0;
+    while leaf_count > 1 {
+        leaf_count = leaf_count.div_ceil(2);
+        len += 1;
+    }
+    len
+}
+
+fn verify_merkle_path(
+    leaf: Hash256,
+    index: u32,
+    leaf_count: u32,
+    path: &[Hash256],
+    expected_root: Hash256,
+) -> bool {
+    if leaf_count == 0 || index >= leaf_count {
+        return false;
+    }
+    if path.len() != merkle_path_len_for_leaf_count(leaf_count as usize) {
+        return false;
+    }
+    let mut idx = index as usize;
+    let mut acc = leaf;
+    for sibling in path {
+        acc = if idx % 2 == 0 {
+            hash_pair(&acc, sibling)
+        } else {
+            hash_pair(sibling, &acc)
+        };
+        idx /= 2;
+    }
+    acc == expected_root
+}
+
+fn deterministic_da_sample_indexes(seed: u64, share_count: u32, sample_count: u32) -> Vec<u32> {
+    if share_count == 0 || sample_count == 0 {
+        return Vec::new();
+    }
+    let mut rng = SampleRng::new(seed);
+    (0..sample_count)
+        .map(|_| (rng.next() as u32) % share_count)
+        .collect()
+}
+
+pub fn build_da_sampling_receipt(
+    sidecar: &DaSidecar,
+    expected_root: Hash256,
+    seed: u64,
+    sample_count: u32,
+) -> Result<DaSamplingReceipt, DaVerifyError> {
+    let actual_root = da_root(sidecar);
+    if actual_root != expected_root {
+        return Err(DaVerifyError::Root);
+    }
+    let share_count = u32::try_from(sidecar.shares.len()).map_err(|_| DaVerifyError::ShareCount)?;
+    let commitments: Vec<Hash256> = sidecar
+        .shares
+        .iter()
+        .map(|share| share.commitment)
+        .collect();
+    let indexes = deterministic_da_sample_indexes(seed, share_count, sample_count);
+    let mut samples = Vec::with_capacity(indexes.len());
+    for index in indexes {
+        let share = sidecar
+            .shares
+            .get(index as usize)
+            .ok_or(DaVerifyError::SampleMissing)?;
+        if share.index != index {
+            return Err(DaVerifyError::ShareIndex);
+        }
+        samples.push(DaSamplingReceiptSample {
+            index,
+            is_parity: share.is_parity,
+            commitment: share.commitment,
+            merkle_path: merkle_path_from_hashes(&commitments, index as usize),
+        });
+    }
+    Ok(DaSamplingReceipt {
+        namespace: sidecar.namespace,
+        da_root: expected_root,
+        share_count,
+        seed,
+        sample_count,
+        samples,
+    })
+}
+
+pub fn verify_da_sampling_receipt(
+    receipt: &DaSamplingReceipt,
+    expected_root: Hash256,
+    expected_namespace: DaNamespace,
+    min_samples: u32,
+) -> Result<(), DaVerifyError> {
+    if receipt.namespace != expected_namespace {
+        return Err(DaVerifyError::Namespace);
+    }
+    if receipt.da_root != expected_root {
+        return Err(DaVerifyError::Root);
+    }
+    if receipt.sample_count < min_samples || receipt.samples.len() < min_samples as usize {
+        return Err(DaVerifyError::InsufficientSamples);
+    }
+    if receipt.samples.len() != receipt.sample_count as usize {
+        return Err(DaVerifyError::SampleMissing);
+    }
+    if receipt.share_count == 0 {
+        if receipt.sample_count == 0 {
+            return Ok(());
+        }
+        return Err(DaVerifyError::ShareCount);
+    }
+    let expected_indexes =
+        deterministic_da_sample_indexes(receipt.seed, receipt.share_count, receipt.sample_count);
+    for (sample, expected_index) in receipt.samples.iter().zip(expected_indexes) {
+        if sample.index != expected_index || sample.index >= receipt.share_count {
+            return Err(DaVerifyError::ShareIndex);
+        }
+        if !verify_merkle_path(
+            sample.commitment,
+            sample.index,
+            receipt.share_count,
+            &sample.merkle_path,
+            receipt.da_root,
+        ) {
+            return Err(DaVerifyError::ShareCommitment);
+        }
+    }
+    Ok(())
+}
+
 pub fn da_encoded_bytes(sidecar: &DaSidecar) -> u64 {
     sidecar.shares.iter().map(|s| s.data.len() as u64).sum()
 }
@@ -1295,7 +1500,7 @@ pub fn da_gas_for_sidecar(sidecar: &DaSidecar) -> u64 {
 }
 
 pub fn da_fee_for_gas(da_gas_used: u64) -> u128 {
-    u128::from(da_gas_used).saturating_mul(DEFAULT_DA_FEE_PER_GAS)
+    default_fee_policy().da_gas_fee(da_gas_used)
 }
 
 fn default_parity_share_count(data_share_count: u32) -> u32 {
@@ -1369,6 +1574,81 @@ pub fn build_da_sidecar(
         parity_share_count: parity_share_count as u32,
         shares,
     })
+}
+
+pub fn build_zone_blob_da_sidecar(
+    blob: &ZoneBlobDaV1,
+) -> Result<(DaSidecar, ZoneBlobDaCommitmentV1), DaVerifyError> {
+    let sidecar = build_da_sidecar(&blob.payload, blob.namespace, blob.share_size)?;
+    let commitment = ZoneBlobDaCommitmentV1 {
+        namespace: blob.namespace,
+        da_root: da_root(&sidecar),
+        byte_count: sidecar.original_len,
+        share_count: sidecar.shares.len() as u32,
+        share_size: sidecar.share_size,
+        sampling: blob.sampling.clone(),
+    };
+    Ok((sidecar, commitment))
+}
+
+pub fn zone_blob_da_commitment_hash(
+    commitment: &ZoneBlobDaCommitmentV1,
+) -> Result<Hash256, std::io::Error> {
+    let mut bytes = b"fractal:zone-blob-da:v1".to_vec();
+    bytes.extend_from_slice(&borsh::to_vec(commitment)?);
+    Ok(keccak256(&bytes))
+}
+
+#[derive(BorshSerialize)]
+struct HeaderExtraCommitmentV1 {
+    payload_root: Hash256,
+    zone_blob_da_commitment: Hash256,
+}
+
+pub fn proof_ingestion_header_extra(
+    payload_root: Hash256,
+    zone_blob_da_commitment: &ZoneBlobDaCommitmentV1,
+) -> Result<Hash256, std::io::Error> {
+    let body = HeaderExtraCommitmentV1 {
+        payload_root,
+        zone_blob_da_commitment: zone_blob_da_commitment_hash(zone_blob_da_commitment)?,
+    };
+    let mut bytes = b"fractal:block-extra:proof-ingestion:v1".to_vec();
+    bytes.extend_from_slice(&borsh::to_vec(&body)?);
+    Ok(keccak256(&bytes))
+}
+
+pub fn verify_zone_blob_da_header(
+    header: &BlockHeader,
+    sidecar: &DaSidecar,
+    commitment: &ZoneBlobDaCommitmentV1,
+    payload_root: Hash256,
+) -> Result<(), DaVerifyError> {
+    if commitment.namespace != header.zone_namespace {
+        return Err(DaVerifyError::Namespace);
+    }
+    if commitment.da_root != header.da_root {
+        return Err(DaVerifyError::Root);
+    }
+    if commitment.byte_count != header.da_bytes {
+        return Err(DaVerifyError::OriginalLen);
+    }
+    if commitment.share_count != header.da_share_count {
+        return Err(DaVerifyError::ShareCount);
+    }
+    if commitment.share_size != sidecar.share_size {
+        return Err(DaVerifyError::OriginalLen);
+    }
+    verify_da_sidecar(header, sidecar)?;
+    let expected_extra = proof_ingestion_header_extra(payload_root, commitment)
+        .map_err(|_| DaVerifyError::ShareCommitment)?;
+    if header.extra != expected_extra {
+        return Err(DaVerifyError::Root);
+    }
+    if commitment.sampling.sample_count < commitment.sampling.min_samples {
+        return Err(DaVerifyError::InsufficientSamples);
+    }
+    Ok(())
 }
 
 pub fn reconstruct_da_payload(sidecar: &DaSidecar) -> Result<Vec<u8>, DaVerifyError> {
@@ -1941,6 +2221,61 @@ mod tests {
         let a = ordered_tx_root(std::slice::from_ref(&tx)).unwrap();
         let b = ordered_tx_root(std::slice::from_ref(&tx)).unwrap();
         assert_eq!(a, b);
+    }
+
+    #[test]
+    fn legacy_block_encoding_is_unchanged_by_payload_view() {
+        let block = Block {
+            header: BlockHeader {
+                version: 1,
+                chain_id: 41,
+                height: 1,
+                view: 2,
+                parent_hash: [1u8; 32],
+                parent_qc_hash: [2u8; 32],
+                proposer: [3u8; 32],
+                timestamp_ms: 123,
+                parent_state_root: [4u8; 32],
+                state_root: [5u8; 32],
+                tx_root: [6u8; 32],
+                receipt_root: [7u8; 32],
+                native_event_root: [8u8; 32],
+                evm_log_root: [9u8; 32],
+                zone_namespace: DEFAULT_DA_NAMESPACE,
+                da_root: [10u8; 32],
+                da_bytes: 11,
+                da_share_count: 12,
+                da_gas_used: 13,
+                da_fee_paid: 14,
+                gas_used: 15,
+                gas_limit: 16,
+                feature_set: ExecutionFeatureSetV1::empty(),
+                extra: [0u8; 32],
+            },
+            transactions: vec![Transaction {
+                signer: [1u8; 20],
+                nonce: 0,
+                vm: VmKind::Native,
+                body: TxBody::Native(NativeCall::NoOp),
+            }],
+            eth_signed_raw: vec![None],
+            da_sidecar: DaSidecar {
+                namespace: DEFAULT_DA_NAMESPACE,
+                original_len: 0,
+                share_size: DEFAULT_DA_SHARE_SIZE,
+                data_share_count: 0,
+                parity_share_count: 0,
+                shares: Vec::new(),
+            },
+        };
+        let before = borsh::to_vec(&block).unwrap();
+        assert!(matches!(
+            block.payload(),
+            BlockPayload::FullTransactions { .. }
+        ));
+        assert_eq!(block.payload_kind(), BlockPayloadKind::FullTransactions);
+        let after = borsh::to_vec(&block).unwrap();
+        assert_eq!(before, after);
     }
 
     #[test]
@@ -3579,6 +3914,47 @@ mod tests {
     }
 
     #[test]
+    fn fee_policy_exposes_separate_cost_categories() {
+        let policy = default_fee_policy();
+
+        assert_eq!(
+            FeePolicyV1::cost_categories().map(FeeCostCategory::as_str),
+            ["da_bytes", "proof_verify", "shared_state_execution"]
+        );
+        assert_eq!(policy.da_bytes_fee(512), 512);
+        assert_eq!(policy.proof_verify_fee(32), 10_032);
+        assert_eq!(policy.shared_state_execution_fee(21_000), 21_000);
+    }
+
+    #[test]
+    fn fee_policy_keeps_da_fee_separate_from_execution_gas() {
+        let mut st = State::default();
+        let block = execute_and_build_block(
+            41,
+            1,
+            0,
+            [7u8; 32],
+            [0u8; 32],
+            [0u8; 32],
+            1_000,
+            60_000_000,
+            &mut st,
+            Vec::new(),
+            eth_signed_raws_for_txs(0),
+        )
+        .unwrap();
+        let policy = default_fee_policy();
+
+        assert_eq!(block.header.gas_used, 0);
+        assert_eq!(
+            block.header.da_fee_paid,
+            policy.da_gas_fee(block.header.da_gas_used)
+        );
+        assert_eq!(policy.shared_state_execution_fee(block.header.gas_used), 0);
+        assert!(policy.proof_verify_fee(32) > 0);
+    }
+
+    #[test]
     fn da_payload_reconstructs_canonical_transaction_bytes() {
         let tx = Transaction {
             signer: [1u8; 20],
@@ -3592,6 +3968,94 @@ mod tests {
 
         let reconstructed = reconstruct_da_payload(&sidecar).expect("reconstruct");
         assert_eq!(reconstructed, payload);
+    }
+
+    #[test]
+    fn zone_blob_da_is_independent_of_base_chain_transaction_list() {
+        let tx = Transaction {
+            signer: [1u8; 20],
+            nonce: 0,
+            vm: VmKind::Native,
+            body: TxBody::Native(NativeCall::NoOp),
+        };
+        let tx_list_bytes = borsh::to_vec(&vec![tx]).unwrap();
+        let blob_payload = b"zone proof input blob".to_vec();
+        let blob = ZoneBlobDaV1 {
+            namespace: *b"zone0001",
+            payload: blob_payload.clone(),
+            share_size: 8,
+            sampling: DaSamplingParamsV1 {
+                seed: 41,
+                sample_count: 8,
+                min_samples: 4,
+            },
+        };
+        let (sidecar, commitment) = build_zone_blob_da_sidecar(&blob).unwrap();
+
+        assert_ne!(blob_payload, tx_list_bytes);
+        assert_eq!(commitment.namespace, *b"zone0001");
+        assert_eq!(commitment.byte_count, blob_payload.len() as u64);
+        assert_eq!(reconstruct_da_payload(&sidecar).unwrap(), blob_payload);
+    }
+
+    #[test]
+    fn zone_blob_da_header_commitment_binds_sampling_params() {
+        let blob = ZoneBlobDaV1 {
+            namespace: *b"zone0001",
+            payload: b"proof updates".to_vec(),
+            share_size: 8,
+            sampling: DaSamplingParamsV1 {
+                seed: 99,
+                sample_count: 8,
+                min_samples: 4,
+            },
+        };
+        let (sidecar, commitment) = build_zone_blob_da_sidecar(&blob).unwrap();
+        let payload_root = BlockPayload::ProofUpdates(Vec::new())
+            .payload_root()
+            .unwrap();
+        let mut header = BlockHeader {
+            version: 1,
+            chain_id: 41,
+            height: 1,
+            view: 0,
+            parent_hash: [0u8; 32],
+            parent_qc_hash: [0u8; 32],
+            proposer: [0u8; 32],
+            timestamp_ms: 1_000,
+            parent_state_root: [0u8; 32],
+            state_root: [0u8; 32],
+            tx_root: [0u8; 32],
+            receipt_root: [0u8; 32],
+            native_event_root: [0u8; 32],
+            evm_log_root: [0u8; 32],
+            zone_namespace: commitment.namespace,
+            da_root: commitment.da_root,
+            da_bytes: commitment.byte_count,
+            da_share_count: commitment.share_count,
+            da_gas_used: da_gas_for_sidecar(&sidecar),
+            da_fee_paid: da_fee_for_gas(da_gas_for_sidecar(&sidecar)),
+            gas_used: 0,
+            gas_limit: 60_000_000,
+            feature_set: ExecutionFeatureSetV1::empty(),
+            extra: proof_ingestion_header_extra(payload_root, &commitment).unwrap(),
+        };
+
+        verify_zone_blob_da_header(&header, &sidecar, &commitment, payload_root)
+            .expect("zone blob header verifies");
+
+        let mut tampered = commitment.clone();
+        tampered.sampling.seed = tampered.sampling.seed.saturating_add(1);
+        assert!(matches!(
+            verify_zone_blob_da_header(&header, &sidecar, &tampered, payload_root),
+            Err(DaVerifyError::Root)
+        ));
+
+        header.da_share_count = header.da_share_count.saturating_add(1);
+        assert!(matches!(
+            verify_zone_blob_da_header(&header, &sidecar, &commitment, payload_root),
+            Err(DaVerifyError::ShareCount)
+        ));
     }
 
     #[test]
@@ -3740,6 +4204,80 @@ mod tests {
     }
 
     #[test]
+    fn da_sampling_receipt_verifies_without_reconstruction() {
+        let payload = b"abcdefghijklmnopqrstuvwxyz0123456789";
+        let sidecar =
+            build_da_sidecar(payload, DEFAULT_DA_NAMESPACE, 8).expect("DA sidecar fixture");
+        let root = da_root(&sidecar);
+        let receipt = build_da_sampling_receipt(&sidecar, root, 41, 8).expect("sampling receipt");
+
+        verify_da_sampling_receipt(&receipt, root, DEFAULT_DA_NAMESPACE, 4)
+            .expect("receipt verifies");
+    }
+
+    #[test]
+    fn da_sampling_receipt_rejects_tampered_index() {
+        let payload = b"abcdefghijklmnopqrstuvwxyz0123456789";
+        let sidecar =
+            build_da_sidecar(payload, DEFAULT_DA_NAMESPACE, 8).expect("DA sidecar fixture");
+        let root = da_root(&sidecar);
+        let mut receipt =
+            build_da_sampling_receipt(&sidecar, root, 41, 8).expect("sampling receipt");
+        receipt.samples[0].index = receipt.samples[0].index.saturating_add(1);
+
+        assert!(matches!(
+            verify_da_sampling_receipt(&receipt, root, DEFAULT_DA_NAMESPACE, 4),
+            Err(DaVerifyError::ShareIndex)
+        ));
+    }
+
+    #[test]
+    fn da_sampling_receipt_rejects_tampered_commitment() {
+        let payload = b"abcdefghijklmnopqrstuvwxyz0123456789";
+        let sidecar =
+            build_da_sidecar(payload, DEFAULT_DA_NAMESPACE, 8).expect("DA sidecar fixture");
+        let root = da_root(&sidecar);
+        let mut receipt =
+            build_da_sampling_receipt(&sidecar, root, 41, 8).expect("sampling receipt");
+        receipt.samples[0].commitment[0] ^= 0xff;
+
+        assert!(matches!(
+            verify_da_sampling_receipt(&receipt, root, DEFAULT_DA_NAMESPACE, 4),
+            Err(DaVerifyError::ShareCommitment)
+        ));
+    }
+
+    #[test]
+    fn da_sampling_receipt_rejects_insufficient_samples() {
+        let payload = b"abcdefghijklmnopqrstuvwxyz0123456789";
+        let sidecar =
+            build_da_sidecar(payload, DEFAULT_DA_NAMESPACE, 8).expect("DA sidecar fixture");
+        let root = da_root(&sidecar);
+        let receipt = build_da_sampling_receipt(&sidecar, root, 41, 2).expect("sampling receipt");
+
+        assert!(matches!(
+            verify_da_sampling_receipt(&receipt, root, DEFAULT_DA_NAMESPACE, 4),
+            Err(DaVerifyError::InsufficientSamples)
+        ));
+    }
+
+    #[test]
+    fn da_sampling_receipt_does_not_replace_full_reconstruction() {
+        let payload = b"abcdefghijklmnopqrstuvwxyz0123456789";
+        let sidecar =
+            build_da_sidecar(payload, DEFAULT_DA_NAMESPACE, 8).expect("DA sidecar fixture");
+        let root = da_root(&sidecar);
+        let receipt = build_da_sampling_receipt(&sidecar, root, 41, 4).expect("sampling receipt");
+
+        verify_da_sampling_receipt(&receipt, root, DEFAULT_DA_NAMESPACE, 4)
+            .expect("receipt verifies");
+        assert_eq!(
+            reconstruct_da_payload(&sidecar).expect("full reconstruction still works"),
+            payload
+        );
+    }
+
+    #[test]
     fn proof_rejects_wrong_da_root() {
         let mut st = State::default();
         let addr = [9u8; 20];
@@ -3791,6 +4329,76 @@ mod tests {
         assert!(matches!(
             verify_block_validity_proof(&block, &proof),
             Err(ProofVerifyError::DaRoot)
+        ));
+    }
+
+    #[test]
+    fn proof_rejects_tampered_zone_blob_da_sidecar() {
+        let mut st = State::default();
+        let mut block = execute_and_build_block(
+            41,
+            1,
+            0,
+            [7u8; 32],
+            [0u8; 32],
+            [0u8; 32],
+            1_000,
+            60_000_000,
+            &mut st,
+            Vec::new(),
+            eth_signed_raws_for_txs(0),
+        )
+        .unwrap();
+        let payload_root = BlockPayload::ProofUpdates(Vec::new())
+            .payload_root()
+            .unwrap();
+        let blob = ZoneBlobDaV1 {
+            namespace: block.header.zone_namespace,
+            payload: b"zone proof blob".to_vec(),
+            share_size: 8,
+            sampling: DaSamplingParamsV1 {
+                seed: 41,
+                sample_count: 8,
+                min_samples: 4,
+            },
+        };
+        let (sidecar, commitment) = build_zone_blob_da_sidecar(&blob).unwrap();
+        block.header.da_root = commitment.da_root;
+        block.header.da_bytes = commitment.byte_count;
+        block.header.da_share_count = commitment.share_count;
+        block.header.da_gas_used = da_gas_for_sidecar(&sidecar);
+        block.header.da_fee_paid = da_fee_for_gas(block.header.da_gas_used);
+        block.header.extra = proof_ingestion_header_extra(payload_root, &commitment).unwrap();
+        block.da_sidecar = sidecar;
+        let mut proof = BlockValidityProof {
+            chain_id: block.header.chain_id,
+            height: block.header.height,
+            block_hash: header_hash(&block.header).unwrap(),
+            timestamp_ms: block.header.timestamp_ms,
+            parent_state_root: block.header.parent_state_root,
+            state_root: block.header.state_root,
+            tx_root: block.header.tx_root,
+            receipt_root: block.header.receipt_root,
+            native_event_root: block.header.native_event_root,
+            evm_log_root: block.header.evm_log_root,
+            gas_used: block.header.gas_used,
+            zone_namespace: block.header.zone_namespace,
+            da_root: block.header.da_root,
+            circuit_version: CircuitVersion::DevMixedV1,
+            coverage_manifest_digest: coverage_manifest_digest(
+                &coverage_manifest_for_circuit_version(CircuitVersion::DevMixedV1),
+            )
+            .unwrap(),
+            feature_set: block.header.feature_set,
+            proof_system: ValidityProofSystem::DevDigest,
+            proof_bytes: Vec::new(),
+        };
+        proof.proof_bytes = validity_proof_public_input_digest(&proof).unwrap().to_vec();
+        block.da_sidecar.shares[0].data[0] ^= 0xff;
+
+        assert!(matches!(
+            verify_block_validity_proof(&block, &proof),
+            Err(ProofVerifyError::DataAvailability)
         ));
     }
 

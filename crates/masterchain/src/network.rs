@@ -7,15 +7,15 @@ use fractal_network::{MASTERCHAIN_TIMEOUTS_TOPIC_STR, MASTERCHAIN_VOTES_TOPIC_ST
 use futures::StreamExt;
 use libp2p::gossipsub::{self, IdentTopic};
 use libp2p::{
-    Multiaddr, PeerId, Swarm, SwarmBuilder,
     multiaddr::Protocol,
     swarm::{NetworkBehaviour, SwarmEvent},
+    Multiaddr, PeerId, Swarm, SwarmBuilder,
 };
 use tokio::sync::mpsc::UnboundedReceiver;
 use tokio::sync::oneshot;
 
-use crate::MasterchainHandle;
 use crate::bft::{MasterchainTimeoutGossipV1, MasterchainVoteGossipV1};
+use crate::MasterchainHandle;
 
 #[derive(NetworkBehaviour)]
 pub struct MasterchainNetBehaviour {

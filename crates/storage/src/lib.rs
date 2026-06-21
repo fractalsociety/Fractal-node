@@ -27,6 +27,16 @@ pub enum WitnessMetadataStoreError {
 }
 
 #[derive(BorshSerialize, BorshDeserialize, Clone, Debug, PartialEq, Eq)]
+pub struct StoredZoneProofFinalityRecord {
+    pub zone_id: u64,
+    pub height: u64,
+    pub block_hash: Hash256,
+    pub accepted_at_ms: u64,
+    pub circuit_version: CircuitVersion,
+    pub public_input_digest: Hash256,
+}
+
+#[derive(BorshSerialize, BorshDeserialize, Clone, Debug, PartialEq, Eq)]
 pub struct StoredProofFinalityRecord {
     pub block_hash: Hash256,
     pub height: u64,
@@ -35,6 +45,7 @@ pub struct StoredProofFinalityRecord {
     pub coverage_manifest_digest: Hash256,
     pub public_input_digest: Hash256,
     pub proof: BlockValidityProof,
+    pub zone_records: Vec<StoredZoneProofFinalityRecord>,
 }
 
 #[derive(BorshSerialize, BorshDeserialize, Clone, Debug, Default, PartialEq, Eq)]

@@ -5,7 +5,7 @@
 //! links and transaction roots, and binds the resulting trace root into STWO public inputs.
 
 use borsh::{BorshDeserialize, BorshSerialize};
-use fractal_consensus::{Block, header_hash, ordered_tx_root};
+use fractal_consensus::{header_hash, ordered_tx_root, Block};
 use fractal_crypto::hash::keccak256;
 
 use crate::CheckpointJob;
@@ -235,8 +235,8 @@ pub fn trace_from_checkpoint_job(job: &CheckpointJob) -> RiscvExecutionTraceV1 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use fractal_consensus::{BlockHeader, genesis_parent_qc, ordered_tx_root};
-    use fractal_core::{HARDHAT_DEFAULT_SIGNER_0, NativeCall, Transaction, TxBody, VmKind};
+    use fractal_consensus::{genesis_parent_qc, ordered_tx_root, BlockHeader};
+    use fractal_core::{NativeCall, Transaction, TxBody, VmKind, HARDHAT_DEFAULT_SIGNER_0};
 
     fn tx(nonce: u64) -> Transaction {
         Transaction {

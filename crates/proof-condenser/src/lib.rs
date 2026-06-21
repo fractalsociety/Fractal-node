@@ -13,26 +13,26 @@ mod checkpoint_stwo;
 mod persist;
 mod riscv_trace;
 
-pub use artifact::{CHECKPOINT_STWO_ARTIFACT_VERSION, CheckpointStwoArtifactV1};
+pub use artifact::{CheckpointStwoArtifactV1, CHECKPOINT_STWO_ARTIFACT_VERSION};
 pub use checkpoint_stwo::{
-    CHECKPOINT_STWO_LOG_ROWS, FIB_TRACE_WIDTH, StwoCheckpointError,
     checkpoint_stwo_digest_from_json, prove_and_verify_checkpoint_stwo, prove_checkpoint_stwo,
-    verify_checkpoint_stwo_proof_json,
+    verify_checkpoint_stwo_proof_json, StwoCheckpointError, CHECKPOINT_STWO_LOG_ROWS,
+    FIB_TRACE_WIDTH,
 };
 pub use persist::{
-    PERSISTED_CHECKPOINT_PROOF_VERSION, PersistedCheckpointProofV1, ProofArtifactRegistry,
-    ProofPersistenceConfig, build_persisted_checkpoint_proof,
+    build_persisted_checkpoint_proof, PersistedCheckpointProofV1, ProofArtifactRegistry,
+    ProofPersistenceConfig, PERSISTED_CHECKPOINT_PROOF_VERSION,
 };
 
 pub use riscv_trace::{
-    RiscvExecutionTraceV1, RiscvGuestTraceStub, RiscvTraceError, RiscvTraceOpV1, RiscvTraceStepV1,
-    riscv_trace_from_blocks, trace_from_checkpoint_job,
+    riscv_trace_from_blocks, trace_from_checkpoint_job, RiscvExecutionTraceV1, RiscvGuestTraceStub,
+    RiscvTraceError, RiscvTraceOpV1, RiscvTraceStepV1,
 };
 
 use std::io;
 
 use borsh::{BorshDeserialize, BorshSerialize};
-use fractal_consensus::{Block, header_hash};
+use fractal_consensus::{header_hash, Block};
 
 /// Public inputs for a single committed block checkpoint (cheap to clone onto a channel).
 #[derive(Debug, Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
@@ -205,7 +205,7 @@ pub fn spawn_async_proof_condenser(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use fractal_consensus::{BlockHeader, genesis_parent_qc};
+    use fractal_consensus::{genesis_parent_qc, BlockHeader};
 
     fn fake_block(height: u64, view: u64) -> Block {
         Block {

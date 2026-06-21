@@ -6,12 +6,15 @@ use fractal_consensus::{
     execute_and_build_block, header_hash, mixed_execution_witness_from_replay,
     mixed_execution_witness_metadata, mixed_intrablock_aggregate_proof_envelope_v1,
     native_recursive_proof_envelope_v1, native_state_transition_statement_v1,
-    validity_proof_public_input_digest, BlockValidityProof, CircuitVersion, ExecutionFeatureSetV1,
-    ValidityProofSystem, WitnessRetentionPolicyV1,
+    validity_proof_public_input_digest, BlockPayloadKind, BlockValidityProof, CircuitVersion,
+    ExecutionFeatureSetV1, ValidityProofSystem, WitnessRetentionPolicyV1,
 };
 use fractal_core::{NativeCall, Transaction, TxBody, VmKind};
 use fractal_crypto::hash::keccak256;
-use fractal_node::{NodeInner, SettlementAccessError, SyncApplyError, HARDHAT_DEFAULT_SIGNER_0};
+use fractal_node::{
+    block_apply_mode_for_payload_kind, BlockApplyMode, NodeInner, SettlementAccessError,
+    SyncApplyError, HARDHAT_DEFAULT_SIGNER_0,
+};
 use fractal_storage::ProofFinalityStore;
 
 fn native_transition_witness(
@@ -102,9 +105,7 @@ fn mixed_aggregate_block_proof(
     proof
 }
 
-#[test]
-fn apply_synced_block_fills_mined_txs_for_native_noop() {
-    let mut n = NodeInner::devnet();
+fn native_noop_block(n: &NodeInner) -> fractal_consensus::Block {
     let tx = Transaction {
         signer: HARDHAT_DEFAULT_SIGNER_0,
         nonce: 0,
@@ -112,9 +113,9 @@ fn apply_synced_block_fills_mined_txs_for_native_noop() {
         body: TxBody::Native(NativeCall::NoOp),
     };
     let mut scratch = n.state.clone();
-    let block = execute_and_build_block(
+    execute_and_build_block(
         n.chain_id,
-        1,
+        n.height + 1,
         n.view,
         n.head_hash,
         n.parent_qc_hash,
@@ -125,7 +126,33 @@ fn apply_synced_block_fills_mined_txs_for_native_noop() {
         vec![tx],
         eth_signed_raws_for_txs(1),
     )
-    .expect("block");
+    .expect("block")
+}
+
+#[test]
+fn block_apply_mode_selection_is_payload_kind_driven() {
+    assert_eq!(
+        block_apply_mode_for_payload_kind(BlockPayloadKind::FullTransactions),
+        BlockApplyMode::ReplayFullTransactions
+    );
+    assert_eq!(
+        block_apply_mode_for_payload_kind(BlockPayloadKind::ProofUpdates),
+        BlockApplyMode::VerifyProofAndDa
+    );
+    assert_eq!(
+        block_apply_mode_for_payload_kind(BlockPayloadKind::CertificateBatches),
+        BlockApplyMode::VerifyProofAndDa
+    );
+    assert_eq!(
+        block_apply_mode_for_payload_kind(BlockPayloadKind::Mixed),
+        BlockApplyMode::VerifyProofAndDa
+    );
+}
+
+#[test]
+fn apply_synced_block_fills_mined_txs_for_native_noop() {
+    let mut n = NodeInner::devnet();
+    let block = native_noop_block(&n);
 
     n.apply_synced_block(&block).expect("apply");
 
@@ -135,6 +162,44 @@ fn apply_synced_block_fills_mined_txs_for_native_noop() {
         "follower should index mined tx by internal hash"
     );
     assert_eq!(n.height, 1);
+}
+
+#[test]
+fn explicit_replay_apply_mode_stays_callable_for_archive_nodes() {
+    let mut n = NodeInner::devnet();
+    let block = native_noop_block(&n);
+
+    n.apply_synced_block_with_mode(&block, BlockApplyMode::ReplayFullTransactions)
+        .expect("archive replay");
+
+    assert_eq!(n.height, 1);
+    assert_eq!(n.blocks.len(), 1);
+}
+
+#[test]
+fn proof_ingestion_apply_mode_fails_closed_until_verifier_is_wired() {
+    let mut n = NodeInner::devnet();
+    let block = native_noop_block(&n);
+
+    assert!(matches!(
+        n.apply_synced_block_with_mode(&block, BlockApplyMode::VerifyProofAndDa),
+        Err(SyncApplyError::ProofIngestionApplyUnavailable)
+    ));
+    assert_eq!(n.height, 0);
+    assert!(n.blocks.is_empty());
+}
+
+#[test]
+fn header_only_apply_mode_requires_proof_finality() {
+    let mut n = NodeInner::devnet();
+    let block = native_noop_block(&n);
+
+    assert!(matches!(
+        n.apply_synced_block_with_mode(&block, BlockApplyMode::HeaderOnlyAfterProofFinal),
+        Err(SyncApplyError::HeaderOnlyRequiresProofFinal)
+    ));
+    assert_eq!(n.height, 0);
+    assert!(n.blocks.is_empty());
 }
 
 #[test]
@@ -753,6 +818,15 @@ fn proof_finality_records_persist_to_store() {
     assert_eq!(
         restored.proof_metrics.proof_final_height,
         block.header.height
+    );
+    let zone_id = u64::from_be_bytes(block.header.zone_namespace);
+    assert_eq!(
+        restored.latest_proof_final_height_for_zone(zone_id),
+        Some(block.header.height)
+    );
+    assert_eq!(
+        restored.zone_update_finality(zone_id, block.header.height),
+        Some(fractal_node::BlockFinality::Proof)
     );
     let _ = std::fs::remove_file(&path);
 }

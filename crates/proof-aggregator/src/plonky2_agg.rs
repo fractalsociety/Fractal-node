@@ -2,7 +2,7 @@
 
 use std::sync::OnceLock;
 
-use anyhow::{Context, anyhow};
+use anyhow::{anyhow, Context};
 use fractal_crypto::hash::Hash256;
 use fractal_shard::ProofSubmissionV1;
 use plonky2::field::goldilocks_field::GoldilocksField;
@@ -17,8 +17,8 @@ use plonky2::plonk::proof::ProofWithPublicInputs;
 
 use crate::aggregate::PLONKY2_AGGREGATOR_VERSION;
 use crate::statement::{
-    MAX_AGG_PROOFS, VerifiedStwoStatementV1, encode_statement_u64, encode_verified_statement_u64,
-    statement_field_len, verified_statement_field_len,
+    encode_statement_u64, encode_verified_statement_u64, statement_field_len,
+    verified_statement_field_len, VerifiedStwoStatementV1, MAX_AGG_PROOFS,
 };
 
 const D: usize = 2;

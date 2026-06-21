@@ -10,6 +10,8 @@ members = [
     "crates/evm",
     "crates/storage",
     "crates/shard",
+    "crates/proof-aggregator",
+    "crates/masterchain",
     "crates/mempool",
     "crates/eth-wire",
     "crates/rpc",
@@ -22,6 +24,9 @@ members = [
     "crates/benchmarks",
     "crates/fractal-society",
     "tools/load-tps",
+]
+exclude = [
+    "crates/proof-condenser",
 ]
 
 [workspace.package]

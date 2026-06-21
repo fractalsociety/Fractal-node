@@ -1,12 +1,12 @@
 //! HotStuff-style BFT over masterchain blocks (coordination only, PRD §7.10).
 
 use fractal_consensus::{
-    FormedQc, FormedTimeoutCert, QuorumCertificate, RecordTimeoutOutcome, Timeout, TimeoutPool,
-    TimeoutSignBody, Vote, VotePool, VoteSignBody, is_genesis_parent_qc, verify_formed_qc,
-    verify_formed_timeout_cert,
+    is_genesis_parent_qc, verify_formed_qc, verify_formed_timeout_cert, FormedQc,
+    FormedTimeoutCert, QuorumCertificate, RecordTimeoutOutcome, Timeout, TimeoutPool,
+    TimeoutSignBody, Vote, VotePool, VoteSignBody,
 };
-use fractal_crypto::Hash256;
 use fractal_crypto::hash::keccak256;
+use fractal_crypto::Hash256;
 use fractal_shard::MasterchainBlockV1;
 
 /// Gossiped masterchain vote envelope (topic payload is `borsh(Self)`).
@@ -142,8 +142,10 @@ mod tests {
                 witness_commitment: [2u8; 32],
             }],
             validity_proofs: vec![],
+            zone_proof_commitments: vec![],
             global_state_root: [3u8; 32],
             global_zk_root: [4u8; 32],
+            forced_inclusion_queue_root: [0u8; 32],
             cross_shard_messages: vec![],
         };
         assert_eq!(masterchain_block_hash(&b), masterchain_block_hash(&b));

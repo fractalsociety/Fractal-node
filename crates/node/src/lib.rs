@@ -12,25 +12,36 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use borsh::BorshDeserialize;
 use fractal_consensus::{
-    coverage_manifest_for_circuit_version, da_encoded_bytes, da_root, execute_and_build_block,
+    build_zone_blob_da_sidecar, coverage_manifest_for_circuit_version, da_encoded_bytes,
+    da_fee_for_gas, da_gas_for_sidecar, da_root, execute_and_build_block,
     expected_parent_qc_for_parent_header, genesis_parent_qc, hash_qc, header_hash,
-    next_parent_qc_hash_after_commit, ordered_tx_root, reconstruct_da_payload,
-    validity_proof_public_input_digest, Block, BlockValidityProof, CircuitVersion, DaShare,
-    ExecutionFeatureSetV1, FormedQc, MixedExecutionWitnessMetadataV1, ProofVerifyError,
-    RecordVoteOutcome, StwoPlonky2ProofEnvelope, Vote, VotePool,
+    next_parent_qc_hash_after_commit, ordered_tx_root, proof_ingestion_header_extra,
+    reconstruct_da_payload, validity_proof_public_input_digest, Block, BlockPayload,
+    BlockPayloadItem, BlockPayloadKind, BlockValidityProof, CircuitVersion, DaSamplingParamsV1,
+    DaShare, ExecutionFeatureSetV1, FormedQc, MixedExecutionWitnessMetadataV1,
+    OwnedObjectCertificateBatchV1, ProofVerifyError, RecordVoteOutcome, StwoPlonky2ProofEnvelope,
+    Vote, VotePool, ZoneBlobDaV1, ZoneProofUpdateV1,
 };
 use fractal_core::{
-    Address, EvmEngine, NativeCall, ProtocolPhaseConfig, State, Transaction, TxBody, VmKind,
+    Address, EvmEngine, NativeCall, OwnedObjectCertificate, OwnedObjectCertificateSignBody,
+    OwnedObjectValidatorSignature, OwnedObjectVersion, ProtocolPhaseConfig, State, Transaction,
+    TxBody, VmKind,
 };
 use fractal_crypto::hash::keccak256;
 use fractal_crypto::BlsSecretKey;
-use fractal_mempool::{next_base_fee, BaseFeeParams, Mempool, PooledTx};
+use fractal_mempool::{
+    next_base_fee, BaseFeeParams, CertificateFinalityRecord, CertificatePool, CertificatePoolError,
+    Mempool, PooledProofUpdate, PooledTx, ProofPool, ProofPoolError,
+};
 use fractal_rpc::{
     logs_bloom_256, make_rpc_log, ChainInteraction, ProofCommitmentResponse, RpcChainConfig,
-    RpcConsensusDiagnostics, RpcDaMetrics, RpcMempoolLaneMetrics, RpcProofMetrics,
-    RpcProofRejectionMetric,
+    RpcConsensusDiagnostics, RpcDaMetrics, RpcMempoolLaneMetrics, RpcOwnedObjectCertificate,
+    RpcOwnedObjectCountersignature, RpcOwnedObjectPrecheck, RpcProofMetrics,
+    RpcProofRejectionMetric, RpcProofUpdateSubmission, RpcRoutingDiagnostics,
 };
-use fractal_storage::{ProofFinalityStore, StoredProofFinalityRecord};
+use fractal_storage::{
+    ProofFinalityStore, StoredProofFinalityRecord, StoredZoneProofFinalityRecord,
+};
 use libp2p::multiaddr::Protocol;
 use libp2p::Multiaddr;
 use thiserror::Error;
@@ -54,6 +65,10 @@ pub enum SyncApplyError {
     StateRoot,
     #[error("tx root mismatch after replay")]
     TxRoot,
+    #[error("proof-ingestion apply path is not wired yet")]
+    ProofIngestionApplyUnavailable,
+    #[error("header-only apply requires an already proof-final block")]
+    HeaderOnlyRequiresProofFinal,
     #[error("gas used mismatch: header {header}, replay {replay}")]
     GasUsedMismatch { header: u64, replay: u64 },
     #[error("synced block eth_signed_raw length does not match transactions")]
@@ -90,6 +105,81 @@ pub enum BlockFinality {
     Proof,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ZoneProofFinalityRecord {
+    pub zone_id: u64,
+    pub height: u64,
+    pub block_hash: fractal_crypto::Hash256,
+    pub accepted_at_ms: u64,
+    pub circuit_version: CircuitVersion,
+    pub public_input_digest: fractal_crypto::Hash256,
+    pub finality: BlockFinality,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BlockPayloadMode {
+    Legacy,
+    ProofIngestion,
+    Mixed,
+}
+
+impl BlockPayloadMode {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Legacy => "legacy",
+            Self::ProofIngestion => "proof_ingestion",
+            Self::Mixed => "mixed",
+        }
+    }
+
+    pub fn parse(raw: &str) -> Option<Self> {
+        match raw.trim().to_ascii_lowercase().as_str() {
+            "" | "legacy" => Some(Self::Legacy),
+            "proof_ingestion" | "proof-ingestion" | "proof" => Some(Self::ProofIngestion),
+            "mixed" => Some(Self::Mixed),
+            _ => None,
+        }
+    }
+
+    fn from_env() -> Self {
+        match std::env::var("FRACTAL_BLOCK_PAYLOAD_MODE") {
+            Ok(raw) => match Self::parse(&raw) {
+                Some(mode) => mode,
+                None => {
+                    eprintln!(
+                        "fractal-node: invalid FRACTAL_BLOCK_PAYLOAD_MODE={raw:?}; defaulting to legacy"
+                    );
+                    Self::Legacy
+                }
+            },
+            Err(_) => Self::Legacy,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BlockApplyMode {
+    ReplayFullTransactions,
+    VerifyProofAndDa,
+    HeaderOnlyAfterProofFinal,
+}
+
+pub trait BlockApplyVerifier {
+    fn verify_proof_and_da(&mut self, block: &Block) -> Result<(), SyncApplyError>;
+
+    fn apply_header_only_after_proof_final(&mut self, block: &Block) -> Result<(), SyncApplyError>;
+}
+
+#[must_use]
+pub fn block_apply_mode_for_payload_kind(payload_kind: BlockPayloadKind) -> BlockApplyMode {
+    match payload_kind {
+        BlockPayloadKind::FullTransactions => BlockApplyMode::ReplayFullTransactions,
+        BlockPayloadKind::ProofUpdates
+        | BlockPayloadKind::CertificateBatches
+        | BlockPayloadKind::Mixed => BlockApplyMode::VerifyProofAndDa,
+    }
+}
+
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum SettlementAccessError {
     #[error("block not found")]
@@ -121,6 +211,7 @@ pub struct ChainConfig {
     pub native_transition_proofs_enabled: bool,
     pub proofs_required_for_settlement: ExecutionFeatureSetV1,
     pub phase_config: ProtocolPhaseConfig,
+    pub block_payload_mode: BlockPayloadMode,
 }
 
 impl Default for ChainConfig {
@@ -130,6 +221,7 @@ impl Default for ChainConfig {
             native_transition_proofs_enabled: false,
             proofs_required_for_settlement: ExecutionFeatureSetV1::empty(),
             phase_config: ProtocolPhaseConfig::testnet(),
+            block_payload_mode: BlockPayloadMode::Legacy,
         }
     }
 }
@@ -193,6 +285,10 @@ fn validator_set_hash(validators: &ValidatorSet) -> fractal_crypto::Hash256 {
 
 fn hash_hex(hash: &fractal_crypto::Hash256) -> String {
     format!("0x{}", hex::encode(hash))
+}
+
+fn addr_hex(address: &Address) -> String {
+    format!("0x{}", hex::encode(address))
 }
 
 fn devnet_validator_set_from_env() -> ValidatorSet {
@@ -392,6 +488,8 @@ pub struct NodeInner {
     pub vote_sink: Option<tokio::sync::mpsc::UnboundedSender<Vec<u8>>>,
     pub state: State,
     pub mempool: Mempool,
+    pub proof_pool: ProofPool,
+    pub certificate_pool: CertificatePool,
     pub base_fee: u128,
     pub gas_limit: u64,
     pub fee_params: BaseFeeParams,
@@ -407,6 +505,9 @@ pub struct NodeInner {
     /// Blocks that have passed the validity-proof gate. Committee commits are soft-final;
     /// entries here are proof-final for settlement/bridging purposes.
     pub proof_finalized_blocks: BTreeMap<fractal_crypto::Hash256, BlockValidityProof>,
+    /// Proof-finality indexed by `(zone_id, zone/update height)`.
+    pub zone_proof_finality: BTreeMap<(u64, u64), ZoneProofFinalityRecord>,
+    pub latest_proof_final_height_by_zone: BTreeMap<u64, u64>,
     /// Research proof-hash commitments keyed by proof hash.
     pub proof_commitments: BTreeMap<fractal_crypto::Hash256, u64>,
     pub proof_finality_store: Option<ProofFinalityStore>,
@@ -483,6 +584,8 @@ impl NodeInner {
             vote_sink: None,
             state,
             mempool: Mempool::default(),
+            proof_pool: ProofPool::default(),
+            certificate_pool: CertificatePool::default(),
             base_fee: 1,
             gas_limit: 60_000_000,
             fee_params: BaseFeeParams::default(),
@@ -493,6 +596,8 @@ impl NodeInner {
             eth_rpc_to_internal_tx_hash: BTreeMap::new(),
             eth_internal_to_rpc_tx_hash: BTreeMap::new(),
             proof_finalized_blocks: BTreeMap::new(),
+            zone_proof_finality: BTreeMap::new(),
+            latest_proof_final_height_by_zone: BTreeMap::new(),
             proof_commitments: BTreeMap::new(),
             proof_finality_store: None,
             witness_metadata: BTreeMap::new(),
@@ -574,7 +679,7 @@ impl NodeInner {
         let leader_index = self.validators.leader_index(self.view);
         let leader_fingerprint = self.validators.expected_proposer(self.view);
         eprintln!(
-            "{prefix}: consensus_diagnostics genesis_hash={} validator_set_hash={} current_view={} current_leader_index={} current_leader_fingerprint={} quorum_threshold={} shard_id={} shard_count={} consensus_mode={}",
+            "{prefix}: consensus_diagnostics genesis_hash={} validator_set_hash={} current_view={} current_leader_index={} current_leader_fingerprint={} quorum_threshold={} shard_id={} shard_count={} consensus_mode={} block_payload_mode={}",
             hash_hex(&genesis_parent_hash()),
             hash_hex(&self.validator_set_hash()),
             self.view,
@@ -583,7 +688,8 @@ impl NodeInner {
             self.validators.quorum_threshold(),
             self.shard_id,
             self.shard_count,
-            self.consensus_mode
+            self.consensus_mode,
+            self.chain_config.block_payload_mode.as_str()
         );
     }
 
@@ -633,6 +739,94 @@ impl NodeInner {
         self.chain_config.phase_config = config;
     }
 
+    pub fn set_block_payload_mode(&mut self, mode: BlockPayloadMode) {
+        self.chain_config.block_payload_mode = mode;
+    }
+
+    #[must_use]
+    pub fn block_payload_mode(&self) -> BlockPayloadMode {
+        self.chain_config.block_payload_mode
+    }
+
+    fn shard_topology(&self) -> fractal_shard::ShardTopology {
+        fractal_shard::ShardTopology {
+            shard_count: self.shard_count,
+        }
+    }
+
+    fn routing_diagnostics_for_tx(&self, tx: &Transaction) -> RpcRoutingDiagnostics {
+        let topology = self.shard_topology();
+        let diagnostics =
+            fractal_shard::routing_diagnostics_for_signer(&tx.signer, self.shard_id, &topology);
+        RpcRoutingDiagnostics {
+            source_shard: format!("0x{:x}", diagnostics.source_shard),
+            expected_shard: format!("0x{:x}", diagnostics.expected_shard),
+            shard_count: format!("0x{:x}", diagnostics.shard_count),
+            route_key: diagnostics.route_key,
+            accepted: diagnostics.accepted,
+        }
+    }
+
+    fn check_tx_shard_route(&self, tx: &Transaction) -> Result<RpcRoutingDiagnostics, String> {
+        let topology = self.shard_topology();
+        match fractal_shard::check_accepts_transaction_with_diagnostics(
+            &tx.signer,
+            self.shard_id,
+            &topology,
+        ) {
+            Ok(_) => Ok(self.routing_diagnostics_for_tx(tx)),
+            Err((_err, diagnostics)) => Err(format!(
+                "wrong shard: source_shard=0x{:x} expected_shard=0x{:x} shard_count=0x{:x} route_key={}",
+                diagnostics.source_shard,
+                diagnostics.expected_shard,
+                diagnostics.shard_count,
+                diagnostics.route_key
+            )),
+        }
+    }
+
+    pub fn submit_proof_update(
+        &mut self,
+        update: ZoneProofUpdateV1,
+        max_priority_fee: u128,
+    ) -> Result<fractal_crypto::Hash256, ProofPoolError> {
+        let update_hash = fractal_consensus::proof_update_leaf_hash(&update)
+            .expect("ZoneProofUpdateV1 proof leaf hash is infallible for fixed-size fields");
+        self.proof_pool.insert(PooledProofUpdate {
+            update,
+            max_priority_fee,
+        })?;
+        Ok(update_hash)
+    }
+
+    pub fn submit_owned_object_certificate(
+        &mut self,
+        certificate: OwnedObjectCertificate,
+    ) -> Result<fractal_crypto::Hash256, CertificatePoolError> {
+        let pubkeys = (0..self.validators.len())
+            .filter_map(|idx| self.validators.bls_pubkey(idx).copied())
+            .collect::<Vec<_>>();
+        self.certificate_pool
+            .insert(certificate, &pubkeys, self.validators.quorum_threshold())
+    }
+
+    pub fn owned_object_certificate_finality(
+        &self,
+        object_version: &OwnedObjectVersion,
+    ) -> Option<&CertificateFinalityRecord> {
+        self.certificate_pool
+            .finality_for_object_version(object_version)
+    }
+
+    pub fn certificate_batch_payload_root_hook(
+        &self,
+    ) -> Result<fractal_crypto::Hash256, std::io::Error> {
+        BlockPayload::CertificateBatches(vec![OwnedObjectCertificateBatchV1 {
+            certificates: self.certificate_pool.accepted_certificates(),
+        }])
+        .payload_root()
+    }
+
     pub fn record_witness_metadata(&mut self, metadata: MixedExecutionWitnessMetadataV1) {
         let started = now_ms();
         self.witness_metadata.insert(metadata.block_hash, metadata);
@@ -659,8 +853,60 @@ impl NodeInner {
                 self.proof_metrics.proofs_accepted.saturating_add(1);
             self.proof_finalized_blocks
                 .insert(record.block_hash, record.proof);
+            for zone in record.zone_records {
+                self.insert_zone_proof_finality_record(ZoneProofFinalityRecord {
+                    zone_id: zone.zone_id,
+                    height: zone.height,
+                    block_hash: zone.block_hash,
+                    accepted_at_ms: zone.accepted_at_ms,
+                    circuit_version: zone.circuit_version,
+                    public_input_digest: zone.public_input_digest,
+                    finality: BlockFinality::Proof,
+                });
+            }
         }
         Ok(())
+    }
+
+    fn zone_id_from_namespace(namespace: fractal_consensus::ExecutionZoneNamespace) -> u64 {
+        u64::from_be_bytes(namespace)
+    }
+
+    fn zone_record_from_block_proof(
+        proof: &BlockValidityProof,
+        accepted_at_ms: u64,
+        public_input_digest: fractal_crypto::Hash256,
+    ) -> ZoneProofFinalityRecord {
+        ZoneProofFinalityRecord {
+            zone_id: Self::zone_id_from_namespace(proof.zone_namespace),
+            height: proof.height,
+            block_hash: proof.block_hash,
+            accepted_at_ms,
+            circuit_version: proof.circuit_version,
+            public_input_digest,
+            finality: BlockFinality::Proof,
+        }
+    }
+
+    fn insert_zone_proof_finality_record(&mut self, record: ZoneProofFinalityRecord) {
+        self.latest_proof_final_height_by_zone
+            .entry(record.zone_id)
+            .and_modify(|height| *height = (*height).max(record.height))
+            .or_insert(record.height);
+        self.zone_proof_finality
+            .insert((record.zone_id, record.height), record);
+    }
+
+    pub fn latest_proof_final_height_for_zone(&self, zone_id: u64) -> Option<u64> {
+        self.latest_proof_final_height_by_zone
+            .get(&zone_id)
+            .copied()
+    }
+
+    pub fn zone_update_finality(&self, zone_id: u64, height: u64) -> Option<BlockFinality> {
+        self.zone_proof_finality
+            .get(&(zone_id, height))
+            .map(|record| record.finality)
     }
 
     /// Record this validator's vote for `committed` in the local pool and enqueue it for
@@ -800,8 +1046,11 @@ impl NodeInner {
         let block_hash = proof.block_hash;
         let accepted_at_ms = now_ms();
         let public_input_digest = validity_proof_public_input_digest(&proof)?;
+        let zone_record =
+            Self::zone_record_from_block_proof(&proof, accepted_at_ms, public_input_digest);
         self.proof_finalized_blocks
             .insert(block_hash, proof.clone());
+        self.insert_zone_proof_finality_record(zone_record.clone());
         if let Some(store) = &self.proof_finality_store {
             store.put_record(StoredProofFinalityRecord {
                 block_hash,
@@ -811,6 +1060,14 @@ impl NodeInner {
                 coverage_manifest_digest: proof.coverage_manifest_digest,
                 public_input_digest,
                 proof,
+                zone_records: vec![StoredZoneProofFinalityRecord {
+                    zone_id: zone_record.zone_id,
+                    height: zone_record.height,
+                    block_hash: zone_record.block_hash,
+                    accepted_at_ms: zone_record.accepted_at_ms,
+                    circuit_version: zone_record.circuit_version,
+                    public_input_digest: zone_record.public_input_digest,
+                }],
             })?;
         }
         self.record_proof_acceptance(block_height, block_timestamp_ms, accepted_at_ms);
@@ -1014,8 +1271,7 @@ impl NodeInner {
             .saturating_add(block.header.da_fee_paid);
     }
 
-    /// Replay txs and check roots against a received block (follower verification).
-    pub fn apply_synced_block(&mut self, block: &Block) -> Result<(), SyncApplyError> {
+    fn validate_synced_block_envelope(&self, block: &Block) -> Result<(), SyncApplyError> {
         if block.header.chain_id != self.chain_id {
             return Err(SyncApplyError::ChainId);
         }
@@ -1041,6 +1297,13 @@ impl NodeInner {
         if block.header.proposer != expected_proposer {
             return Err(SyncApplyError::InvalidProposer);
         }
+        Ok(())
+    }
+
+    fn apply_synced_block_replay_full_transactions(
+        &mut self,
+        block: &Block,
+    ) -> Result<(), SyncApplyError> {
         if block.eth_signed_raw.len() != block.transactions.len() {
             return Err(SyncApplyError::BlockEthRawLayout);
         }
@@ -1074,6 +1337,14 @@ impl NodeInner {
             return Err(SyncApplyError::TxRoot);
         }
         self.state = scratch;
+        self.commit_synced_block_header_and_indexes(block)?;
+        Ok(())
+    }
+
+    fn commit_synced_block_header_and_indexes(
+        &mut self,
+        block: &Block,
+    ) -> Result<(), SyncApplyError> {
         self.height = block.header.height;
         let hh = header_hash(&block.header)?;
         self.head_hash = hh;
@@ -1085,6 +1356,36 @@ impl NodeInner {
         self.sync_rpc_index_from_block(block);
         self.forward_vote_after_commit(block);
         Ok(())
+    }
+
+    /// Apply a received block using an explicit mode. This keeps replay available
+    /// for archive nodes while letting validators select proof-driven paths once
+    /// proof-ingestion payloads are wired.
+    pub fn apply_synced_block_with_mode(
+        &mut self,
+        block: &Block,
+        mode: BlockApplyMode,
+    ) -> Result<(), SyncApplyError> {
+        self.validate_synced_block_envelope(block)?;
+        match mode {
+            BlockApplyMode::ReplayFullTransactions => {
+                self.apply_synced_block_replay_full_transactions(block)
+            }
+            BlockApplyMode::VerifyProofAndDa => {
+                <Self as BlockApplyVerifier>::verify_proof_and_da(self, block)?;
+                self.commit_synced_block_header_and_indexes(block)
+            }
+            BlockApplyMode::HeaderOnlyAfterProofFinal => {
+                <Self as BlockApplyVerifier>::apply_header_only_after_proof_final(self, block)?;
+                self.commit_synced_block_header_and_indexes(block)
+            }
+        }
+    }
+
+    /// Replay txs and check roots against a received block (follower verification).
+    pub fn apply_synced_block(&mut self, block: &Block) -> Result<(), SyncApplyError> {
+        let mode = block_apply_mode_for_payload_kind(block.payload_kind());
+        self.apply_synced_block_with_mode(block, mode)
     }
 
     /// Populate `mined_txs`, `eth_signed_raw`, and RPC hash maps from a committed block (producer
@@ -1145,6 +1446,23 @@ impl NodeInner {
     }
 }
 
+impl BlockApplyVerifier for NodeInner {
+    fn verify_proof_and_da(&mut self, block: &Block) -> Result<(), SyncApplyError> {
+        fractal_consensus::verify_da_sidecar(&block.header, &block.da_sidecar)
+            .map_err(|_| SyncApplyError::DataAvailability)?;
+        Err(SyncApplyError::ProofIngestionApplyUnavailable)
+    }
+
+    fn apply_header_only_after_proof_final(&mut self, block: &Block) -> Result<(), SyncApplyError> {
+        let hh = header_hash(&block.header)?;
+        if self.proof_finalized_blocks.contains_key(&hh) {
+            Ok(())
+        } else {
+            Err(SyncApplyError::HeaderOnlyRequiresProofFinal)
+        }
+    }
+}
+
 impl ChainInteraction for NodeInner {
     fn block_number(&self) -> u64 {
         self.height
@@ -1182,6 +1500,7 @@ impl ChainInteraction for NodeInner {
         // Dev stub: accept either (a) borsh-encoded internal txs, or (b) real Ethereum EIP-1559
         // signed tx bytes (type 0x02) for Hardhat/MetaMask compatibility.
         if let Ok(tx) = Transaction::try_from_slice(raw) {
+            self.check_tx_shard_route(&tx)?;
             let h = keccak256(raw);
             self.pending_txs.insert(h, tx.clone());
             self.mempool.insert(PooledTx {
@@ -1195,6 +1514,7 @@ impl ChainInteraction for NodeInner {
 
         let (tx, h, max_priority_fee_per_gas, max_fee_per_gas) =
             eth_signed::to_core_tx(raw, self.chain_id)?;
+        self.check_tx_shard_route(&tx)?;
         self.pending_txs.insert(h, tx.clone());
         self.eth_signed_raw.insert(h, raw.to_vec());
         self.mempool.insert(PooledTx {
@@ -1204,6 +1524,15 @@ impl ChainInteraction for NodeInner {
             eth_signed_raw: Some(raw.to_vec()),
         });
         Ok(())
+    }
+
+    fn routing_diagnostics_for_raw_tx(&self, raw: &[u8]) -> Result<RpcRoutingDiagnostics, String> {
+        if let Ok(tx) = Transaction::try_from_slice(raw) {
+            return Ok(self.routing_diagnostics_for_tx(&tx));
+        }
+        let (tx, _h, _max_priority_fee_per_gas, _max_fee_per_gas) =
+            eth_signed::to_core_tx(raw, self.chain_id)?;
+        Ok(self.routing_diagnostics_for_tx(&tx))
     }
 
     fn base_fee_per_gas(&self) -> u128 {
@@ -1276,6 +1605,29 @@ impl ChainInteraction for NodeInner {
 
     fn proof_for_block(&self, hash: &[u8; 32]) -> Option<BlockValidityProof> {
         self.proof_finalized_blocks.get(hash).cloned()
+    }
+
+    fn latest_proof_final_height_for_zone(&self, zone_id: u64) -> Option<u64> {
+        NodeInner::latest_proof_final_height_for_zone(self, zone_id)
+    }
+
+    fn zone_update_finality(&self, zone_id: u64, height: u64) -> Option<String> {
+        NodeInner::zone_update_finality(self, zone_id, height).map(|finality| match finality {
+            BlockFinality::Soft => "soft".to_owned(),
+            BlockFinality::Proof => "proof".to_owned(),
+        })
+    }
+
+    fn owned_object_finality(
+        &self,
+        object_version: &OwnedObjectVersion,
+    ) -> Option<(String, String)> {
+        let record = self.owned_object_certificate_finality(object_version)?;
+        let certificate_borsh = borsh::to_vec(&record.certificate).ok()?;
+        Some((
+            format!("0x{}", hex::encode(record.certificate_hash)),
+            format!("0x{}", hex::encode(certificate_borsh)),
+        ))
     }
 
     fn settlement_requires_proof_for_features(&self, features: ExecutionFeatureSetV1) -> bool {
@@ -1566,6 +1918,7 @@ impl ChainInteraction for NodeInner {
             forced_inclusion: self.chain_config.phase_config.forced_inclusion,
             prover_rewards: self.chain_config.phase_config.prover_rewards,
             sequencer_rewards: self.chain_config.phase_config.sequencer_rewards,
+            block_payload_mode: self.chain_config.block_payload_mode.as_str().into(),
             settlement_finality: if self.chain_config.proof_required_settlement {
                 "proof"
             } else {
@@ -1579,6 +1932,84 @@ impl ChainInteraction for NodeInner {
         let block_hash = proof.block_hash;
         NodeInner::submit_validity_proof(self, proof).map_err(|e| e.to_string())?;
         Ok(block_hash)
+    }
+
+    fn owned_object_precheck(
+        &self,
+        raw_tx: &[u8],
+        max_fee_per_gas: u128,
+    ) -> Result<RpcOwnedObjectPrecheck, String> {
+        self.owned_object_precheck_response(raw_tx, max_fee_per_gas)
+            .map(|(_, response)| response)
+    }
+
+    fn countersign_owned_object_tx(
+        &self,
+        raw_tx: &[u8],
+        max_fee_per_gas: u128,
+    ) -> Result<RpcOwnedObjectCountersignature, String> {
+        let (_tx, precheck) = self.owned_object_precheck_response(raw_tx, max_fee_per_gas)?;
+        let sign_body_bytes = hex::decode(
+            precheck
+                .sign_body_borsh
+                .strip_prefix("0x")
+                .unwrap_or(&precheck.sign_body_borsh),
+        )
+        .map_err(|e| format!("decode sign body: {e}"))?;
+        let sign_body = OwnedObjectCertificateSignBody::try_from_slice(&sign_body_bytes)
+            .map_err(|e| format!("decode sign body borsh: {e}"))?;
+        let secret = self
+            .validator_secret
+            .as_ref()
+            .ok_or_else(|| "validator has no BLS signing key".to_owned())?;
+        let signature =
+            OwnedObjectCertificate::countersign(&sign_body, self.validator_index as u32, secret)
+                .map_err(|e| e.to_string())?;
+        let signature_borsh = borsh::to_vec(&signature).map_err(|e| e.to_string())?;
+        Ok(RpcOwnedObjectCountersignature {
+            validator_index: format!("0x{:x}", signature.validator_index),
+            signature_borsh: hex_bytes(&signature_borsh),
+            sign_body_borsh: precheck.sign_body_borsh,
+        })
+    }
+
+    fn aggregate_owned_object_certificate(
+        &self,
+        raw_tx: &[u8],
+        object_versions_borsh: &[u8],
+        signatures_borsh: Vec<Vec<u8>>,
+    ) -> Result<RpcOwnedObjectCertificate, String> {
+        let tx = decode_borsh_tx(raw_tx)?;
+        let object_versions = Vec::<OwnedObjectVersion>::try_from_slice(object_versions_borsh)
+            .map_err(|e| format!("decode object versions borsh: {e}"))?;
+        let signatures = signatures_borsh
+            .iter()
+            .map(|bytes| {
+                OwnedObjectValidatorSignature::try_from_slice(bytes)
+                    .map_err(|e| format!("decode validator signature borsh: {e}"))
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let cert = OwnedObjectCertificate::aggregate(
+            &tx,
+            object_versions,
+            signatures,
+            self.validators.quorum_threshold(),
+        )
+        .map_err(|e| e.to_string())?;
+        let pubkeys = self.validator_pubkeys_for_certificates()?;
+        cert.verify(&pubkeys, self.validators.quorum_threshold())
+            .map_err(|e| e.to_string())?;
+        let certificate_hash = cert.certificate_hash().map_err(|e| e.to_string())?;
+        let certificate_borsh = borsh::to_vec(&cert).map_err(|e| e.to_string())?;
+        Ok(RpcOwnedObjectCertificate {
+            certificate_hash: hash_hex(&certificate_hash),
+            certificate_borsh: hex_bytes(&certificate_borsh),
+            signer_indices: cert
+                .signer_indices
+                .iter()
+                .map(|idx| format!("0x{idx:x}"))
+                .collect(),
+        })
     }
 
     fn submit_proof_hash(
@@ -1611,6 +2042,22 @@ impl ChainInteraction for NodeInner {
             transaction_hash: format!("0x{}", hex::encode(tx_hash)),
             block_number,
             finalized: true,
+        })
+    }
+
+    fn submit_proof_update(
+        &mut self,
+        update: ZoneProofUpdateV1,
+        max_priority_fee: u128,
+    ) -> Result<RpcProofUpdateSubmission, String> {
+        let update_hash = NodeInner::submit_proof_update(self, update.clone(), max_priority_fee)
+            .map_err(|e| e.to_string())?;
+        Ok(RpcProofUpdateSubmission {
+            network: format!("fractalchain-{}", self.chain_id()),
+            proof_update_hash: hash_hex(&update_hash),
+            zone_id: format!("0x{:x}", update.zone_id),
+            height: format!("0x{:x}", update.height),
+            pending_proof_updates: format!("0x{:x}", self.proof_pool.len()),
         })
     }
 }
@@ -1671,6 +2118,203 @@ fn proof_witness_digest(
     })
 }
 
+fn hex_bytes(bytes: &[u8]) -> String {
+    format!("0x{}", hex::encode(bytes))
+}
+
+fn rpc_owned_object_id(object_id: &fractal_core::OwnedObjectId) -> String {
+    match object_id {
+        fractal_core::OwnedObjectId::AccountNonce(address) => {
+            format!("accountNonce:{}", addr_hex(address))
+        }
+        fractal_core::OwnedObjectId::Agent(agent_id) => format!("agent:{agent_id}"),
+        fractal_core::OwnedObjectId::Receipt(receipt_id) => {
+            format!("receipt:{}", hash_hex(receipt_id))
+        }
+        fractal_core::OwnedObjectId::WalletTaskReceipt(commitment) => {
+            format!("walletTaskReceipt:{}", hash_hex(commitment))
+        }
+        fractal_core::OwnedObjectId::ProofCommitment(proof_hash) => {
+            format!("proofCommitment:{}", hash_hex(proof_hash))
+        }
+    }
+}
+
+fn rpc_owned_object_version(version: &OwnedObjectVersion) -> String {
+    format!(
+        "{}@{}",
+        rpc_owned_object_id(&version.object_id),
+        version.version
+    )
+}
+
+fn decode_borsh_tx(raw_tx: &[u8]) -> Result<Transaction, String> {
+    Transaction::try_from_slice(raw_tx).map_err(|e| format!("invalid borsh transaction: {e}"))
+}
+
+impl NodeInner {
+    fn owned_object_precheck_response(
+        &self,
+        raw_tx: &[u8],
+        max_fee_per_gas: u128,
+    ) -> Result<(Transaction, RpcOwnedObjectPrecheck), String> {
+        let tx = decode_borsh_tx(raw_tx)?;
+        let object_versions = self
+            .state
+            .owned_object_versions_for_transaction(&tx)
+            .ok_or_else(|| {
+                "transaction is not eligible for owned-object certificate path".to_owned()
+            })?;
+        let precheck = self
+            .state
+            .precheck_owned_transaction(
+                &tx,
+                &object_versions,
+                self.gas_limit,
+                max_fee_per_gas,
+                self.base_fee,
+            )
+            .map_err(|e| e.to_string())?;
+        let sign_body = OwnedObjectCertificateSignBody {
+            tx_hash: precheck.tx_hash,
+            owner: precheck.owner,
+            signer_nonce: precheck.signer_nonce,
+            object_versions: precheck.object_versions.clone(),
+        };
+        let object_versions_borsh =
+            borsh::to_vec(&precheck.object_versions).map_err(|e| e.to_string())?;
+        let sign_body_borsh = borsh::to_vec(&sign_body).map_err(|e| e.to_string())?;
+        let response = RpcOwnedObjectPrecheck {
+            tx_hash: hash_hex(&precheck.tx_hash),
+            owner: addr_hex(&precheck.owner),
+            signer_nonce: format!("0x{:x}", precheck.signer_nonce),
+            object_versions: precheck
+                .object_versions
+                .iter()
+                .map(rpc_owned_object_version)
+                .collect(),
+            object_versions_borsh: hex_bytes(&object_versions_borsh),
+            sign_body_borsh: hex_bytes(&sign_body_borsh),
+            tx_gas: format!("0x{:x}", precheck.tx_gas),
+            max_fee_per_gas: format!("0x{:x}", precheck.max_fee_per_gas),
+            base_fee_per_gas: format!("0x{:x}", precheck.base_fee_per_gas),
+        };
+        Ok((tx, response))
+    }
+
+    fn validator_pubkeys_for_certificates(
+        &self,
+    ) -> Result<Vec<fractal_crypto::BlsPublicKey>, String> {
+        (0..self.validators.len())
+            .map(|idx| {
+                self.validators
+                    .bls_pubkey(idx)
+                    .copied()
+                    .ok_or_else(|| format!("missing validator BLS pubkey at index {idx}"))
+            })
+            .collect()
+    }
+}
+
+fn is_proof_ingestion_compat_tx(tx: &Transaction) -> bool {
+    matches!(
+        (&tx.vm, &tx.body),
+        (
+            VmKind::Native,
+            TxBody::Native(NativeCall::ProofCommitmentV1 { .. })
+        )
+    )
+}
+
+fn include_tx_for_payload_mode(mode: BlockPayloadMode, tx: &Transaction) -> bool {
+    match mode {
+        BlockPayloadMode::Legacy => true,
+        BlockPayloadMode::ProofIngestion => is_proof_ingestion_compat_tx(tx),
+        BlockPayloadMode::Mixed => is_proof_ingestion_compat_tx(tx) || !tx.is_owned_object_tx(),
+    }
+}
+
+fn proposal_payload_for_mode(
+    mode: BlockPayloadMode,
+    txs: &[Transaction],
+    eth_raws: &[Option<Vec<u8>>],
+    proof_updates: &[ZoneProofUpdateV1],
+    certificates: &[OwnedObjectCertificate],
+) -> BlockPayload {
+    match mode {
+        BlockPayloadMode::Legacy => BlockPayload::FullTransactions {
+            transactions: txs.to_vec(),
+            eth_signed_raw: eth_raws.to_vec(),
+        },
+        BlockPayloadMode::ProofIngestion if txs.is_empty() && certificates.is_empty() => {
+            BlockPayload::ProofUpdates(proof_updates.to_vec())
+        }
+        BlockPayloadMode::ProofIngestion if txs.is_empty() && proof_updates.is_empty() => {
+            BlockPayload::CertificateBatches(vec![OwnedObjectCertificateBatchV1 {
+                certificates: certificates.to_vec(),
+            }])
+        }
+        BlockPayloadMode::ProofIngestion | BlockPayloadMode::Mixed => {
+            let mut items = Vec::with_capacity(
+                txs.len() + proof_updates.len() + usize::from(!certificates.is_empty()),
+            );
+            for (idx, tx) in txs.iter().enumerate() {
+                items.push(BlockPayloadItem::Transaction {
+                    transaction: tx.clone(),
+                    eth_signed_raw: eth_raws.get(idx).cloned().unwrap_or(None),
+                });
+            }
+            items.extend(
+                proof_updates
+                    .iter()
+                    .cloned()
+                    .map(BlockPayloadItem::ProofUpdate),
+            );
+            if !certificates.is_empty() {
+                items.push(BlockPayloadItem::CertificateBatch(
+                    OwnedObjectCertificateBatchV1 {
+                        certificates: certificates.to_vec(),
+                    },
+                ));
+            }
+            BlockPayload::Mixed(items)
+        }
+    }
+}
+
+fn apply_zone_blob_da_to_block(
+    block: &mut Block,
+    payload: &BlockPayload,
+    sampling_seed: u64,
+) -> Result<(), String> {
+    let payload_root = payload
+        .payload_root()
+        .map_err(|e| format!("proof payload root failed: {e}"))?;
+    let payload_bytes =
+        borsh::to_vec(payload).map_err(|e| format!("proof payload DA encode failed: {e}"))?;
+    let blob = ZoneBlobDaV1 {
+        namespace: block.header.zone_namespace,
+        payload: payload_bytes,
+        share_size: fractal_consensus::DEFAULT_DA_SHARE_SIZE,
+        sampling: DaSamplingParamsV1 {
+            seed: sampling_seed,
+            sample_count: 16,
+            min_samples: 4,
+        },
+    };
+    let (sidecar, commitment) =
+        build_zone_blob_da_sidecar(&blob).map_err(|e| format!("zone blob DA failed: {e}"))?;
+    block.header.da_root = commitment.da_root;
+    block.header.da_bytes = commitment.byte_count;
+    block.header.da_share_count = commitment.share_count;
+    block.header.da_gas_used = da_gas_for_sidecar(&sidecar);
+    block.header.da_fee_paid = da_fee_for_gas(block.header.da_gas_used);
+    block.header.extra = proof_ingestion_header_extra(payload_root, &commitment)
+        .map_err(|e| format!("proof-ingestion header extra failed: {e}"))?;
+    block.da_sidecar = sidecar;
+    Ok(())
+}
+
 /// Outcome of one produce-tick (`docs/prd.md` §7 M7-c).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProduceTickOutcome {
@@ -1692,9 +2336,28 @@ pub async fn try_produce_one_tick(node: &NodeHandle) -> ProduceTickOutcome {
     }
     let base = n.base_fee;
     let gas_limit_cfg = n.gas_limit;
-    let pooled = n.mempool.drain_ready_gas_budget(gas_limit_cfg, base);
+    let payload_mode = n.block_payload_mode();
+    let pooled = n
+        .mempool
+        .drain_ready_gas_budget_filtered(gas_limit_cfg, base, |tx| {
+            include_tx_for_payload_mode(payload_mode, tx)
+        });
     let eth_raws: Vec<Option<Vec<u8>>> = pooled.iter().map(|p| p.eth_signed_raw.clone()).collect();
     let txs: Vec<Transaction> = pooled.into_iter().map(|p| p.tx).collect();
+    let proof_updates = match payload_mode {
+        BlockPayloadMode::Legacy => Vec::new(),
+        BlockPayloadMode::ProofIngestion | BlockPayloadMode::Mixed => {
+            n.proof_pool.drain_ready(1024)
+        }
+    };
+    let certificates = match payload_mode {
+        BlockPayloadMode::Legacy => Vec::new(),
+        BlockPayloadMode::ProofIngestion | BlockPayloadMode::Mixed => {
+            n.certificate_pool.accepted_certificates()
+        }
+    };
+    let proposal_payload =
+        proposal_payload_for_mode(payload_mode, &txs, &eth_raws, &proof_updates, &certificates);
     let parent = n.head_hash;
     let qc = n.parent_qc_hash;
     let height = n.height + 1;
@@ -1715,7 +2378,15 @@ pub async fn try_produce_one_tick(node: &NodeHandle) -> ProduceTickOutcome {
         txs,
         eth_raws,
     ) {
-        Ok(block) => {
+        Ok(mut block) => {
+            if payload_mode != BlockPayloadMode::Legacy {
+                if let Err(e) =
+                    apply_zone_blob_da_to_block(&mut block, &proposal_payload, ts ^ height)
+                {
+                    eprintln!("fractal-node: {e}");
+                    return ProduceTickOutcome::BuildFailed;
+                }
+            }
             let hh = header_hash(&block.header).unwrap_or([0u8; 32]);
             n.head_hash = hh;
             n.height = block.header.height;
@@ -1769,18 +2440,20 @@ pub async fn run_dev() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     inner.set_protocol_phase_config(protocol_phase_config_from_env());
     inner.set_native_transition_proofs_enabled(native_transition_proofs_enabled_from_env());
     inner.set_proofs_required_for_settlement(proof_required_feature_mask_from_env(proof_required));
+    inner.set_block_payload_mode(BlockPayloadMode::from_env());
     if let Some(path) = proof_finality_store_from_env() {
         inner.set_proof_finality_store(ProofFinalityStore::open(&path)?)?;
         eprintln!("fractal-node: proof_finality_store={}", path.display());
     }
     inner.set_vote_sink(Some(vote_tx));
     eprintln!(
-        "fractal-node: settlement_finality={}",
+        "fractal-node: settlement_finality={} block_payload_mode={}",
         if inner.settlement_requires_proof() {
             "proof"
         } else {
             "soft"
-        }
+        },
+        inner.block_payload_mode().as_str()
     );
     inner.log_startup_consensus_diagnostics("fractal-node");
     let node: NodeHandle = Arc::new(Mutex::new(inner));
@@ -1850,6 +2523,7 @@ pub async fn run_follower() -> Result<(), Box<dyn std::error::Error + Send + Syn
     inner.set_protocol_phase_config(protocol_phase_config_from_env());
     inner.set_native_transition_proofs_enabled(native_transition_proofs_enabled_from_env());
     inner.set_proofs_required_for_settlement(proof_required_feature_mask_from_env(proof_required));
+    inner.set_block_payload_mode(BlockPayloadMode::from_env());
     if let Some(path) = proof_finality_store_from_env() {
         inner.set_proof_finality_store(ProofFinalityStore::open(&path)?)?;
         eprintln!(
@@ -1859,12 +2533,13 @@ pub async fn run_follower() -> Result<(), Box<dyn std::error::Error + Send + Syn
     }
     inner.set_vote_sink(Some(vote_tx));
     eprintln!(
-        "fractal-node follower: settlement_finality={}",
+        "fractal-node follower: settlement_finality={} block_payload_mode={}",
         if inner.settlement_requires_proof() {
             "proof"
         } else {
             "soft"
-        }
+        },
+        inner.block_payload_mode().as_str()
     );
     inner.log_startup_consensus_diagnostics("fractal-node follower");
     let node: NodeHandle = Arc::new(Mutex::new(inner));

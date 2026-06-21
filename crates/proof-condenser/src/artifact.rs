@@ -5,11 +5,11 @@
 
 use borsh::{BorshDeserialize, BorshSerialize};
 
-use crate::CheckpointJob;
 use crate::checkpoint_stwo::{
-    StwoCheckpointError, checkpoint_stwo_digest_from_json, prove_checkpoint_stwo,
-    verify_checkpoint_stwo_proof_json,
+    checkpoint_stwo_digest_from_json, prove_checkpoint_stwo, verify_checkpoint_stwo_proof_json,
+    StwoCheckpointError,
 };
+use crate::CheckpointJob;
 
 pub const CHECKPOINT_STWO_ARTIFACT_VERSION: u8 = 1;
 
@@ -70,7 +70,7 @@ impl CheckpointStwoArtifactV1 {
 mod tests {
     use super::*;
     use crate::checkpoint_job_from_block;
-    use fractal_consensus::{Block, BlockHeader, genesis_parent_qc};
+    use fractal_consensus::{genesis_parent_qc, Block, BlockHeader};
 
     fn job() -> CheckpointJob {
         let block = Block {

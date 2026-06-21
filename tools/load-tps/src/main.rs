@@ -92,6 +92,16 @@ fn head_height(agent: &ureq::Agent, rpc_url: &str) -> Result<u64, String> {
     parse_hex_u64(v.as_str().ok_or("blockNumber not string")?)
 }
 
+fn shard_count(agent: &ureq::Agent, rpc_url: &str) -> u32 {
+    rpc(agent, rpc_url, "fractal_getShardCount", json!([]))
+        .ok()
+        .and_then(|v| v.as_str().map(ToOwned::to_owned))
+        .and_then(|s| parse_hex_u64(&s).ok())
+        .and_then(|n| u32::try_from(n).ok())
+        .filter(|&n| n > 0)
+        .unwrap_or(1)
+}
+
 fn env_usize(name: &str, default: usize) -> usize {
     std::env::var(name)
         .ok()
@@ -150,6 +160,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let submitted = Arc::new(AtomicU64::new(0));
     let submit_errors = Arc::new(AtomicU64::new(0));
+    let shard_count = shard_count(&agent, &rpc_url);
+    let submitted_by_shard = Arc::new(
+        (0..shard_count)
+            .map(|_| AtomicU64::new(0))
+            .collect::<Vec<_>>(),
+    );
     let nonce_counters: Vec<Arc<AtomicU64>> = start_nonces
         .iter()
         .map(|&n| Arc::new(AtomicU64::new(n)))
@@ -166,10 +182,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .map(|wid| {
             let submitted = submitted.clone();
             let submit_errors = submit_errors.clone();
+            let submitted_by_shard = submitted_by_shard.clone();
             let stop = stop_workers.clone();
             let rpc_url = rpc_workers.clone();
             let agent = agent_workers.clone();
             let signer = SIGNERS[wid % SIGNERS.len()];
+            let home_shard = fractal_shard::home_shard_for_signer(&signer, shard_count);
             let nonce_ctr = nonce_counters[wid % nonce_counters.len()].clone();
             thread::spawn(move || {
                 while !stop.load(Ordering::Relaxed) {
@@ -177,6 +195,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     match send_noop(&agent, &rpc_url, signer, nonce) {
                         Ok(()) => {
                             submitted.fetch_add(1, Ordering::Relaxed);
+                            if let Some(counter) = submitted_by_shard.get(home_shard as usize) {
+                                counter.fetch_add(1, Ordering::Relaxed);
+                            }
                             // Avoid starving the node's producer/RPC threads on localhost.
                             thread::sleep(Duration::from_micros(submit_pause_micros()));
                         }
@@ -261,6 +282,25 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("confirmed nonce TPS:{nonce_tps:.1}  (on-chain nonce advance / measure window)");
     println!("block rate:         {block_rate:.2} blocks/s");
     println!("avg tx/block:       {avg_tx_per_block:.2}");
+    if !submitted_by_shard.is_empty() {
+        let counts = submitted_by_shard
+            .iter()
+            .map(|c| c.load(Ordering::Relaxed))
+            .collect::<Vec<_>>();
+        let max = counts.iter().copied().max().unwrap_or(0);
+        let min = counts.iter().copied().min().unwrap_or(0);
+        let imbalance = if min == 0 {
+            if max == 0 {
+                0.0
+            } else {
+                f64::INFINITY
+            }
+        } else {
+            max as f64 / min as f64
+        };
+        println!("submitted by shard: {:?}", counts);
+        println!("shard imbalance:    {imbalance:.2}x max/min");
+    }
     println!("total elapsed:      {:.1}s", total_elapsed.as_secs_f64());
     println!();
     println!("Note: chain TPS is the meaningful ceiling for this node config;");

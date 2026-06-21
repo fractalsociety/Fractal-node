@@ -216,6 +216,8 @@ pub struct ProofLatencyCostReport {
     pub prover_cost_micro_frac_per_block: MicroFrac,
     pub estimated_cost_per_proof_micro_frac: MicroFrac,
     pub estimated_total_prover_cost_micro_frac: MicroFrac,
+    pub proof_verify_fee_per_proof: u128,
+    pub estimated_total_proof_verify_fee: u128,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -235,11 +237,109 @@ pub struct MixedProofSloBenchReport {
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct FeePolicyBenchReport {
+    pub cost_categories: Vec<String>,
+    pub da_fee_per_byte: u128,
+    pub proof_verify_base_fee: u128,
+    pub proof_verify_fee_per_byte: u128,
+    pub shared_state_gas_price: u128,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ProtocolBenchReport {
+    pub fee_policy: FeePolicyBenchReport,
     pub owned_object_certificates: OwnedObjectCertificateThroughputReport,
     pub da_sampling: DaSamplingBandwidthReport,
     pub proof_latency_cost: ProofLatencyCostReport,
     pub mixed_proof_slo: MixedProofSloBenchReport,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum BaselineScenarioKind {
+    NativeNoOp,
+    OwnedObjectTx,
+    ProofCommitment,
+    MixedEvmNative,
+    Bft7ValidatorLab,
+    ProofUpdates,
+    CertificateUpdates,
+    MixedProofSharedState,
+    DaSamplingProofUpdates,
+    Bft7ProofIngestion,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BaselineBenchConfig {
+    pub blocks_per_scenario: usize,
+    pub txs_per_block: usize,
+    pub chain_id: u64,
+    pub gas_limit: u64,
+    pub seed: u64,
+}
+
+impl Default for BaselineBenchConfig {
+    fn default() -> Self {
+        Self {
+            blocks_per_scenario: 16,
+            txs_per_block: 64,
+            chain_id: 41,
+            gas_limit: 60_000_000,
+            seed: 41,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BftLabMetrics {
+    pub validator_count: usize,
+    pub quorum_threshold: usize,
+    pub formed_qcs: usize,
+    pub votes_recorded: usize,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BaselineScenarioReport {
+    pub name: String,
+    pub kind: BaselineScenarioKind,
+    pub blocks: usize,
+    pub submitted_txs: usize,
+    pub committed_txs: usize,
+    pub elapsed_nanos: u128,
+    pub submitted_tx_per_second: f64,
+    pub committed_tx_per_second: f64,
+    pub block_p50_latency_nanos: u128,
+    pub block_p95_latency_nanos: u128,
+    pub cpu_nanos: u128,
+    pub peak_working_set_bytes: u64,
+    pub total_block_bytes: u64,
+    pub avg_block_bytes: f64,
+    pub total_da_bytes: u64,
+    pub avg_da_bytes: f64,
+    pub replay_time_nanos: u128,
+    pub replay_tx_per_second: f64,
+    pub accepted_proof_updates: usize,
+    pub accepted_certificate_updates: usize,
+    pub accepted_proof_updates_per_second: f64,
+    pub accepted_certificate_updates_per_second: f64,
+    pub proof_verify_time_nanos: u128,
+    pub da_sampling_time_nanos: u128,
+    pub total_payload_bytes: u64,
+    pub avg_payload_bytes: f64,
+    pub bft: BftLabMetrics,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BaselineBenchReport {
+    pub schema_version: u16,
+    pub run_kind: String,
+    pub config: BaselineBenchConfig,
+    pub scenarios: Vec<BaselineScenarioReport>,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -723,6 +823,10 @@ pub fn run_proof_latency_cost_bench(
         (covered_blocks_per_proof as MicroFrac).saturating_mul(prover_cost_micro_frac_per_block);
     let estimated_total_prover_cost_micro_frac =
         (proof_count as MicroFrac).saturating_mul(estimated_cost_per_proof_micro_frac);
+    let fee_policy = fractal_consensus::default_fee_policy();
+    let proof_verify_fee_per_proof = fee_policy.proof_verify_fee(proof.proof_bytes.len());
+    let estimated_total_proof_verify_fee =
+        (proof_count as u128).saturating_mul(proof_verify_fee_per_proof);
 
     ProofLatencyCostReport {
         proof_count,
@@ -735,6 +839,8 @@ pub fn run_proof_latency_cost_bench(
         prover_cost_micro_frac_per_block,
         estimated_cost_per_proof_micro_frac,
         estimated_total_prover_cost_micro_frac,
+        proof_verify_fee_per_proof,
+        estimated_total_proof_verify_fee,
     }
 }
 
@@ -890,7 +996,18 @@ pub fn run_protocol_bench(
     prover_cost_micro_frac_per_block: MicroFrac,
     seed: u64,
 ) -> ProtocolBenchReport {
+    let fee_policy = fractal_consensus::default_fee_policy();
     ProtocolBenchReport {
+        fee_policy: FeePolicyBenchReport {
+            cost_categories: fractal_consensus::FeePolicyV1::cost_categories()
+                .into_iter()
+                .map(|category| category.as_str().to_owned())
+                .collect(),
+            da_fee_per_byte: fee_policy.da_fee_per_byte,
+            proof_verify_base_fee: fee_policy.proof_verify_base_fee,
+            proof_verify_fee_per_byte: fee_policy.proof_verify_fee_per_byte,
+            shared_state_gas_price: fee_policy.shared_state_gas_price,
+        },
         owned_object_certificates: run_owned_object_certificate_throughput_bench(
             certificate_count,
             validator_count,
@@ -911,6 +1028,627 @@ pub fn run_protocol_bench(
         ),
         mixed_proof_slo: run_mixed_proof_slo_bench(proof_count, seed),
     }
+}
+
+pub fn run_baseline_bench(config: BaselineBenchConfig) -> BaselineBenchReport {
+    let scenarios = [
+        ("native-noop", BaselineScenarioKind::NativeNoOp),
+        ("owned-object-tx", BaselineScenarioKind::OwnedObjectTx),
+        ("proof-commitment", BaselineScenarioKind::ProofCommitment),
+        ("mixed-evm-native", BaselineScenarioKind::MixedEvmNative),
+        (
+            "bft-7-validator-lab",
+            BaselineScenarioKind::Bft7ValidatorLab,
+        ),
+    ]
+    .into_iter()
+    .enumerate()
+    .map(|(idx, (name, kind))| {
+        run_baseline_scenario(name, kind, &config, config.seed.wrapping_add(idx as u64))
+    })
+    .collect();
+    BaselineBenchReport {
+        schema_version: 1,
+        run_kind: "baseline".to_owned(),
+        config,
+        scenarios,
+    }
+}
+
+pub fn run_proof_ingestion_bench(config: BaselineBenchConfig) -> BaselineBenchReport {
+    let scenarios = [
+        ("proof-updates", BaselineScenarioKind::ProofUpdates),
+        (
+            "certificate-updates",
+            BaselineScenarioKind::CertificateUpdates,
+        ),
+        (
+            "mixed-proof-shared-state",
+            BaselineScenarioKind::MixedProofSharedState,
+        ),
+        (
+            "da-sampling-proof-updates",
+            BaselineScenarioKind::DaSamplingProofUpdates,
+        ),
+        (
+            "bft-7-proof-ingestion",
+            BaselineScenarioKind::Bft7ProofIngestion,
+        ),
+    ]
+    .into_iter()
+    .enumerate()
+    .map(|(idx, (name, kind))| {
+        run_proof_ingestion_scenario(name, kind, &config, config.seed.wrapping_add(idx as u64))
+    })
+    .collect();
+    BaselineBenchReport {
+        schema_version: 1,
+        run_kind: "proof_ingestion".to_owned(),
+        config,
+        scenarios,
+    }
+}
+
+fn run_proof_ingestion_scenario(
+    name: &str,
+    kind: BaselineScenarioKind,
+    config: &BaselineBenchConfig,
+    seed: u64,
+) -> BaselineScenarioReport {
+    use fractal_consensus::{
+        build_da_sidecar, da_encoded_bytes, da_root, proof_update_leaf_hash, verify_da_samples,
+        verify_formed_qc, BlockPayload, BlockPayloadItem, OwnedObjectCertificateBatchV1,
+        ValidatorSet, Vote, VotePool, VoteSignBody,
+    };
+
+    let blocks = config.blocks_per_scenario.max(1);
+    let items_per_block = config.txs_per_block.max(1);
+    let bft_validators =
+        (kind == BaselineScenarioKind::Bft7ProofIngestion).then(ValidatorSet::phase2_bft7_fixture);
+    let mut bft = bft_validators.as_ref().map(|validators| BftLabMetrics {
+        validator_count: validators.len(),
+        quorum_threshold: validators.quorum_threshold(),
+        ..BftLabMetrics::default()
+    });
+
+    let mut payloads = Vec::with_capacity(blocks);
+    let mut latencies = Vec::with_capacity(blocks);
+    let mut accepted_proof_updates = 0usize;
+    let mut accepted_certificate_updates = 0usize;
+    let mut proof_verify_time_nanos = 0u128;
+    let mut da_sampling_time_nanos = 0u128;
+    let mut total_payload_bytes = 0u64;
+    let mut total_da_bytes = 0u64;
+    let mut peak_working_set_bytes = 0u64;
+    let started = Instant::now();
+
+    for height in 1..=blocks {
+        let block_started = Instant::now();
+        let mut block_proof_updates = 0usize;
+        let mut block_certificates = 0usize;
+        let payload = match kind {
+            BaselineScenarioKind::ProofUpdates | BaselineScenarioKind::Bft7ProofIngestion => {
+                let updates = proof_updates_for_block(seed, height, items_per_block);
+                let verify_started = Instant::now();
+                for update in &updates {
+                    proof_update_leaf_hash(update).expect("proof update leaf hash");
+                }
+                proof_verify_time_nanos =
+                    proof_verify_time_nanos.saturating_add(verify_started.elapsed().as_nanos());
+                block_proof_updates = updates.len();
+                BlockPayload::ProofUpdates(updates)
+            }
+            BaselineScenarioKind::CertificateUpdates => {
+                let certificates = certificates_for_block(seed, height, items_per_block);
+                block_certificates = certificates.len();
+                BlockPayload::CertificateBatches(vec![OwnedObjectCertificateBatchV1 {
+                    certificates,
+                }])
+            }
+            BaselineScenarioKind::MixedProofSharedState => {
+                let mut items = Vec::with_capacity(items_per_block);
+                let proof_count = items_per_block.div_ceil(2);
+                let updates = proof_updates_for_block(seed, height, proof_count);
+                for idx in 0..items_per_block {
+                    if idx % 2 == 0 {
+                        let update = updates[idx / 2].clone();
+                        let verify_started = Instant::now();
+                        proof_update_leaf_hash(&update).expect("proof update leaf hash");
+                        proof_verify_time_nanos = proof_verify_time_nanos
+                            .saturating_add(verify_started.elapsed().as_nanos());
+                        block_proof_updates = block_proof_updates.saturating_add(1);
+                        items.push(BlockPayloadItem::ProofUpdate(update));
+                    } else {
+                        items.push(BlockPayloadItem::Transaction {
+                            transaction: shared_state_tx(seed, height, idx),
+                            eth_signed_raw: None,
+                        });
+                    }
+                }
+                BlockPayload::Mixed(items)
+            }
+            BaselineScenarioKind::DaSamplingProofUpdates => {
+                let updates = proof_updates_for_block(seed, height, items_per_block);
+                let verify_started = Instant::now();
+                for update in &updates {
+                    proof_update_leaf_hash(update).expect("proof update leaf hash");
+                }
+                proof_verify_time_nanos =
+                    proof_verify_time_nanos.saturating_add(verify_started.elapsed().as_nanos());
+                block_proof_updates = updates.len();
+                BlockPayload::ProofUpdates(updates)
+            }
+            _ => unreachable!("proof-ingestion scenario kind"),
+        };
+        let payload_root = payload
+            .payload_root()
+            .expect("proof-ingestion payload root");
+        let payload_bytes = borsh_len(&payload) as u64;
+        total_payload_bytes = total_payload_bytes.saturating_add(payload_bytes);
+        peak_working_set_bytes = peak_working_set_bytes.max(payload_bytes);
+        if kind == BaselineScenarioKind::DaSamplingProofUpdates {
+            let payload_raw = borsh::to_vec(&payload).expect("payload borsh");
+            let sidecar = build_da_sidecar(
+                &payload_raw,
+                fractal_consensus::DEFAULT_DA_NAMESPACE,
+                fractal_consensus::DEFAULT_DA_SHARE_SIZE,
+            )
+            .expect("proof-ingestion DA sidecar");
+            let root = da_root(&sidecar);
+            let sampling_started = Instant::now();
+            verify_da_samples(
+                &sidecar,
+                root,
+                fractal_consensus::DEFAULT_DA_NAMESPACE,
+                seed.wrapping_add(height as u64),
+                8.min(sidecar.shares.len()),
+            )
+            .expect("proof-ingestion DA samples");
+            da_sampling_time_nanos =
+                da_sampling_time_nanos.saturating_add(sampling_started.elapsed().as_nanos());
+            total_da_bytes = total_da_bytes.saturating_add(da_encoded_bytes(&sidecar));
+            peak_working_set_bytes = peak_working_set_bytes
+                .max(payload_bytes.saturating_add(da_encoded_bytes(&sidecar)));
+        } else {
+            total_da_bytes = total_da_bytes.saturating_add(payload_bytes);
+        }
+        if let Some(validators) = bft_validators.as_ref() {
+            let mut pool = VotePool::new();
+            for idx in 0..validators.quorum_threshold() {
+                let body = VoteSignBody {
+                    view: height as u64 - 1,
+                    height: height as u64,
+                    header_hash: payload_root,
+                };
+                let secret = validators
+                    .dev_bls_secret(idx)
+                    .expect("BFT-7 fixture dev secret");
+                let vote = Vote::sign(body, idx as u32, &secret);
+                pool.record(vote, validators);
+                if let Some(metrics) = bft.as_mut() {
+                    metrics.votes_recorded = metrics.votes_recorded.saturating_add(1);
+                }
+            }
+            let qc = pool
+                .try_form_qc(height as u64 - 1, height as u64, payload_root, validators)
+                .expect("proof-ingestion BFT-7 QC");
+            verify_formed_qc(&qc, validators).expect("proof-ingestion BFT-7 QC verifies");
+            if let Some(metrics) = bft.as_mut() {
+                metrics.formed_qcs = metrics.formed_qcs.saturating_add(1);
+            }
+        }
+        accepted_proof_updates = accepted_proof_updates.saturating_add(block_proof_updates);
+        accepted_certificate_updates =
+            accepted_certificate_updates.saturating_add(block_certificates);
+        latencies.push(block_started.elapsed().as_nanos().max(1));
+        payloads.push(payload);
+    }
+    let elapsed_nanos = started.elapsed().as_nanos().max(1);
+
+    let replay_started = Instant::now();
+    for payload in &payloads {
+        payload
+            .payload_root()
+            .expect("proof-ingestion replay payload root");
+    }
+    let replay_time_nanos = replay_started.elapsed().as_nanos().max(1);
+
+    let committed_items = accepted_proof_updates
+        .saturating_add(accepted_certificate_updates)
+        .saturating_add(
+            payloads
+                .iter()
+                .map(|payload| match payload {
+                    BlockPayload::Mixed(items) => items
+                        .iter()
+                        .filter(|item| matches!(item, BlockPayloadItem::Transaction { .. }))
+                        .count(),
+                    _ => 0,
+                })
+                .sum::<usize>(),
+        );
+    let submitted_items = blocks.saturating_mul(items_per_block);
+    let elapsed_secs = elapsed_nanos as f64 / 1_000_000_000.0;
+    let replay_secs = replay_time_nanos as f64 / 1_000_000_000.0;
+    BaselineScenarioReport {
+        name: name.to_owned(),
+        kind,
+        blocks,
+        submitted_txs: submitted_items,
+        committed_txs: committed_items,
+        elapsed_nanos,
+        submitted_tx_per_second: submitted_items as f64 / elapsed_secs,
+        committed_tx_per_second: committed_items as f64 / elapsed_secs,
+        block_p50_latency_nanos: percentile_nanos(&latencies, 50),
+        block_p95_latency_nanos: percentile_nanos(&latencies, 95),
+        cpu_nanos: elapsed_nanos,
+        peak_working_set_bytes,
+        total_block_bytes: total_payload_bytes,
+        avg_block_bytes: total_payload_bytes as f64 / blocks as f64,
+        total_da_bytes,
+        avg_da_bytes: total_da_bytes as f64 / blocks as f64,
+        replay_time_nanos,
+        replay_tx_per_second: committed_items as f64 / replay_secs,
+        accepted_proof_updates,
+        accepted_certificate_updates,
+        accepted_proof_updates_per_second: accepted_proof_updates as f64 / elapsed_secs,
+        accepted_certificate_updates_per_second: accepted_certificate_updates as f64 / elapsed_secs,
+        proof_verify_time_nanos,
+        da_sampling_time_nanos,
+        total_payload_bytes,
+        avg_payload_bytes: total_payload_bytes as f64 / blocks as f64,
+        bft: bft.unwrap_or_default(),
+    }
+}
+
+fn proof_updates_for_block(
+    seed: u64,
+    block_index: usize,
+    count: usize,
+) -> Vec<fractal_consensus::ZoneProofUpdateV1> {
+    (0..count)
+        .map(|idx| fractal_consensus::ZoneProofUpdateV1 {
+            zone_id: 1 + (idx % 4) as u64,
+            height: block_index as u64,
+            parent_root: hash_from_seed(seed, block_index as u64, idx as u64),
+            new_root: hash_from_seed(seed.wrapping_add(1), block_index as u64, idx as u64),
+            tx_root: hash_from_seed(seed.wrapping_add(2), block_index as u64, idx as u64),
+            da_root: hash_from_seed(seed.wrapping_add(3), block_index as u64, idx as u64),
+            message_root: hash_from_seed(seed.wrapping_add(4), block_index as u64, idx as u64),
+            forced_inclusion_root: hash_from_seed(
+                seed.wrapping_add(5),
+                block_index as u64,
+                idx as u64,
+            ),
+            circuit_version: fractal_consensus::CircuitVersion::NativeStateTransitionV1,
+            feature_set: fractal_consensus::ExecutionFeatureSetV1::empty(),
+            proof_digest: hash_from_seed(seed.wrapping_add(6), block_index as u64, idx as u64),
+        })
+        .collect()
+}
+
+fn certificates_for_block(
+    seed: u64,
+    block_index: usize,
+    count: usize,
+) -> Vec<fractal_core::OwnedObjectCertificate> {
+    use fractal_core::{OwnedObjectCertificate, OwnedObjectId, OwnedObjectVersion};
+
+    (0..count)
+        .map(|idx| {
+            let global_idx = ((block_index - 1) * count + idx) as u64;
+            OwnedObjectCertificate {
+                tx_hash: hash_from_seed(seed, block_index as u64, idx as u64),
+                owner: address_from_seed(seed, 0),
+                signer_nonce: global_idx,
+                object_versions: vec![OwnedObjectVersion {
+                    object_id: OwnedObjectId::Agent(global_idx),
+                    version: block_index as u64,
+                }],
+                signer_indices: vec![0, 1, 2, 3, 4],
+                validator_signatures: Vec::new(),
+            }
+        })
+        .collect()
+}
+
+fn shared_state_tx(seed: u64, block_index: usize, item_index: usize) -> fractal_core::Transaction {
+    use fractal_core::{NativeCall, Transaction, TxBody, VmKind};
+
+    let nonce = ((block_index - 1) * 1_000_000 + item_index) as u64;
+    Transaction {
+        signer: address_from_seed(seed, 3),
+        nonce,
+        vm: VmKind::Native,
+        body: TxBody::Native(NativeCall::RegisterAgent {
+            operator: address_from_seed(seed, 4),
+            pubkey: hash_from_seed(seed, block_index as u64, item_index as u64),
+            kind: 1,
+            metadata_uri: format!("bench://shared/{block_index}/{item_index}"),
+        }),
+    }
+}
+
+fn run_baseline_scenario(
+    name: &str,
+    kind: BaselineScenarioKind,
+    config: &BaselineBenchConfig,
+    seed: u64,
+) -> BaselineScenarioReport {
+    use fractal_consensus::{
+        eth_signed_raws_for_txs, execute_and_build_block, header_hash, verify_formed_qc,
+        ValidatorSet, Vote, VotePool, VoteSignBody,
+    };
+    use fractal_core::{Account, AgentRecord, State};
+
+    let blocks = config.blocks_per_scenario.max(1);
+    let txs_per_block = config.txs_per_block.max(1);
+    let signer = address_from_seed(seed, 0);
+    let evm_signer = address_from_seed(seed, 1);
+    let mut state = State::default();
+    state.accounts.insert(
+        signer,
+        Account {
+            nonce: 0,
+            balance: 10_000_000_000,
+        },
+    );
+    state.accounts.insert(
+        evm_signer,
+        Account {
+            nonce: 0,
+            balance: 10_000_000_000,
+        },
+    );
+    if kind == BaselineScenarioKind::OwnedObjectTx {
+        state.agents.insert(
+            1,
+            AgentRecord {
+                agent_id: 1,
+                address: signer,
+                operator: signer,
+                pubkey: [0xA7; 32],
+                kind: 1,
+                metadata_uri: "bench://agent/1".to_owned(),
+                reputation_score: 0,
+                completed_jobs: 0,
+                status: 0,
+                registered_at: 0,
+                schema_version: 1,
+            },
+        );
+        state.address_to_agent.insert(signer, 1);
+        state.next_agent_id = 2;
+    }
+    let initial_state = state.clone();
+    let bft_validators =
+        (kind == BaselineScenarioKind::Bft7ValidatorLab).then(ValidatorSet::phase2_bft7_fixture);
+    let mut bft = bft_validators.as_ref().map(|validators| BftLabMetrics {
+        validator_count: validators.len(),
+        quorum_threshold: validators.quorum_threshold(),
+        ..BftLabMetrics::default()
+    });
+
+    let mut blocks_out = Vec::with_capacity(blocks);
+    let mut latencies = Vec::with_capacity(blocks);
+    let mut total_block_bytes = 0u64;
+    let mut total_da_bytes = 0u64;
+    let mut peak_working_set_bytes = borsh_len(&state) as u64;
+    let started = Instant::now();
+    let mut parent_hash = [0u8; 32];
+    for height in 1..=blocks {
+        let txs = baseline_txs(kind, seed, height, txs_per_block);
+        let block_started = Instant::now();
+        let block = execute_and_build_block(
+            config.chain_id,
+            height as u64,
+            height as u64 - 1,
+            parent_hash,
+            [0u8; 32],
+            [0xB7; 32],
+            1_000 + height as u64,
+            config.gas_limit,
+            &mut state,
+            txs,
+            eth_signed_raws_for_txs(txs_per_block),
+        )
+        .expect("baseline block execution");
+        if let Some(validators) = bft_validators.as_ref() {
+            let block_hash = header_hash(&block.header).expect("baseline header hash");
+            let mut pool = VotePool::new();
+            for idx in 0..validators.quorum_threshold() {
+                let body = VoteSignBody {
+                    view: block.header.view,
+                    height: block.header.height,
+                    header_hash: block_hash,
+                };
+                let secret = validators
+                    .dev_bls_secret(idx)
+                    .expect("BFT-7 fixture dev secret");
+                let vote = Vote::sign(body, idx as u32, &secret);
+                pool.record(vote, validators);
+                if let Some(metrics) = bft.as_mut() {
+                    metrics.votes_recorded = metrics.votes_recorded.saturating_add(1);
+                }
+            }
+            let qc = pool
+                .try_form_qc(
+                    block.header.view,
+                    block.header.height,
+                    block_hash,
+                    validators,
+                )
+                .expect("BFT-7 quorum certificate");
+            verify_formed_qc(&qc, validators).expect("BFT-7 QC verifies");
+            if let Some(metrics) = bft.as_mut() {
+                metrics.formed_qcs = metrics.formed_qcs.saturating_add(1);
+            }
+        }
+        let block_latency = block_started.elapsed().as_nanos().max(1);
+        parent_hash = header_hash(&block.header).expect("baseline parent hash");
+        total_da_bytes = total_da_bytes.saturating_add(block.header.da_bytes);
+        let block_bytes = borsh_len(&block) as u64;
+        total_block_bytes = total_block_bytes.saturating_add(block_bytes);
+        peak_working_set_bytes =
+            peak_working_set_bytes.max(block_bytes.saturating_add(borsh_len(&state) as u64));
+        latencies.push(block_latency);
+        blocks_out.push(block);
+    }
+    let elapsed_nanos = started.elapsed().as_nanos().max(1);
+
+    let replay_started = Instant::now();
+    let mut replay_state = initial_state;
+    for block in &blocks_out {
+        let mut evm = fractal_evm::RevmEngine::default();
+        fractal_core::apply_block_with_evm(&mut replay_state, &block.transactions, &mut evm)
+            .expect("baseline validator replay");
+    }
+    let replay_time_nanos = replay_started.elapsed().as_nanos().max(1);
+
+    let committed_txs = blocks_out
+        .iter()
+        .map(|block| block.transactions.len())
+        .sum::<usize>();
+    let submitted_txs = blocks.saturating_mul(txs_per_block);
+    let elapsed_secs = elapsed_nanos as f64 / 1_000_000_000.0;
+    let replay_secs = replay_time_nanos as f64 / 1_000_000_000.0;
+    BaselineScenarioReport {
+        name: name.to_owned(),
+        kind,
+        blocks,
+        submitted_txs,
+        committed_txs,
+        elapsed_nanos,
+        submitted_tx_per_second: submitted_txs as f64 / elapsed_secs,
+        committed_tx_per_second: committed_txs as f64 / elapsed_secs,
+        block_p50_latency_nanos: percentile_nanos(&latencies, 50),
+        block_p95_latency_nanos: percentile_nanos(&latencies, 95),
+        cpu_nanos: elapsed_nanos,
+        peak_working_set_bytes,
+        total_block_bytes,
+        avg_block_bytes: total_block_bytes as f64 / blocks as f64,
+        total_da_bytes,
+        avg_da_bytes: total_da_bytes as f64 / blocks as f64,
+        replay_time_nanos,
+        replay_tx_per_second: committed_txs as f64 / replay_secs,
+        accepted_proof_updates: 0,
+        accepted_certificate_updates: 0,
+        accepted_proof_updates_per_second: 0.0,
+        accepted_certificate_updates_per_second: 0.0,
+        proof_verify_time_nanos: 0,
+        da_sampling_time_nanos: 0,
+        total_payload_bytes: total_block_bytes,
+        avg_payload_bytes: total_block_bytes as f64 / blocks as f64,
+        bft: bft.unwrap_or_default(),
+    }
+}
+
+fn baseline_txs(
+    kind: BaselineScenarioKind,
+    seed: u64,
+    block_index: usize,
+    txs_per_block: usize,
+) -> Vec<fractal_core::Transaction> {
+    use fractal_core::{NativeCall, Transaction, TxBody, VmKind};
+
+    let base = ((block_index - 1) * txs_per_block) as u64;
+    let native_per_mixed_block = txs_per_block.div_ceil(2) as u64;
+    let evm_per_mixed_block = (txs_per_block / 2) as u64;
+    let signer = address_from_seed(seed, 0);
+    let evm_signer = address_from_seed(seed, 1);
+    let mut native_nonce = if kind == BaselineScenarioKind::MixedEvmNative {
+        (block_index as u64 - 1).saturating_mul(native_per_mixed_block)
+    } else {
+        base
+    };
+    let mut evm_nonce = (block_index as u64 - 1).saturating_mul(evm_per_mixed_block);
+    (0..txs_per_block)
+        .map(|idx| match kind {
+            BaselineScenarioKind::NativeNoOp | BaselineScenarioKind::Bft7ValidatorLab => {
+                let tx = Transaction {
+                    signer,
+                    nonce: base + idx as u64,
+                    vm: VmKind::Native,
+                    body: TxBody::Native(NativeCall::NoOp),
+                };
+                tx
+            }
+            BaselineScenarioKind::OwnedObjectTx => Transaction {
+                signer,
+                nonce: base + idx as u64,
+                vm: VmKind::Native,
+                body: TxBody::Native(NativeCall::UpdateAgent {
+                    agent_id: 1,
+                    new_metadata_uri: format!("bench://agent/1/{}", base + idx as u64),
+                    new_pubkey: None,
+                }),
+            },
+            BaselineScenarioKind::ProofCommitment => Transaction {
+                signer,
+                nonce: base + idx as u64,
+                vm: VmKind::Native,
+                body: TxBody::Native(NativeCall::ProofCommitmentV1 {
+                    proof_hash: hash_from_seed(seed, block_index as u64, idx as u64),
+                }),
+            },
+            BaselineScenarioKind::MixedEvmNative => {
+                if idx % 2 == 0 {
+                    let nonce = native_nonce;
+                    native_nonce = native_nonce.saturating_add(1);
+                    Transaction {
+                        signer,
+                        nonce,
+                        vm: VmKind::Native,
+                        body: TxBody::Native(NativeCall::NoOp),
+                    }
+                } else {
+                    let nonce = evm_nonce;
+                    evm_nonce = evm_nonce.saturating_add(1);
+                    Transaction {
+                        signer: evm_signer,
+                        nonce,
+                        vm: VmKind::Evm,
+                        body: TxBody::Transfer {
+                            to: address_from_seed(seed, 2),
+                            amount: 1,
+                        },
+                    }
+                }
+            }
+            _ => unreachable!("proof-ingestion-only scenario kind"),
+        })
+        .collect()
+}
+
+fn address_from_seed(seed: u64, lane: u8) -> [u8; 20] {
+    let mut out = [0u8; 20];
+    out[..8].copy_from_slice(&seed.to_be_bytes());
+    out[8] = lane;
+    out
+}
+
+fn hash_from_seed(seed: u64, block_index: u64, tx_index: u64) -> [u8; 32] {
+    let mut out = [0u8; 32];
+    out[..8].copy_from_slice(&seed.to_be_bytes());
+    out[8..16].copy_from_slice(&block_index.to_be_bytes());
+    out[16..24].copy_from_slice(&tx_index.to_be_bytes());
+    out[24] = 0xC0;
+    out
+}
+
+fn borsh_len<T: borsh::BorshSerialize>(value: &T) -> usize {
+    borsh::to_vec(value).map(|bytes| bytes.len()).unwrap_or(0)
+}
+
+fn percentile_nanos(values: &[u128], percentile: u32) -> u128 {
+    if values.is_empty() {
+        return 0;
+    }
+    let mut sorted = values.to_vec();
+    sorted.sort_unstable();
+    let pct = percentile.min(100) as usize;
+    let index = ((sorted.len().saturating_sub(1)) * pct + 99) / 100;
+    sorted[index.min(sorted.len() - 1)]
 }
 
 pub fn synthetic_verifier_judgments(cases: &[VerifierCase]) -> Vec<VerifierJudgment> {

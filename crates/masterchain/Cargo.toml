@@ -8,23 +8,36 @@ description = "Dedicated masterchain BFT coordinator (PRD §7.10, M11)."
 [[bin]]
 name = "fractal-masterchain"
 path = "src/main.rs"
+required-features = ["runtime"]
 
 [dependencies]
 borsh.workspace = true
 fractal-consensus = { path = "../consensus" }
+fractal-core = { path = "../core" }
 fractal-crypto = { path = "../crypto" }
-fractal-network = { path = "../network" }
+fractal-network = { path = "../network", optional = true }
 fractal-proof-aggregator = { path = "../proof-aggregator" }
-fractal-rpc = { path = "../rpc" }
+fractal-rpc = { path = "../rpc", optional = true }
 fractal-shard = { path = "../shard" }
-fractal-storage = { path = "../storage" }
-futures.workspace = true
+fractal-storage = { path = "../storage", optional = true }
+futures = { workspace = true, optional = true }
 hex.workspace = true
-libp2p.workspace = true
+libp2p = { workspace = true, optional = true }
 serde_json.workspace = true
 thiserror.workspace = true
-tokio.workspace = true
+tokio = { workspace = true, optional = true }
 ureq = { version = "2.10", features = ["json"] }
+
+[features]
+default = []
+runtime = [
+    "dep:fractal-network",
+    "dep:fractal-rpc",
+    "dep:fractal-storage",
+    "dep:futures",
+    "dep:libp2p",
+    "dep:tokio",
+]
 
 [dev-dependencies]
 fractal-core = { path = "../core" }

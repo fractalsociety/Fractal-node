@@ -5,5 +5,7 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+fractal-consensus = { path = "../consensus" }
 fractal-core = { path = "../core" }
+fractal-crypto = { path = "../crypto" }
 thiserror.workspace = true

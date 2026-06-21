@@ -1,23 +1,27 @@
 //! Dedicated masterchain BFT: two shard anchors → one coordination block.
 
+#[cfg(feature = "runtime")]
 use std::sync::Arc;
+#[cfg(feature = "runtime")]
 use std::time::Duration;
 
+use fractal_masterchain::ledger::{
+    forced_inclusion_queue_root, prover_reward_wei, AsyncCrossZoneMessageV1,
+    ExecutionZoneMetadataV1, MasterchainError, MasterchainLedger, ProofSlashingPolicyV1,
+    ProverEconomicsParamsV1, ProverMarketParamsV1, ZoneProofFinalUpdateV1, INVALID_PROOF_BAD_RANGE,
+    INVALID_PROOF_MISSING_VERIFIED_STWO, INVALID_PROOF_RANGE_EXCEEDS_ANCHOR,
+};
+#[cfg(feature = "runtime")]
 use fractal_masterchain::{
-    MasterchainHandle,
     bft::{verify_masterchain_qc, verify_masterchain_timeout_cert},
-    ledger::{
-        AsyncCrossZoneMessageV1, ExecutionZoneMetadataV1,
-        INVALID_PROOF_BAD_RANGE, INVALID_PROOF_MISSING_VERIFIED_STWO,
-        INVALID_PROOF_RANGE_EXCEEDS_ANCHOR, MasterchainError, MasterchainLedger,
-        ProofSlashingPolicyV1, ProverEconomicsParamsV1, ProverMarketParamsV1, prover_reward_wei,
-        ZoneProofFinalUpdateV1,
-    },
     masterchain_gossip_task,
     node::MasterchainBftNode,
+    MasterchainHandle,
 };
 use fractal_shard::{CrossShardMessageV1, ProofSubmissionV1, ShardAnchor};
-use libp2p::{Multiaddr, multiaddr::Protocol};
+#[cfg(feature = "runtime")]
+use libp2p::{multiaddr::Protocol, Multiaddr};
+#[cfg(feature = "runtime")]
 use tokio::sync::Mutex;
 
 fn anchor(shard: u32, height: u64, byte: u8) -> ShardAnchor {
@@ -29,6 +33,7 @@ fn anchor(shard: u32, height: u64, byte: u8) -> ShardAnchor {
     }
 }
 
+#[cfg(feature = "runtime")]
 #[tokio::test]
 async fn dedicated_masterchain_seals_multi_shard_round() {
     let node: MasterchainHandle = Arc::new(Mutex::new(MasterchainBftNode::devnet_singleton()));
@@ -46,6 +51,7 @@ async fn dedicated_masterchain_seals_multi_shard_round() {
     }
 }
 
+#[cfg(feature = "runtime")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn bft7_masterchain_gossipsub_votes_form_qc_without_direct_injection() {
     let listen: Multiaddr = "/ip4/127.0.0.1/udp/0/quic-v1".parse().unwrap();
@@ -250,6 +256,8 @@ fn zone_creation_and_proof_final_update() {
             zone_block_height: 7,
             state_root: [0x22; 32],
             message_root: [0x33; 32],
+            forced_inclusion_root: [0u8; 32],
+            required_forced_inclusion_root: [0u8; 32],
             proof_digest: [0x44; 32],
             prover: [0x55; 20],
         })
@@ -259,23 +267,31 @@ fn zone_creation_and_proof_final_update() {
     assert_eq!(updated.latest_state_root, [0x22; 32]);
     assert_eq!(updated.latest_message_root, [0x33; 32]);
     assert_eq!(
-        ledger.execution_zone(100).unwrap().latest_proof_final_height,
+        ledger
+            .execution_zone(100)
+            .unwrap()
+            .latest_proof_final_height,
         7
     );
-    assert_eq!(
-        ledger.submit_zone_proof_final_update(ZoneProofFinalUpdateV1 {
+    let err = ledger
+        .submit_zone_proof_final_update(ZoneProofFinalUpdateV1 {
             zone_id: 100,
             zone_block_height: 7,
             state_root: [0x66; 32],
             message_root: [0x77; 32],
+            forced_inclusion_root: [0u8; 32],
+            required_forced_inclusion_root: [0u8; 32],
             proof_digest: [0x88; 32],
             prover: [0x55; 20],
-        }),
-        Err(MasterchainError::StaleZoneUpdate {
-            height: 7,
-            current: 7,
         })
-    );
+        .unwrap_err();
+    assert!(matches!(
+        err,
+        MasterchainError::StaleZoneUpdate {
+            height: 7,
+            current: 7
+        }
+    ));
 }
 
 #[test]
@@ -325,16 +341,19 @@ fn forced_inclusion_materializes_after_sequencer_censorship_sla() {
     let request = ledger
         .submit_forced_inclusion(9, [0xAA; 20], [0xCC; 32], vec![1, 2, 3])
         .expect("forced inclusion request");
+    let queue_root = forced_inclusion_queue_root(std::slice::from_ref(&request));
 
     assert_eq!(request.submitted_at_masterchain_height, 0);
     assert_eq!(request.deadline_masterchain_height, 2);
     assert_eq!(ledger.pending_forced_inclusions().len(), 1);
 
-    ledger.seal_round([0u8; 20]).expect("round 1").unwrap();
+    let block = ledger.seal_round([0u8; 20]).expect("round 1").unwrap();
+    assert_eq!(block.forced_inclusion_queue_root, queue_root);
     assert!(ledger.forced_inclusion_events().is_empty());
     assert_eq!(ledger.pending_forced_inclusions().len(), 1);
 
-    ledger.seal_round([0u8; 20]).expect("round 2").unwrap();
+    let block = ledger.seal_round([0u8; 20]).expect("round 2").unwrap();
+    assert_eq!(block.forced_inclusion_queue_root, queue_root);
     assert!(ledger.pending_forced_inclusions().is_empty());
     assert_eq!(ledger.forced_inclusion_events().len(), 1);
     assert_eq!(
@@ -346,6 +365,73 @@ fn forced_inclusion_materializes_after_sequencer_censorship_sla() {
             sequencer_late_by_blocks: 0,
         }
     );
+}
+
+#[test]
+fn zone_finality_rejects_missing_forced_inclusion_after_timeout() {
+    let mut ledger = MasterchainLedger::default();
+    ledger
+        .create_execution_zone(9, [0x11; 20], zone_metadata(1, *b"zone0009"))
+        .unwrap();
+    ledger
+        .submit_forced_inclusion(9, [0xAA; 20], [0xCC; 32], vec![1, 2, 3])
+        .unwrap();
+    ledger.ingest_shard_anchor(anchor(0, 10, 1)).unwrap();
+    ledger.seal_round([0u8; 20]).unwrap().unwrap();
+
+    let err = ledger
+        .submit_zone_proof_final_update(ZoneProofFinalUpdateV1 {
+            zone_id: 9,
+            zone_block_height: 1,
+            state_root: [0x22; 32],
+            message_root: [0x33; 32],
+            forced_inclusion_root: [0u8; 32],
+            required_forced_inclusion_root: [0u8; 32],
+            proof_digest: [0x44; 32],
+            prover: [0x55; 20],
+        })
+        .unwrap_err();
+
+    assert!(matches!(err, MasterchainError::ForcedInclusionRootMismatch));
+}
+
+#[test]
+fn zone_finality_accepts_satisfied_forced_inclusion_after_timeout() {
+    let mut ledger = MasterchainLedger::default();
+    ledger
+        .create_execution_zone(9, [0x11; 20], zone_metadata(1, *b"zone0009"))
+        .unwrap();
+    let request = ledger
+        .submit_forced_inclusion(9, [0xAA; 20], [0xCC; 32], vec![1, 2, 3])
+        .unwrap();
+    ledger.ingest_shard_anchor(anchor(0, 10, 1)).unwrap();
+    ledger.seal_round([0u8; 20]).unwrap().unwrap();
+
+    let required_root = ledger.required_forced_inclusion_root_for_zone(9);
+    assert_eq!(
+        required_root,
+        forced_inclusion_queue_root(std::slice::from_ref(&request))
+    );
+
+    let updated = ledger
+        .submit_zone_proof_final_update(ZoneProofFinalUpdateV1 {
+            zone_id: 9,
+            zone_block_height: 1,
+            state_root: [0x22; 32],
+            message_root: [0x33; 32],
+            forced_inclusion_root: required_root,
+            required_forced_inclusion_root: required_root,
+            proof_digest: [0x44; 32],
+            prover: [0x55; 20],
+        })
+        .unwrap();
+
+    assert_eq!(updated.latest_proof_final_height, 1);
+    assert!(ledger
+        .proven_forced_inclusion_request_ids
+        .contains(&request.request_id));
+    assert_eq!(ledger.required_forced_inclusion_root_for_zone(9), [0u8; 32]);
+    assert_eq!(ledger.forced_inclusion_queue_root(), [0u8; 32]);
 }
 
 #[test]
@@ -560,6 +646,7 @@ fn mandatory_verified_stwo_missing_statement_records_slashable_evidence() {
 }
 
 #[test]
+#[cfg(feature = "runtime")]
 fn bft7_masterchain_votes_form_qc_on_block() {
     let mut proposer = MasterchainBftNode::devnet_bft7(0);
     proposer.ingest_anchor(anchor(0, 4, 1)).expect("anchor");
@@ -590,6 +677,7 @@ fn bft7_masterchain_votes_form_qc_on_block() {
 }
 
 #[test]
+#[cfg(feature = "runtime")]
 fn bft7_masterchain_timeouts_form_cert_and_advance_view() {
     let mut node = MasterchainBftNode::devnet_bft7(0);
     let high_qc = fractal_consensus::genesis_parent_qc();

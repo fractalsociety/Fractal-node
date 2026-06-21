@@ -254,7 +254,7 @@ dependencies = [
  "ark-poly",
  "ark-serialize 0.5.0",
  "ark-std 0.5.0",
- "educe",
+ "educe 0.6.0",
  "fnv",
  "hashbrown 0.15.5",
  "itertools 0.13.0",
@@ -314,7 +314,7 @@ dependencies = [
  "ark-std 0.5.0",
  "arrayvec",
  "digest 0.10.7",
- "educe",
+ "educe 0.6.0",
  "itertools 0.13.0",
  "num-bigint",
  "num-traits",
@@ -400,7 +400,7 @@ dependencies = [
  "ark-ff 0.5.0",
  "ark-serialize 0.5.0",
  "ark-std 0.5.0",
- "educe",
+ "educe 0.6.0",
  "fnv",
  "hashbrown 0.15.5",
 ]
@@ -415,7 +415,7 @@ dependencies = [
  "ark-ff 0.5.0",
  "ark-relations",
  "ark-std 0.5.0",
- "educe",
+ "educe 0.6.0",
  "num-bigint",
  "num-integer",
  "num-traits",
@@ -431,7 +431,7 @@ dependencies = [
  "ark-ff 0.5.0",
  "ark-std 0.5.0",
  "tracing",
- "tracing-subscriber",
+ "tracing-subscriber 0.2.25",
 ]
 
 [[package]]
@@ -787,6 +787,18 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d86b93f97252c47b41663388e6d155714a9d0c398b99f1005cbc5f978b29f445"
 
 [[package]]
+name = "bigdecimal"
+version = "0.3.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a6773ddc0eafc0e509fb60e48dff7f450f8e674a0686ae8605e8d9901bd5eefa"
+dependencies = [
+ "num-bigint",
+ "num-integer",
+ "num-traits",
+ "serde",
+]
+
+[[package]]
 name = "bit-set"
 version = "0.5.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -858,6 +870,15 @@ dependencies = [
  "serde",
  "tap",
  "wyz",
+]
+
+[[package]]
+name = "blake2"
+version = "0.10.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "46502ad458c9a52b69d4d4d32775c788b7a1b85e8bc9d482d92250fc0e3f8efe"
+dependencies = [
+ "digest 0.10.7",
 ]
 
 [[package]]
@@ -940,6 +961,26 @@ name = "byte-slice-cast"
 version = "1.2.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7575182f7272186991736b70173b0ea045398f984bf5ebbb3804736ce1330c9d"
+
+[[package]]
+name = "bytemuck"
+version = "1.25.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c8efb64bd706a16a1bdde310ae86b351e4d21550d98d056f22f8a7f7a2183fec"
+dependencies = [
+ "bytemuck_derive",
+]
+
+[[package]]
+name = "bytemuck_derive"
+version = "1.10.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f9abbd1bc6865053c427f7198e6af43bfdedc55ab791faed4fbd361d789575ff"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.117",
+]
 
 [[package]]
 name = "byteorder"
@@ -1441,6 +1482,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "dashmap"
+version = "6.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5041cc499144891f3790297212f32a74fb938e5136a14943f338ef9e0ae276cf"
+dependencies = [
+ "cfg-if",
+ "crossbeam-utils",
+ "hashbrown 0.14.5",
+ "lock_api",
+ "once_cell",
+ "parking_lot_core 0.9.12",
+]
+
+[[package]]
 name = "data-encoding"
 version = "2.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1694,6 +1749,18 @@ dependencies = [
  "sha2",
  "subtle",
  "zeroize",
+]
+
+[[package]]
+name = "educe"
+version = "0.5.11"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e4bd92664bf78c4d3dba9b7cdafce6fa15b13ed3ed16175218196942e99168a8"
+dependencies = [
+ "enum-ordinalize",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.117",
 ]
 
 [[package]]
@@ -2306,6 +2373,7 @@ dependencies = [
  "fractal-consensus",
  "fractal-core",
  "fractal-crypto",
+ "fractal-evm",
  "serde",
  "serde_json",
 ]
@@ -2423,8 +2491,31 @@ version = "0.1.0"
 dependencies = [
  "borsh",
  "fractal-core",
+ "fractal-shard",
  "hex",
  "serde_json",
+ "ureq",
+]
+
+[[package]]
+name = "fractal-masterchain"
+version = "0.1.0"
+dependencies = [
+ "borsh",
+ "fractal-consensus",
+ "fractal-core",
+ "fractal-crypto",
+ "fractal-network",
+ "fractal-proof-aggregator",
+ "fractal-rpc",
+ "fractal-shard",
+ "fractal-storage",
+ "futures",
+ "hex",
+ "libp2p",
+ "serde_json",
+ "thiserror 1.0.69",
+ "tokio",
  "ureq",
 ]
 
@@ -2432,7 +2523,9 @@ dependencies = [
 name = "fractal-mempool"
 version = "0.1.0"
 dependencies = [
+ "fractal-consensus",
  "fractal-core",
+ "fractal-crypto",
  "thiserror 1.0.69",
 ]
 
@@ -2472,12 +2565,48 @@ dependencies = [
  "fractal-mempool",
  "fractal-network",
  "fractal-rpc",
+ "fractal-shard",
  "fractal-storage",
  "futures",
  "hex",
  "k256",
  "libp2p",
  "rlp",
+ "thiserror 1.0.69",
+ "tokio",
+]
+
+[[package]]
+name = "fractal-proof-aggregator"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "borsh",
+ "fractal-consensus",
+ "fractal-crypto",
+ "fractal-proof-condenser",
+ "fractal-shard",
+ "hex",
+ "plonky2",
+ "thiserror 1.0.69",
+]
+
+[[package]]
+name = "fractal-proof-condenser"
+version = "0.1.0"
+dependencies = [
+ "blake3",
+ "borsh",
+ "fractal-consensus",
+ "fractal-core",
+ "fractal-crypto",
+ "fractal-storage",
+ "hex",
+ "itertools 0.12.1",
+ "num-traits",
+ "serde_json",
+ "stwo",
+ "stwo-constraint-framework",
  "thiserror 1.0.69",
  "tokio",
 ]
@@ -2523,6 +2652,7 @@ dependencies = [
  "fractal-consensus",
  "fractal-core",
  "fractal-crypto",
+ "hex",
  "thiserror 1.0.69",
 ]
 
@@ -2865,6 +2995,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e5274423e17b7c9fc20b6e7e208532f9b19825d82dfd615708b70edd83df41f1"
 dependencies = [
  "ahash 0.8.12",
+ "rayon",
  "serde",
 ]
 
@@ -2894,6 +3025,13 @@ name = "hashbrown"
 version = "0.17.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ed5909b6e89a2db4456e54cd5f673791d7eca6732202bbf2a9cc504fe2f9b84a"
+dependencies = [
+ "allocator-api2",
+ "equivalent",
+ "foldhash 0.2.0",
+ "serde",
+ "serde_core",
+]
 
 [[package]]
 name = "hashers"
@@ -3477,6 +3615,7 @@ checksum = "d466e9454f08e4a911e14806c24e16fba1b4c121d1ea474396f396069cf949d9"
 dependencies = [
  "equivalent",
  "hashbrown 0.17.1",
+ "rayon",
  "serde",
  "serde_core",
 ]
@@ -3532,6 +3671,15 @@ name = "itertools"
 version = "0.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b1c173a5686ce8bfa551b3563d0c2170bf24ca44da99c7ca4bfdab5418c3fe57"
+dependencies = [
+ "either",
+]
+
+[[package]]
+name = "itertools"
+version = "0.12.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ba291022dbbd398a455acf126c1e341954079855bc60dfdda641363bd6922569"
 dependencies = [
  "either",
 ]
@@ -4459,6 +4607,7 @@ checksum = "a5e44f723f1133c9deac646763579fdb3ac745e418f2a7af9cd0c431da1f20b9"
 dependencies = [
  "num-integer",
  "num-traits",
+ "rand 0.8.6",
 ]
 
 [[package]]
@@ -4468,6 +4617,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "73f88a1307638156682bada9d7604135552957b7818057dcef22705b4d509495"
 dependencies = [
  "num-traits",
+ "rand 0.8.6",
 ]
 
 [[package]]
@@ -4962,6 +5112,56 @@ name = "pkg-config"
 version = "0.3.33"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "19f132c84eca552bf34cab8ec81f1c1dcc229b811638f9d283dceabe58c5569e"
+
+[[package]]
+name = "plonky2"
+version = "1.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b512f56329cfde01b7b5c49f092145ae4fbdbb9cd8742f57879315ed7a893d65"
+dependencies = [
+ "ahash 0.8.12",
+ "anyhow",
+ "getrandom 0.2.17",
+ "hashbrown 0.14.5",
+ "itertools 0.11.0",
+ "keccak-hash",
+ "log",
+ "num",
+ "plonky2_field",
+ "plonky2_maybe_rayon",
+ "plonky2_util",
+ "rand 0.8.6",
+ "rand_chacha 0.3.1",
+ "serde",
+ "static_assertions",
+ "unroll",
+ "web-time",
+]
+
+[[package]]
+name = "plonky2_field"
+version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b3ddfe8817d0c5c2d4557979c51c5253dab1b555ecc19833e5b7ea7dd86f39b8"
+dependencies = [
+ "anyhow",
+ "itertools 0.11.0",
+ "num",
+ "plonky2_util",
+ "rand 0.8.6",
+ "serde",
+ "static_assertions",
+ "unroll",
+]
+
+[[package]]
+name = "plonky2_maybe_rayon"
+version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9e1e554181dc95243b8d9948ae7bae5759c7fb2502fed28f671f95ef38079406"
+dependencies = [
+ "rayon",
+]
 
 [[package]]
 name = "plonky2_util"
@@ -6556,6 +6756,60 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6ce2be8dc25455e1f91df71bfa12ad37d7af1092ae736f3a6cd0e37bc7810596"
 
 [[package]]
+name = "starknet-crypto"
+version = "0.6.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2e2c30c01e8eb0fc913c4ee3cf676389fffc1d1182bfe5bb9670e4e72e968064"
+dependencies = [
+ "crypto-bigint",
+ "hex",
+ "hmac",
+ "num-bigint",
+ "num-integer",
+ "num-traits",
+ "rfc6979",
+ "sha2",
+ "starknet-crypto-codegen",
+ "starknet-curve",
+ "starknet-ff",
+ "zeroize",
+]
+
+[[package]]
+name = "starknet-crypto-codegen"
+version = "0.3.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bbc159a1934c7be9761c237333a57febe060ace2bc9e3b337a59a37af206d19f"
+dependencies = [
+ "starknet-curve",
+ "starknet-ff",
+ "syn 2.0.117",
+]
+
+[[package]]
+name = "starknet-curve"
+version = "0.4.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d1c383518bb312751e4be80f53e8644034aa99a0afb29d7ac41b89a997db875b"
+dependencies = [
+ "starknet-ff",
+]
+
+[[package]]
+name = "starknet-ff"
+version = "0.3.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7abf1b44ec5b18d87c1ae5f54590ca9d0699ef4dd5b2ffa66fc97f24613ec585"
+dependencies = [
+ "ark-ff 0.4.2",
+ "bigdecimal",
+ "crypto-bigint",
+ "getrandom 0.2.17",
+ "hex",
+ "serde",
+]
+
+[[package]]
 name = "static_assertions"
 version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6600,6 +6854,56 @@ dependencies = [
  "rustversion",
  "syn 2.0.117",
 ]
+
+[[package]]
+name = "stwo"
+version = "2.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d400ae91acbeafa6f80070a03e1117a794a95f295050f44538a4c7dd55abd491"
+dependencies = [
+ "blake2",
+ "blake3",
+ "bytemuck",
+ "cfg-if",
+ "dashmap",
+ "educe 0.5.11",
+ "fnv",
+ "hashbrown 0.17.1",
+ "hex",
+ "indexmap 2.14.0",
+ "itertools 0.12.1",
+ "num-traits",
+ "rand 0.8.6",
+ "rayon",
+ "serde",
+ "starknet-crypto",
+ "starknet-ff",
+ "stwo-std-shims",
+ "thiserror 2.0.18",
+ "tracing",
+ "tracing-subscriber 0.3.23",
+]
+
+[[package]]
+name = "stwo-constraint-framework"
+version = "2.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "47aca0d5d36d4b015703fb14f162a23cb685e67f8aa08dbe7faf39bd66fe93f1"
+dependencies = [
+ "hashbrown 0.17.1",
+ "itertools 0.12.1",
+ "num-traits",
+ "rand 0.8.6",
+ "stwo",
+ "stwo-std-shims",
+ "tracing",
+]
+
+[[package]]
+name = "stwo-std-shims"
+version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5c21e2c707fb8926e6c4355a87494c29e8e46640ff4796aa8fbb74952327dfdc"
 
 [[package]]
 name = "subtle"
@@ -7140,6 +7444,15 @@ name = "tracing-subscriber"
 version = "0.2.25"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0e0d2eaa99c3c2e41547cfa109e910a68ea03823cccad4a0525dcbc9b01e8c71"
+dependencies = [
+ "tracing-core",
+]
+
+[[package]]
+name = "tracing-subscriber"
+version = "0.3.23"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cb7f578e5945fb242538965c2d0b04418d38ec25c79d160cd279bf0731c8d319"
 dependencies = [
  "tracing-core",
 ]
