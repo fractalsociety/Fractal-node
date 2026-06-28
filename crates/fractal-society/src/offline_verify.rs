@@ -13,7 +13,6 @@
 use crate::commit_service::{verify_manifest_signature, RetrievedPackage};
 use crate::pkgs::run_bundle::RunBundle;
 use crate::protocol::{Hash, ProofManifest};
-use crate::verifier::Scorecard;
 
 /// Outcome of offline verification.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -29,8 +28,18 @@ pub enum VerifyVerdict {
 
 /// Verify a published proof offline against the author's public key.
 ///
+/// `scorecard_canonical_bytes` is the canonical JSON of the scorecard — i.e. the
+/// exact bytes that were stored/transported (and whose hash is the bundle's
+/// `scorecard_hash`). Verification is **bytes-based**: it hashes those bytes
+/// (`Hash::new(bytes)`) rather than re-hashing a deserialized scorecard object.
+/// This matters because `serde_json`'s f64 parser is not correctly-rounded for
+/// some values, so a scorecard that transited a serde parse can silently drift
+/// and would otherwise fail verification spuriously. Pass the canonical bytes
+/// (`canonical_json(&scorecard)` for an in-memory scorecard, or the stored
+/// bytes from the artifact store) to verify trustlessly.
+///
 /// Checks performed:
-/// - `Hash::of(scorecard)` matches the bundle's `scorecard_hash`;
+/// - `Hash::new(scorecard_canonical_bytes)` matches the bundle's `scorecard_hash`;
 /// - the manifest's `scorecard_hash` matches the bundle's `scorecard_hash`;
 /// - the manifest's `trace_merkle_root` matches the bundle's `evidence_hash`;
 /// - the manifest's author signature verifies under `public_key`;
@@ -40,19 +49,14 @@ pub enum VerifyVerdict {
 pub fn verify(
     bundle: &RunBundle,
     manifest: &ProofManifest,
-    scorecard: &Scorecard,
+    scorecard_canonical_bytes: &[u8],
     public_key: &[u8; 32],
 ) -> VerifyVerdict {
     let mut reasons: Vec<String> = Vec::new();
 
-    // Recompute the scorecard hash and confirm it matches both the bundle and manifest.
-    let scorecard_hash = match Hash::of(scorecard) {
-        Ok(hash) => hash,
-        Err(error) => {
-            reasons.push(format!("scorecard hash computation failed: {error}"));
-            Hash(String::new())
-        }
-    };
+    // Hash the scorecard's canonical BYTES (not a deserialized object) so a
+    // serde f64 parse drift cannot corrupt the check.
+    let scorecard_hash = Hash::new(scorecard_canonical_bytes);
     if scorecard_hash != bundle.scorecard_hash {
         reasons.push("bundle scorecard_hash does not match recomputed scorecard hash".to_string());
     }

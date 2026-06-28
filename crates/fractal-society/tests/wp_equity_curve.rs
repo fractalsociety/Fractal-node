@@ -1,5 +1,5 @@
 use fractal_society::adapters::trading::{TradingAdapter, TradingAgent, TradingConfig};
-use fractal_society::kernel::{KernelConfig, run};
+use fractal_society::kernel::{run, KernelConfig};
 use fractal_society::pkgs::equity_curve::extract;
 
 async fn clean_evidence() -> fractal_society::protocol::EvidenceBundle {

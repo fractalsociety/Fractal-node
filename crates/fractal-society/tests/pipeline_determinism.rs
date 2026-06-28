@@ -121,8 +121,9 @@ async fn reproduced_proof_is_offline_verifiable() {
     // Re-running (replaying) from the same seed reproduces a proof that
     // verifies trustlessly via offline_verify — no host or re-run required.
     let (_, bundle, manifest, scorecard, public_key) = run_once(42).await;
+    let scorecard_bytes = fractal_society::canonical::canonical_json(&scorecard).unwrap();
     assert_eq!(
-        verify(&bundle, &manifest, &scorecard, &public_key),
+        verify(&bundle, &manifest, &scorecard_bytes, &public_key),
         VerifyVerdict::Valid,
         "a reproduced proof must be offline-verifiable"
     );

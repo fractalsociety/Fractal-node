@@ -16,6 +16,7 @@ fractal-crypto = { path = "../crypto" }
 fractal-mempool = { path = "../mempool" }
 fractal-network = { path = "../network" }
 fractal-rpc = { path = "../rpc" }
+fractal-rlvr = { path = "../rlvr" }
 fractal-shard = { path = "../shard" }
 fractal-storage = { path = "../storage" }
 futures.workspace = true

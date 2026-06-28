@@ -85,16 +85,12 @@ fn empty_id_question_and_claim_fail() {
     let errors = validate(&project).expect_err("missing required fields should fail");
 
     assert!(errors.iter().any(|error| error == "id must be non-empty"));
-    assert!(
-        errors
-            .iter()
-            .any(|error| error == "question must be non-empty")
-    );
-    assert!(
-        errors
-            .iter()
-            .any(|error| error == "claim must be non-empty")
-    );
+    assert!(errors
+        .iter()
+        .any(|error| error == "question must be non-empty"));
+    assert!(errors
+        .iter()
+        .any(|error| error == "claim must be non-empty"));
 }
 
 #[test]
@@ -104,11 +100,9 @@ fn empty_domain_adapter_id_fails() {
 
     let errors = validate(&project).expect_err("empty adapter id should fail");
 
-    assert!(
-        errors
-            .iter()
-            .any(|error| error == "domain_adapter.id must be non-empty")
-    );
+    assert!(errors
+        .iter()
+        .any(|error| error == "domain_adapter.id must be non-empty"));
 }
 
 #[test]
@@ -118,9 +112,7 @@ fn empty_domain_adapter_version_fails() {
 
     let errors = validate(&project).expect_err("empty adapter version should fail");
 
-    assert!(
-        errors
-            .iter()
-            .any(|error| error == "domain_adapter.version must be non-empty")
-    );
+    assert!(errors
+        .iter()
+        .any(|error| error == "domain_adapter.version must be non-empty"));
 }

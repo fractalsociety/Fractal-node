@@ -766,12 +766,28 @@ pub fn run_proof_latency_cost_bench(
 ) -> ProofLatencyCostReport {
     use fractal_consensus::{
         coverage_manifest_digest, coverage_manifest_for_circuit_version, eth_signed_raws_for_txs,
-        execute_and_build_block, header_hash, validity_proof_public_input_digest,
+        execute_and_build_block, header_hash, mixed_execution_witness_from_replay,
+        native_recursive_proof_envelope_v1, native_state_transition_statement_v1,
         verify_block_validity_proof, BlockValidityProof, CircuitVersion, ValidityProofSystem,
     };
-    use fractal_core::State;
+    use fractal_core::{Account, NativeCall, State, Transaction, TxBody, VmKind};
 
+    let signer = [seed as u8; 20];
     let mut state = State::default();
+    state.accounts.insert(
+        signer,
+        Account {
+            nonce: 0,
+            balance: 1_000_000,
+        },
+    );
+    let tx = Transaction {
+        signer,
+        nonce: 0,
+        vm: VmKind::Native,
+        body: TxBody::Native(NativeCall::NoOp),
+    };
+    let pre_state = state.clone();
     let block = execute_and_build_block(
         41,
         1,
@@ -782,8 +798,8 @@ pub fn run_proof_latency_cost_bench(
         1_000,
         60_000_000,
         &mut state,
-        Vec::new(),
-        eth_signed_raws_for_txs(0),
+        vec![tx],
+        eth_signed_raws_for_txs(1),
     )
     .unwrap();
     let mut proof = BlockValidityProof {
@@ -800,16 +816,25 @@ pub fn run_proof_latency_cost_bench(
         gas_used: block.header.gas_used,
         zone_namespace: block.header.zone_namespace,
         da_root: block.header.da_root,
-        circuit_version: CircuitVersion::DevMixedV1,
+        circuit_version: CircuitVersion::NativeStateTransitionV1,
         coverage_manifest_digest: coverage_manifest_digest(&coverage_manifest_for_circuit_version(
-            CircuitVersion::DevMixedV1,
+            CircuitVersion::NativeStateTransitionV1,
         ))
         .unwrap(),
         feature_set: block.header.feature_set,
-        proof_system: ValidityProofSystem::DevDigest,
+        proof_system: ValidityProofSystem::StwoPlonky2,
         proof_bytes: Vec::new(),
     };
-    proof.proof_bytes = validity_proof_public_input_digest(&proof).unwrap().to_vec();
+    let mut witness = mixed_execution_witness_from_replay(&block, &pre_state).unwrap();
+    witness.public_inputs.circuit_version = CircuitVersion::NativeStateTransitionV1;
+    witness.public_inputs.coverage_manifest_digest = coverage_manifest_digest(
+        &coverage_manifest_for_circuit_version(CircuitVersion::NativeStateTransitionV1),
+    )
+    .unwrap();
+    let statement = native_state_transition_statement_v1(&witness).unwrap();
+    proof.proof_bytes =
+        borsh::to_vec(&native_recursive_proof_envelope_v1(statement, &proof, [0x44; 32]).unwrap())
+            .unwrap();
 
     let started = Instant::now();
     let mut verified_proofs = 0usize;

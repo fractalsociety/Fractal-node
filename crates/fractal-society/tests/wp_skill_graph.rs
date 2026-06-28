@@ -1,4 +1,4 @@
-use fractal_society::pkgs::skill_graph::{SkillDep, has_cycle, load_order};
+use fractal_society::pkgs::skill_graph::{has_cycle, load_order, SkillDep};
 
 fn pos(order: &[String], id: &str) -> usize {
     order

@@ -3,7 +3,7 @@
 //! Hash a value through a serialize → deserialize round-trip and confirm the
 //! canonical hash is stable (catches non-canonical types).
 
-use serde::{Serialize, de::DeserializeOwned};
+use serde::{de::DeserializeOwned, Serialize};
 
 use crate::protocol::Hash;
 

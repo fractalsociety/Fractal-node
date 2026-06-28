@@ -1,4 +1,4 @@
-# Proof-Ingestion Decoupling — Parallel Task Breakdown (Tasks 1–22)
+# Proof-Ingestion Decoupling — Parallel Task Breakdown (Tasks 1–27)
 
 > Source PRD: [`proof-ingestion-decoupling-prd.md`](./proof-ingestion-decoupling-prd.md)
 > Machine-readable companion: [`proof-ingestion-tasks.json`](./proof-ingestion-tasks.json) — read this to dispatch tasks to agents.
@@ -29,9 +29,9 @@ Most primitives **already exist** in the codebase — owned-object certificates 
 |------|-------|------|
 | **0 — run now** | 1, 3, 4, 7, 9, 11, 12, 13, 14, 16, 17, 20 | none |
 | **1** | 2, 5, 10, 15, 18, 19 | after #1 (and #4 for 5, #14 for 15) |
-| **2** | 6 | after #2 |
-| **3** | 8 | after #7 and #6 |
-| **4** | 21 | after proof-ingestion path (#5, #8, #15) |
+| **2** | 6, 25, 27 | after #2 (+ wave-1 roots for 25/27) |
+| **3** | 8, 23, 24 | after #7 and #6 (24 needs all roots) |
+| **4** | 21, 26 | after proof-ingestion path (#5, #8, #15) |
 | **5 — final** | 22 | after #20 and #21 |
 
 **Critical path:** `#1 → #2 → #6 → #8` (payload enum → proof-update root → proof-input verify → state-root advance). Start #1 first; the rest of wave 0 runs alongside it.
@@ -202,8 +202,43 @@ Independent (wave 0): #3 (A3 flag), #9 (C3 finality), #11 (D2 receipt), #12 (D3 
 Also: #1 ─► #18 (G1) & #19 (G2)  |  #20 + #21 ─► #22 (H3)  |  #21 (H2) blocked_by #5, #8, #15
 ```
 
+## Workstream S — Safety, Hardening & Adversarial Testing (23–27)
+
+Hardening / liveness goals layered on top of the feature tasks (beyond the PRD).
+
+### #23 · S1 — Make DevDigest impossible in production builds/configs `blocked_by: 6`
+- **Status:** Completed. Gated `ValidityProofSystem::DevDigest` behind a non-default `fractal-consensus/dev-digest` feature, preserved explicit Borsh discriminants so default builds reject DevDigest tag `0`, added a runtime production/mainnet guard for opt-in dev builds, moved benchmarks to production fixture proofs, and kept node proof-finality tests on production proof fixtures.
+- **Anchor:** `ValidityProofSystem::DevDigest` at `crates/consensus/src/lib.rs:322`; verify arm 2037-2040; `BadDevDigest` at 136-137.
+- **Build:** Compile-time + runtime hard-gate: Cargo feature `dev-digest` (off by default, excluded from release/mainnet profiles); runtime guard hard-rejects DevDigest at submission AND verification under prod config; remove ambient defaults.
+- **Acceptance:** release build cannot construct/verify a DevDigest proof · usable only under explicit dev feature + local bench · prod-config test rejects at both boundaries · no benchmark regression.
+
+### #24 · S2 — Adversarial proof public-input mismatch tests across every root `blocked_by: 6, 10, 15, 18, 19`
+- **Anchor:** `verify_zone_update_public_inputs` `crates/shard/src/lib.rs:742`; `zone_proof_public_input_digest` 1041; `payload_root()` `crates/consensus/src/payload.rs:98`; reject pattern `crates/consensus/src/lib.rs:3398`.
+- **Build:** For every root (proof-update #2, cert-batch #15, message #18, DA #10, forced-inclusion #19, legacy tx_root) mutate each bound field and assert verify FAILS; cover swap / bit-flip / truncation / stale-replay / cross-root confusion.
+- **Acceptance:** one test per (root × field) · cross-root confusion rejects · tampered/stale rejects · CI suite, no mutation slips through.
+- **Status:** Completed. Added adversarial tests for proof-update roots, certificate-batch roots, consensus block validity public inputs, shard zone proof public-input digests, message/DA/forced-inclusion cross-root confusion, stale forced-inclusion replay, and zone-proof commitment `proof_digest`/`prover` tampering. Gated DevDigest-only tests behind `dev-digest` so default CI remains green while the DevDigest adversarial suite runs with `--features dev-digest`. Verified with `cargo test -p fractal-consensus --lib`, `cargo test -p fractal-consensus --features dev-digest --lib`, `cargo test -p fractal-shard --lib`, `cargo check --workspace`, and `cargo fmt --all --check`.
+
+### #25 · S3 — Property/fuzz tests for payload root ordering + mutation resistance `blocked_by: 2, 10, 15, 18, 19`
+- **Anchor:** `payload_root()` `crates/consensus/src/payload.rs:98`; existing fuzz target `fuzz/fuzz_targets/proof_envelope.rs`.
+- **Build:** proptest + cargo-fuzz over every root fn — ordering sensitivity, single-bit mutation resistance, determinism, ordered/non-commutative, empty/single boundaries, no trivial collisions. New targets under `fuzz/fuzz_targets/`.
+- **Acceptance:** targets per root fn · properties hold over generated inputs with reproducible shrinks · property tests in CI, fuzz targets for nightly.
+- **Status:** Completed. Added `proptest` coverage for proof-update roots, certificate-batch roots, full/mixed payload roots, DA commitment hashes, ordering sensitivity, single-bit mutation resistance, determinism, and small-space collision checks. Added cargo-fuzz targets for payload roots and DA commitment/header roots under `fuzz/fuzz_targets/`. Verified with `cargo test -p fractal-consensus --lib payload --no-fail-fast`, `cargo check --manifest-path fuzz/Cargo.toml --bins`, and `cargo fmt --all --check`.
+
+### #26 · S4 — Stress forced-inclusion liveness (multi-zone, delayed proofs) `blocked_by: 8, 19`
+- **Anchor:** forced-inclusion types `crates/masterchain/src/ledger.rs:69-91,290-291`; `InvalidForcedInclusionTimeout` 332; `forced_inclusion_queue_root` `crates/masterchain/src/bft.rs:148`.
+- **Build:** Multi-zone stress harness with delayed/withheld proofs asserting liveness (forced request eventually included after `deadline_masterchain_height`; report worst-case latency) AND safety (zone proof omitting a due item is rejected until included).
+- **Acceptance:** bounded-block liveness after deadline · missing items reject finality until included · adversarial withholding overridden · latency reported.
+- **Status:** Completed. Added a dedicated masterchain stress harness with four zones, staggered deadlines, eight concurrent forced-inclusion requests, delayed/withheld proofs, queue-root commitment checks, omitted-root finality rejection, satisfied-root finality acceptance, and a `ForcedInclusionStressReport` carrying `worst_inclusion_latency_blocks`. Verified with `cargo test -p fractal-masterchain` and `cargo check --workspace`.
+
+### #27 · S5 — Define minimum DA sampling parameters, reject undersampled receipts `blocked_by: 10, 11`
+- **Anchor:** `DaSamplingReceipt` + `min_samples` `crates/consensus/src/lib.rs:254,267`; `build_da_sampling_receipt` 1408; `verify_da_sampling_receipt` 1451-1463; commitment check 1648; literal `min_samples: 4` at 3990.
+- **Build:** Single `DaSamplingPolicy` source of truth (min samples vs share count + RS ratio + collision target; min cols/rows; confidence), enforced at BOTH verify (1451) and build (1648) boundaries; eliminate literals like `min_samples: 4`.
+- **Acceptance:** one policy module, no caller literals · undersampled rejected at both boundaries · soundness rationale documented · min-1 rejects / min+ passes / scales with share count.
+
+---
+
 ## Status
 
-All 22 tasks written (Workstreams A–H). The PRD's Definition of Done is reached when all are complete and the H3 report shows whether proof ingestion improves throughput/latency without reducing validator quorum safety.
+All 27 tasks written (Workstreams A–H + S hardening). The PRD's Definition of Done is reached when 1–22 are complete and the H3 report shows whether proof ingestion improves throughput/latency without reducing validator quorum safety; tasks 23–27 then harden safety, liveness, and test coverage.
 
-**Order:** wave 0 (1,3,4,7,9,11,12,13,14,16,17,20) → wave 1 (2,5,10,15,18,19) → 6 → 8 → 21 → 22. Critical path: `#1 → #2 → #6 → #8 → #21 → #22`.
+**Order:** wave 0 → wave 1 → 6 (then 25, 27) → 8 (then 23, 24) → 21, 26 → 22. Critical path: `#1 → #2 → #6 → #8 → #21 → #22`.

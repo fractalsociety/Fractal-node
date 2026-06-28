@@ -2407,6 +2407,7 @@ dependencies = [
  "fractal-core",
  "fractal-crypto",
  "fractal-evm",
+ "proptest",
  "qp-plonky2-verifier",
  "reed-solomon-erasure",
  "thiserror 1.0.69",
@@ -2564,6 +2565,7 @@ dependencies = [
  "fractal-evm",
  "fractal-mempool",
  "fractal-network",
+ "fractal-rlvr",
  "fractal-rpc",
  "fractal-shard",
  "fractal-storage",
@@ -2609,6 +2611,17 @@ dependencies = [
  "stwo-constraint-framework",
  "thiserror 1.0.69",
  "tokio",
+]
+
+[[package]]
+name = "fractal-rlvr"
+version = "0.1.0"
+dependencies = [
+ "blake3",
+ "hex",
+ "serde",
+ "serde_json",
+ "thiserror 1.0.69",
 ]
 
 [[package]]

@@ -91,15 +91,22 @@ pub fn persist_pipeline_result(
 }
 
 /// Load a persisted proof and verify it without re-running the pipeline.
+///
+/// Verification is **bytes-based**: the scorecard is verified by hashing its
+/// stored canonical bytes (`Hash::new(bytes) == bundle.scorecard_hash`), not by
+/// re-hashing the deserialized object. This avoids a latent f64-precision bug —
+/// `serde_json`'s number parser is not correctly-rounded for some values, so a
+/// deserialized scorecard can drift and would otherwise fail verification
+/// spuriously. See `docs/fractal-society-ara-gap-closure-prd.md`.
 pub fn load_proof(
     store: &dyn ArtifactStore,
     bundle: &RunBundle,
     public_key: &[u8; 32],
 ) -> crate::Result<LoadedProof> {
-    let manifest: ProofManifest = get_canonical(store, &bundle.proof_hash, "proof manifest")?;
-    let scorecard: Scorecard = get_canonical(store, &bundle.scorecard_hash, "scorecard")?;
-    let evidence: EvidenceBundle = get_canonical(store, &bundle.evidence_hash, "evidence")?;
-    let verdict = offline_verify::verify(bundle, &manifest, &scorecard, public_key);
+    let (manifest, _manifest_bytes) = get_verified(store, &bundle.proof_hash, "proof manifest")?;
+    let (scorecard, scorecard_bytes) = get_verified(store, &bundle.scorecard_hash, "scorecard")?;
+    let (evidence, _evidence_bytes) = get_verified(store, &bundle.evidence_hash, "evidence")?;
+    let verdict = offline_verify::verify(bundle, &manifest, &scorecard_bytes, public_key);
 
     Ok(LoadedProof {
         bundle: bundle.clone(),
@@ -119,15 +126,31 @@ fn put_canonical<T: Serialize + ?Sized>(
     store.put(hash, &bytes)
 }
 
-fn get_canonical<T: DeserializeOwned>(
+/// Read a canonical artifact: fetch its bytes, assert they hash to the key they
+/// are stored under (defense-in-depth tamper check), then deserialize.
+///
+/// Returns both the deserialized value and the canonical bytes, so callers that
+/// need to verify-by-bytes (e.g. [`load_proof`]) can pass the bytes on without
+/// re-hashing a (possibly f64-drifted) deserialized object.
+fn get_verified<T: DeserializeOwned>(
     store: &dyn ArtifactStore,
     hash: &Hash,
     label: &str,
-) -> crate::Result<T> {
+) -> crate::Result<(T, Vec<u8>)> {
     let bytes = store.get(hash)?.ok_or_else(|| {
         crate::error::Error::ArtifactNotFound(format!("{label} artifact {}", hash.0))
     })?;
-    serde_json::from_slice(&bytes).map_err(crate::error::Error::Json)
+    // The store validates Hash::new(bytes) == hash on `put`; re-check on read so
+    // a corrupt/custom store cannot serve bytes that don't match their key.
+    let actual = Hash::new(&bytes);
+    if &actual != hash {
+        return Err(crate::error::Error::InvalidArtifact(format!(
+            "{label} bytes hash {} does not match stored key {}",
+            actual.0, hash.0
+        )));
+    }
+    let value: T = serde_json::from_slice(&bytes).map_err(crate::error::Error::Json)?;
+    Ok((value, bytes))
 }
 
 fn append_event(

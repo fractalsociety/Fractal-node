@@ -1,6 +1,6 @@
 use fractal_society::adapters::trading::{TradingAdapter, TradingAgent, TradingConfig};
-use fractal_society::kernel::{KernelConfig, run};
-use fractal_society::pkgs::holdout_isolation::{VERIFIER_ID, verify};
+use fractal_society::kernel::{run, KernelConfig};
+use fractal_society::pkgs::holdout_isolation::{verify, VERIFIER_ID};
 
 async fn clean_evidence() -> fractal_society::protocol::EvidenceBundle {
     let tcfg = TradingConfig {

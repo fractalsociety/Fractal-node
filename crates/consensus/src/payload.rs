@@ -303,6 +303,8 @@ mod tests {
     use fractal_core::{
         NativeCall, OwnedObjectCertificate, OwnedObjectId, TxBody, VmKind, HARDHAT_DEFAULT_SIGNER_0,
     };
+    use proptest::prelude::*;
+    use std::collections::BTreeSet;
 
     fn noop(nonce: u64) -> Transaction {
         Transaction {
@@ -424,46 +426,88 @@ mod tests {
         let base = update(1, 10, 9);
         let base_root = proof_updates_root(std::slice::from_ref(&base)).unwrap();
 
-        let mut cases = Vec::new();
+        let mut cases = Vec::<(&str, ZoneProofUpdateV1)>::new();
 
         let mut changed = base.clone();
         changed.zone_id += 1;
-        cases.push(changed);
+        cases.push(("zone_id", changed));
 
         let mut changed = base.clone();
         changed.parent_root = [9u8; 32];
-        cases.push(changed);
+        cases.push(("parent_root", changed));
 
         let mut changed = base.clone();
         changed.new_root = [9u8; 32];
-        cases.push(changed);
+        cases.push(("new_root", changed));
 
         let mut changed = base.clone();
         changed.da_root = [9u8; 32];
-        cases.push(changed);
+        cases.push(("da_root", changed));
 
         let mut changed = base.clone();
         changed.message_root = [9u8; 32];
-        cases.push(changed);
+        cases.push(("message_root", changed));
 
         let mut changed = base.clone();
         changed.forced_inclusion_root = [9u8; 32];
-        cases.push(changed);
+        cases.push(("forced_inclusion_root", changed));
 
         let mut changed = base.clone();
         changed.circuit_version = CircuitVersion::MixedStateTransitionV1;
-        cases.push(changed);
+        cases.push(("circuit_version", changed));
 
         let mut changed = base.clone();
         changed.proof_digest = [7u8; 32];
-        cases.push(changed);
+        cases.push(("proof_digest", changed));
 
-        for changed in cases {
+        for (field, changed) in cases {
             assert_ne!(
                 base_root,
-                proof_updates_root(std::slice::from_ref(&changed)).unwrap()
+                proof_updates_root(std::slice::from_ref(&changed)).unwrap(),
+                "proof update root did not bind {field}"
             );
         }
+    }
+
+    #[test]
+    fn proof_update_root_rejects_swap_bit_flip_stale_and_cross_root_confusion() {
+        let first = update(1, 10, 9);
+        let second = update(2, 11, 8);
+        let root = proof_updates_root(&[first.clone(), second.clone()]).unwrap();
+
+        let swapped = {
+            let mut changed = first.clone();
+            changed.new_root = first.parent_root;
+            changed.parent_root = first.new_root;
+            proof_updates_root(&[changed, second.clone()]).unwrap()
+        };
+        assert_ne!(root, swapped, "field swap must change proof root");
+
+        let bit_flipped = {
+            let mut changed = first.clone();
+            changed.proof_digest[0] ^= 0x01;
+            proof_updates_root(&[changed, second.clone()]).unwrap()
+        };
+        assert_ne!(root, bit_flipped, "single-bit flip must change proof root");
+
+        let stale_replay = {
+            let mut changed = first.clone();
+            changed.parent_root = [0xAA; 32];
+            proof_updates_root(&[changed, second]).unwrap()
+        };
+        assert_ne!(
+            root, stale_replay,
+            "stale parent root replay must change proof root"
+        );
+
+        let cert_batch = OwnedObjectCertificateBatchV1 {
+            certificates: vec![certificate(1, 1, 10)],
+        };
+        assert_ne!(
+            root,
+            certificate_batches_root(&[cert_batch]).unwrap(),
+            "proof update root must not be accepted as certificate batch root"
+        );
     }
 
     #[test]
@@ -541,6 +585,36 @@ mod tests {
     }
 
     #[test]
+    fn certificate_batch_root_rejects_bit_flip_truncation_stale_and_cross_root_confusion() {
+        let base = OwnedObjectCertificateBatchV1 {
+            certificates: vec![certificate(1, 1, 10), certificate(2, 2, 20)],
+        };
+        let base_root = certificate_batch_root(&base).unwrap();
+
+        let mut changed_hash = base.clone();
+        changed_hash.certificates[0].tx_hash[0] ^= 0x01;
+        assert_ne!(base_root, certificate_batch_root(&changed_hash).unwrap());
+
+        let mut truncated = base.clone();
+        truncated.certificates[0].validator_signatures.truncate(0);
+        truncated.certificates[0].signer_indices.truncate(0);
+        truncated.certificates[0].object_versions.truncate(0);
+        assert_ne!(base_root, certificate_batch_root(&truncated).unwrap());
+
+        let mut stale = base.clone();
+        stale.certificates[0].object_versions[0].version = stale.certificates[0].object_versions[0]
+            .version
+            .saturating_sub(1);
+        assert_ne!(base_root, certificate_batch_root(&stale).unwrap());
+
+        assert_ne!(
+            certificate_batches_root(std::slice::from_ref(&base)).unwrap(),
+            proof_updates_root(&[update(1, 10, 9)]).unwrap(),
+            "certificate batch root must not be accepted as proof update root"
+        );
+    }
+
+    #[test]
     fn certificate_batch_root_rejects_duplicate_object_versions() {
         let dup_version = OwnedObjectVersion {
             object_id: OwnedObjectId::Agent(7),
@@ -566,5 +640,225 @@ mod tests {
                 .kind(),
             std::io::ErrorKind::InvalidData
         );
+    }
+
+    fn hash_from(seed: u8, salt: u8) -> Hash256 {
+        let mut out = [0u8; 32];
+        for (idx, byte) in out.iter_mut().enumerate() {
+            *byte = seed.wrapping_add(salt).wrapping_add(idx as u8);
+        }
+        out
+    }
+
+    fn generated_update(seed: u8, height: u64) -> ZoneProofUpdateV1 {
+        ZoneProofUpdateV1 {
+            zone_id: u64::from(seed) + 1,
+            height,
+            parent_root: hash_from(seed, 1),
+            new_root: hash_from(seed, 2),
+            tx_root: hash_from(seed, 3),
+            da_root: hash_from(seed, 4),
+            message_root: hash_from(seed, 5),
+            forced_inclusion_root: hash_from(seed, 6),
+            circuit_version: if seed % 2 == 0 {
+                CircuitVersion::NativeStateTransitionV1
+            } else {
+                CircuitVersion::MixedStateTransitionV1
+            },
+            feature_set: ExecutionFeatureSetV1::empty(),
+            proof_digest: hash_from(seed, 7),
+        }
+    }
+
+    fn generated_cert(seed: u8, idx: usize) -> OwnedObjectCertificate {
+        certificate(seed, idx as u8, u64::from(seed) + idx as u64 + 1)
+    }
+
+    fn generated_zone_blob_commitment(
+        seed: u8,
+        sample_count: u32,
+    ) -> crate::ZoneBlobDaCommitmentV1 {
+        crate::ZoneBlobDaCommitmentV1 {
+            namespace: *b"zoneprop",
+            da_root: hash_from(seed, 9),
+            byte_count: u64::from(seed) * 17 + 1,
+            share_count: u32::from(seed % 16) + 1,
+            share_size: 256 + u32::from(seed),
+            sampling: crate::DaSamplingParamsV1 {
+                seed: u64::from(seed) * 257,
+                sample_count,
+                min_samples: sample_count.min(4),
+            },
+        }
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(64))]
+
+        #[test]
+        fn prop_proof_update_roots_are_deterministic_ordered_and_mutation_resistant(
+            seeds in prop::collection::vec(any::<u8>(), 1..8)
+        ) {
+            let updates: Vec<_> = seeds
+                .iter()
+                .enumerate()
+                .map(|(idx, seed)| generated_update(*seed, idx as u64 + 1))
+                .collect();
+            let root = proof_updates_root(&updates).unwrap();
+            prop_assert_eq!(root, proof_updates_root(&updates).unwrap());
+            prop_assert_eq!(root, BlockPayload::ProofUpdates(updates.clone()).payload_root().unwrap());
+
+            let mut mutated = updates.clone();
+            mutated[0].proof_digest[0] ^= 0x01;
+            prop_assert_ne!(root, proof_updates_root(&mutated).unwrap());
+
+            if updates.len() > 1 {
+                let mut reordered = updates.clone();
+                reordered.swap(0, updates.len() - 1);
+                if proof_update_leaf_hash(&updates[0]).unwrap()
+                    != proof_update_leaf_hash(&updates[updates.len() - 1]).unwrap()
+                {
+                    prop_assert_ne!(root, proof_updates_root(&reordered).unwrap());
+                }
+            }
+        }
+
+        #[test]
+        fn prop_certificate_batch_roots_are_deterministic_ordered_and_mutation_resistant(
+            seeds in prop::collection::vec(any::<u8>(), 1..8)
+        ) {
+            let certificates: Vec<_> = seeds
+                .iter()
+                .enumerate()
+                .map(|(idx, seed)| generated_cert(*seed, idx))
+                .collect();
+            let batch = OwnedObjectCertificateBatchV1 { certificates };
+            let root = certificate_batch_root(&batch).unwrap();
+            prop_assert_eq!(root, certificate_batch_root(&batch).unwrap());
+            prop_assert_eq!(
+                certificate_batches_root(std::slice::from_ref(&batch)).unwrap(),
+                BlockPayload::CertificateBatches(vec![batch.clone()]).payload_root().unwrap()
+            );
+
+            let mut mutated = batch.clone();
+            mutated.certificates[0].tx_hash[0] ^= 0x01;
+            prop_assert_ne!(root, certificate_batch_root(&mutated).unwrap());
+
+            if batch.certificates.len() > 1 {
+                let mut reordered = batch.clone();
+                reordered.certificates.swap(0, batch.certificates.len() - 1);
+                prop_assert_ne!(root, certificate_batch_root(&reordered).unwrap());
+            }
+        }
+
+        #[test]
+        fn prop_full_and_mixed_payload_roots_are_deterministic_and_ordered(
+            nonces in prop::collection::vec(0u64..1_000_000, 1..8)
+        ) {
+            let transactions: Vec<_> = nonces.iter().copied().map(noop).collect();
+            let payload = BlockPayload::FullTransactions {
+                eth_signed_raw: vec![None; transactions.len()],
+                transactions: transactions.clone(),
+            };
+            let root = payload.payload_root().unwrap();
+            prop_assert_eq!(root, payload.payload_root().unwrap());
+
+            let mixed_items: Vec<_> = transactions
+                .iter()
+                .cloned()
+                .map(|transaction| BlockPayloadItem::Transaction {
+                    transaction,
+                    eth_signed_raw: None,
+                })
+                .collect();
+            prop_assert_eq!(
+                root,
+                BlockPayload::FullTransactions {
+                    eth_signed_raw: vec![None; transactions.len()],
+                    transactions: transactions.clone(),
+                }
+                .payload_root()
+                .unwrap()
+            );
+            prop_assert_ne!(
+                root,
+                BlockPayload::Mixed(mixed_items.clone()).payload_root().unwrap()
+            );
+
+            let mut mutated = transactions.clone();
+            mutated[0].nonce = mutated[0].nonce.wrapping_add(1);
+            prop_assert_ne!(
+                root,
+                BlockPayload::FullTransactions {
+                    eth_signed_raw: vec![None; mutated.len()],
+                    transactions: mutated,
+                }
+                .payload_root()
+                .unwrap()
+            );
+
+            if transactions.len() > 1 {
+                let mut reordered = transactions.clone();
+                reordered.swap(0, transactions.len() - 1);
+                if transactions[0] != transactions[transactions.len() - 1] {
+                    prop_assert_ne!(
+                        root,
+                        BlockPayload::FullTransactions {
+                            eth_signed_raw: vec![None; reordered.len()],
+                            transactions: reordered,
+                        }
+                        .payload_root()
+                        .unwrap()
+                    );
+                }
+            }
+        }
+
+        #[test]
+        fn prop_zone_blob_da_commitment_hash_is_deterministic_and_mutation_resistant(
+            seed in any::<u8>(),
+            sample_count in 1u32..64
+        ) {
+            let commitment = generated_zone_blob_commitment(seed, sample_count);
+            let root = crate::zone_blob_da_commitment_hash(&commitment).unwrap();
+            prop_assert_eq!(root, crate::zone_blob_da_commitment_hash(&commitment).unwrap());
+
+            let mut mutated = commitment.clone();
+            mutated.sampling.sample_count = mutated.sampling.sample_count.saturating_add(1);
+            prop_assert_ne!(root, crate::zone_blob_da_commitment_hash(&mutated).unwrap());
+
+            let mut mutated = commitment;
+            mutated.da_root[0] ^= 0x01;
+            prop_assert_ne!(root, crate::zone_blob_da_commitment_hash(&mutated).unwrap());
+        }
+    }
+
+    #[test]
+    fn generated_root_samples_have_no_trivial_collisions() {
+        let mut proof_roots = BTreeSet::new();
+        let mut cert_roots = BTreeSet::new();
+        let mut da_roots = BTreeSet::new();
+
+        for seed in 0u8..32 {
+            proof_roots
+                .insert(proof_updates_root(&[generated_update(seed, u64::from(seed))]).unwrap());
+            cert_roots.insert(
+                certificate_batch_root(&OwnedObjectCertificateBatchV1 {
+                    certificates: vec![generated_cert(seed, seed as usize)],
+                })
+                .unwrap(),
+            );
+            da_roots.insert(
+                crate::zone_blob_da_commitment_hash(&generated_zone_blob_commitment(
+                    seed,
+                    u32::from(seed % 8) + 1,
+                ))
+                .unwrap(),
+            );
+        }
+
+        assert_eq!(proof_roots.len(), 32);
+        assert_eq!(cert_roots.len(), 32);
+        assert_eq!(da_roots.len(), 32);
     }
 }

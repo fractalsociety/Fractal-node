@@ -1,0 +1,20 @@
+[package]
+name = "fractal-rlvr"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Local RLVR harness primitives for Fractal proof-of-route training"
+
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "fractal-rlvr"
+path = "src/main.rs"
+
+[dependencies]
+blake3.workspace = true
+hex.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true

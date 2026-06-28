@@ -317,6 +317,10 @@ pub struct RpcChainConfig {
     pub prover_rewards: bool,
     pub sequencer_rewards: bool,
     pub block_payload_mode: String,
+    pub rlvr_enabled: bool,
+    pub rlvr_chain_commit_enabled: bool,
+    pub rlvr_raw_data_on_chain: bool,
+    pub rlvr_raw_data_on_chain_requested: bool,
     pub settlement_finality: String,
 }
 

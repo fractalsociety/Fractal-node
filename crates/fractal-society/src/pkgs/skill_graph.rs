@@ -5,7 +5,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use crate::{Result, error::Error};
+use crate::{error::Error, Result};
 
 /// A skill and the skill ids it depends on.
 #[derive(Debug, Clone, PartialEq, Eq)]

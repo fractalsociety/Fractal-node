@@ -5,9 +5,9 @@ use fractal_consensus::{
     coverage_manifest_digest, coverage_manifest_for_circuit_version, eth_signed_raws_for_txs,
     execute_and_build_block, header_hash, mixed_execution_witness_from_replay,
     mixed_execution_witness_metadata, mixed_intrablock_aggregate_proof_envelope_v1,
-    native_recursive_proof_envelope_v1, native_state_transition_statement_v1,
-    validity_proof_public_input_digest, BlockPayloadKind, BlockValidityProof, CircuitVersion,
-    ExecutionFeatureSetV1, ValidityProofSystem, WitnessRetentionPolicyV1,
+    native_recursive_proof_envelope_v1, native_state_transition_statement_v1, BlockPayloadKind,
+    BlockValidityProof, CircuitVersion, ExecutionFeatureSetV1, ValidityProofSystem,
+    WitnessRetentionPolicyV1,
 };
 use fractal_core::{NativeCall, Transaction, TxBody, VmKind};
 use fractal_crypto::hash::keccak256;
@@ -112,7 +112,8 @@ fn native_noop_block(n: &NodeInner) -> fractal_consensus::Block {
         vm: VmKind::Native,
         body: TxBody::Native(NativeCall::NoOp),
     };
-    let mut scratch = n.state.clone();
+    let pre_state = n.state.clone();
+    let mut scratch = pre_state.clone();
     execute_and_build_block(
         n.chain_id,
         n.height + 1,
@@ -211,7 +212,8 @@ fn apply_synced_block_rejects_eth_raw_length_mismatch() {
         vm: VmKind::Native,
         body: TxBody::Native(NativeCall::NoOp),
     };
-    let mut scratch = n.state.clone();
+    let pre_state = n.state.clone();
+    let mut scratch = pre_state.clone();
     let mut block = execute_and_build_block(
         n.chain_id,
         1,
@@ -475,13 +477,15 @@ fn devnet_with_bft7_fixture_has_seven_validators() {
 #[test]
 fn validity_proof_promotes_committed_block_from_soft_to_proof_final() {
     let mut n = NodeInner::devnet();
+    n.set_native_transition_proofs_enabled(true);
     let tx = Transaction {
         signer: HARDHAT_DEFAULT_SIGNER_0,
         nonce: 0,
         vm: VmKind::Native,
         body: TxBody::Native(NativeCall::NoOp),
     };
-    let mut scratch = n.state.clone();
+    let pre_state = n.state.clone();
+    let mut scratch = pre_state.clone();
     let block = execute_and_build_block(
         n.chain_id,
         1,
@@ -497,6 +501,11 @@ fn validity_proof_promotes_committed_block_from_soft_to_proof_final() {
     )
     .expect("block");
     let block_hash = header_hash(&block.header).unwrap();
+    let witness =
+        native_transition_witness(mixed_execution_witness_from_replay(&block, &pre_state).unwrap());
+    n.record_witness_metadata(
+        mixed_execution_witness_metadata(&witness, WitnessRetentionPolicyV1::MetadataOnly).unwrap(),
+    );
 
     n.apply_synced_block(&block).expect("apply");
     assert_eq!(
@@ -504,30 +513,7 @@ fn validity_proof_promotes_committed_block_from_soft_to_proof_final() {
         Some(fractal_node::BlockFinality::Soft)
     );
 
-    let mut proof = BlockValidityProof {
-        chain_id: block.header.chain_id,
-        height: block.header.height,
-        block_hash,
-        timestamp_ms: block.header.timestamp_ms,
-        parent_state_root: block.header.parent_state_root,
-        state_root: block.header.state_root,
-        tx_root: block.header.tx_root,
-        receipt_root: block.header.receipt_root,
-        native_event_root: block.header.native_event_root,
-        evm_log_root: block.header.evm_log_root,
-        gas_used: block.header.gas_used,
-        zone_namespace: block.header.zone_namespace,
-        da_root: block.header.da_root,
-        circuit_version: CircuitVersion::DevMixedV1,
-        coverage_manifest_digest: coverage_manifest_digest(&coverage_manifest_for_circuit_version(
-            CircuitVersion::DevMixedV1,
-        ))
-        .unwrap(),
-        feature_set: block.header.feature_set,
-        proof_system: ValidityProofSystem::DevDigest,
-        proof_bytes: Vec::new(),
-    };
-    proof.proof_bytes = validity_proof_public_input_digest(&proof).unwrap().to_vec();
+    let proof = native_recursive_block_proof(&block, &witness);
 
     n.submit_validity_proof(proof).expect("proof accepted");
     assert_eq!(
@@ -748,13 +734,15 @@ fn mixed_block_accepts_mixed_proof_and_rejects_native_only_coverage() {
 #[test]
 fn proof_finality_records_persist_to_store() {
     let mut n = NodeInner::devnet();
+    n.set_native_transition_proofs_enabled(true);
     let tx = Transaction {
         signer: HARDHAT_DEFAULT_SIGNER_0,
         nonce: 0,
         vm: VmKind::Native,
         body: TxBody::Native(NativeCall::NoOp),
     };
-    let mut scratch = n.state.clone();
+    let pre_state = n.state.clone();
+    let mut scratch = pre_state.clone();
     let block = execute_and_build_block(
         n.chain_id,
         1,
@@ -770,6 +758,11 @@ fn proof_finality_records_persist_to_store() {
     )
     .expect("block");
     let block_hash = header_hash(&block.header).unwrap();
+    let witness =
+        native_transition_witness(mixed_execution_witness_from_replay(&block, &pre_state).unwrap());
+    n.record_witness_metadata(
+        mixed_execution_witness_metadata(&witness, WitnessRetentionPolicyV1::MetadataOnly).unwrap(),
+    );
 
     n.apply_synced_block(&block).expect("apply");
     let path = std::env::temp_dir().join(format!(
@@ -781,30 +774,7 @@ fn proof_finality_records_persist_to_store() {
     n.set_proof_finality_store(ProofFinalityStore::open(&path).expect("store"))
         .expect("attach store");
 
-    let mut proof = BlockValidityProof {
-        chain_id: block.header.chain_id,
-        height: block.header.height,
-        block_hash,
-        timestamp_ms: block.header.timestamp_ms,
-        parent_state_root: block.header.parent_state_root,
-        state_root: block.header.state_root,
-        tx_root: block.header.tx_root,
-        receipt_root: block.header.receipt_root,
-        native_event_root: block.header.native_event_root,
-        evm_log_root: block.header.evm_log_root,
-        gas_used: block.header.gas_used,
-        zone_namespace: block.header.zone_namespace,
-        da_root: block.header.da_root,
-        circuit_version: CircuitVersion::DevMixedV1,
-        coverage_manifest_digest: coverage_manifest_digest(&coverage_manifest_for_circuit_version(
-            CircuitVersion::DevMixedV1,
-        ))
-        .unwrap(),
-        feature_set: block.header.feature_set,
-        proof_system: ValidityProofSystem::DevDigest,
-        proof_bytes: Vec::new(),
-    };
-    proof.proof_bytes = validity_proof_public_input_digest(&proof).unwrap().to_vec();
+    let proof = native_recursive_block_proof(&block, &witness);
     n.submit_validity_proof(proof).expect("proof accepted");
 
     let mut restored = NodeInner::devnet();
@@ -854,7 +824,7 @@ fn validity_proof_rejects_unknown_block() {
         ))
         .unwrap(),
         feature_set: ExecutionFeatureSetV1::empty(),
-        proof_system: ValidityProofSystem::DevDigest,
+        proof_system: ValidityProofSystem::StwoPlonky2,
         proof_bytes: vec![1],
     };
 

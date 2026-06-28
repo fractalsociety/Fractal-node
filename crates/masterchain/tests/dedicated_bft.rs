@@ -237,6 +237,12 @@ fn zone_metadata(timeout_blocks: u64, namespace: [u8; 8]) -> ExecutionZoneMetada
     }
 }
 
+fn zone_ns(idx: usize) -> [u8; 8] {
+    let mut namespace = *b"zone0000";
+    namespace[7] = b'0' + idx as u8;
+    namespace
+}
+
 #[test]
 fn zone_creation_and_proof_final_update() {
     let mut ledger = MasterchainLedger::default();
@@ -432,6 +438,139 @@ fn zone_finality_accepts_satisfied_forced_inclusion_after_timeout() {
         .contains(&request.request_id));
     assert_eq!(ledger.required_forced_inclusion_root_for_zone(9), [0u8; 32]);
     assert_eq!(ledger.forced_inclusion_queue_root(), [0u8; 32]);
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ForcedInclusionStressReport {
+    zones: usize,
+    requests: usize,
+    worst_inclusion_latency_blocks: u64,
+    rejected_omitted_proofs: usize,
+    accepted_satisfied_proofs: usize,
+}
+
+#[test]
+fn multi_zone_forced_inclusion_liveness_with_delayed_proofs() {
+    let mut ledger = MasterchainLedger::default();
+    ledger.ingest_shard_anchor(anchor(0, 10, 1)).unwrap();
+
+    let zone_count = 4usize;
+    let requests_per_zone = 2usize;
+    let mut requests = Vec::new();
+    for idx in 0..zone_count {
+        let zone_id = 100 + idx as u64;
+        let timeout = 1 + idx as u64;
+        ledger
+            .create_execution_zone(
+                zone_id,
+                [0x10 + idx as u8; 20],
+                zone_metadata(timeout, zone_ns(idx)),
+            )
+            .unwrap();
+        for req_idx in 0..requests_per_zone {
+            let mut tx_hash = [0u8; 32];
+            tx_hash[0] = 0xA0 + idx as u8;
+            tx_hash[1] = req_idx as u8;
+            let request = ledger
+                .submit_forced_inclusion(
+                    zone_id,
+                    [0xB0 + req_idx as u8; 20],
+                    tx_hash,
+                    vec![idx as u8, req_idx as u8],
+                )
+                .unwrap();
+            requests.push(request);
+        }
+    }
+
+    let max_deadline = requests
+        .iter()
+        .map(|request| request.deadline_masterchain_height)
+        .max()
+        .unwrap();
+    let mut committed_queue_roots = Vec::new();
+    while ledger.forced_inclusion_events().len() < zone_count.saturating_mul(requests_per_zone) {
+        let block = ledger.seal_round([0u8; 20]).unwrap().unwrap();
+        committed_queue_roots.push(block.forced_inclusion_queue_root);
+        assert!(
+            block.height <= max_deadline,
+            "forced requests should materialize by their deadline"
+        );
+    }
+
+    let mut worst_inclusion_latency_blocks = 0u64;
+    for event in ledger.forced_inclusion_events() {
+        let latency = event
+            .included_at_masterchain_height
+            .saturating_sub(event.request.deadline_masterchain_height);
+        worst_inclusion_latency_blocks = worst_inclusion_latency_blocks.max(latency);
+        assert_eq!(
+            event.included_at_masterchain_height, event.request.deadline_masterchain_height,
+            "forced inclusion must materialize at the first deadline block"
+        );
+    }
+    assert!(committed_queue_roots.iter().all(|root| *root != [0u8; 32]));
+
+    let mut rejected_omitted_proofs = 0usize;
+    let mut accepted_satisfied_proofs = 0usize;
+    for idx in 0..zone_count {
+        let zone_id = 100 + idx as u64;
+        let missing = ZoneProofFinalUpdateV1 {
+            zone_id,
+            zone_block_height: 1,
+            state_root: [0x22; 32],
+            message_root: [0x33; 32],
+            forced_inclusion_root: [0u8; 32],
+            required_forced_inclusion_root: [0u8; 32],
+            proof_digest: [0x44; 32],
+            prover: [0x55; 20],
+        };
+        assert!(matches!(
+            ledger.submit_zone_proof_final_update(missing),
+            Err(MasterchainError::ForcedInclusionRootMismatch)
+        ));
+        rejected_omitted_proofs += 1;
+
+        let due_root = ledger.required_forced_inclusion_root_for_zone(zone_id);
+        assert_ne!(due_root, [0u8; 32]);
+        let accepted = ledger
+            .submit_zone_proof_final_update(ZoneProofFinalUpdateV1 {
+                zone_id,
+                zone_block_height: 1,
+                state_root: [0x22; 32],
+                message_root: [0x33; 32],
+                forced_inclusion_root: due_root,
+                required_forced_inclusion_root: due_root,
+                proof_digest: [0x44 + idx as u8; 32],
+                prover: [0x55; 20],
+            })
+            .unwrap();
+        assert_eq!(accepted.latest_proof_final_height, 1);
+        accepted_satisfied_proofs += 1;
+    }
+
+    let report = ForcedInclusionStressReport {
+        zones: zone_count,
+        requests: requests.len(),
+        worst_inclusion_latency_blocks,
+        rejected_omitted_proofs,
+        accepted_satisfied_proofs,
+    };
+    assert_eq!(
+        report,
+        ForcedInclusionStressReport {
+            zones: 4,
+            requests: 8,
+            worst_inclusion_latency_blocks: 0,
+            rejected_omitted_proofs: 4,
+            accepted_satisfied_proofs: 4,
+        }
+    );
+    assert_eq!(ledger.forced_inclusion_queue_root(), [0u8; 32]);
+    assert_eq!(
+        ledger.proven_forced_inclusion_request_ids.len(),
+        zone_count * requests_per_zone
+    );
 }
 
 #[test]

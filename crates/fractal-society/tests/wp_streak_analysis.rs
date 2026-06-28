@@ -1,4 +1,4 @@
-use fractal_society::pkgs::streak_analysis::{Streaks, analyze};
+use fractal_society::pkgs::streak_analysis::{analyze, Streaks};
 
 #[test]
 fn alternating_signs_have_one_step_streaks() {

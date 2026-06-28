@@ -28,10 +28,11 @@ fn pair<'a>(object: &'a Value) -> Pair<'a> {
 }
 
 fn main() {
-    // Golden objects use only strings, integers, bools, null, nested objects,
-    // and arrays — the subset where Rust's `canonical_json` and JS JCS
-    // (`canonicalize`) are guaranteed to agree. Float parity is a separate,
-    // harder case (see TODO in the TS test).
+    // Golden objects use strings, integers, bools, null, nested objects,
+    // arrays, AND floats. Float parity is enforced by `canonical_json`'s
+    // ES6/JCS number formatting (`format_f64_jcs`), so Rust and the JS
+    // `canonicalize` package hash float-bearing objects identically — including
+    // exponent-threshold edge cases (1e-7, 1e21) and the AR-06 drift value.
     let run_manifest = json!({
         "run_id": "run-42",
         "seed": 42,
@@ -52,11 +53,29 @@ fn main() {
     let simple = json!({ "b": 2, "a": 1 });
     let empty = json!({});
 
+    // Float corpus: the cases where Rust's default `Display` would have
+    // diverged from ES6/JCS, plus canonical reference values.
+    let third = 1.0_f64 / 3.0;
+    let drift = -0.00018429404999999998_f64;
+    let floats = json!({
+        "small": 1e-7,            // first negative-exponential threshold
+        "small_fixed": 1e-6,      // last fixed-point magnitude
+        "big": 1e21,              // first positive-exponential threshold
+        "big_fixed": 1e20,        // last fixed integer
+        "third": third,           // shortest round-trip
+        "sum": 0.1_f64 + 0.2_f64, // 0.30000000000000004
+        "int_valued": 5.0_f64,    // integer-valued float -> "5"
+        "neg": -2.5_f64,
+        "zero": 0.0_f64,
+        "drift": drift            // the AR-06 problem value
+    });
+
     let pairs = vec![
         pair(&run_manifest),
         pair(&nested_out_of_order),
         pair(&simple),
         pair(&empty),
+        pair(&floats),
     ];
 
     println!("{}", serde_json::to_string_pretty(&pairs).unwrap());

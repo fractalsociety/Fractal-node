@@ -42,5 +42,19 @@ test = false
 doc = false
 bench = false
 
+[[bin]]
+name = "payload_roots"
+path = "fuzz_targets/payload_roots.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "da_commitment_roots"
+path = "fuzz_targets/da_commitment_roots.rs"
+test = false
+doc = false
+bench = false
+
 [workspace]
 members = ["."]

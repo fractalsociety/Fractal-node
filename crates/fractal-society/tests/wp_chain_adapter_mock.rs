@@ -3,14 +3,14 @@
 use std::sync::Mutex;
 
 use fractal_society::chain::fractalchain_adapter::{
-    FractalChainCommitmentAdapter, FractalChainCommitmentResponse, FractalChainRpc,
-    JsonRpseeFractalChainRpc, SUBMIT_PROOF_METHOD, submit_params,
+    submit_params, FractalChainCommitmentAdapter, FractalChainCommitmentResponse, FractalChainRpc,
+    JsonRpseeFractalChainRpc, SUBMIT_PROOF_METHOD,
 };
 use fractal_society::pkgs::chain_commitment::CommitmentAdapter;
 use fractal_society::protocol::Hash;
-use jsonrpsee::RpcModule;
 use jsonrpsee::server::ServerBuilder;
 use jsonrpsee::types::ErrorObjectOwned;
+use jsonrpsee::RpcModule;
 
 #[derive(Debug, Default)]
 struct MockRpc {

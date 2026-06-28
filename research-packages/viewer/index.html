@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Paper Trace Atlas</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <main class="shell">
+      <section class="atlas" aria-label="Paper trace atlas">
+        <header class="topbar">
+          <div>
+            <p class="kicker">Paper Trace Atlas</p>
+            <h1 id="paper-title">Loading trace</h1>
+          </div>
+          <div class="mode-tabs" role="tablist" aria-label="Trace views">
+            <button class="mode active" type="button" data-mode="map">Map</button>
+            <button class="mode" type="button" data-mode="claims">Claims</button>
+            <button class="mode" type="button" data-mode="proof">Proof</button>
+          </div>
+        </header>
+
+        <section class="visual-hero" aria-label="Generated paper visuals">
+          <figure class="hero-image image-panel" data-focus="topic-agi-to-asi">
+            <img src="./assets/agi-asi-continuum.png" alt="Abstract continuum from AGI toward ASI" />
+            <figcaption>
+              <span>Continuum</span>
+              Human-level systems rising toward a superintelligent horizon.
+            </figcaption>
+          </figure>
+          <div class="image-stack">
+            <figure class="image-panel" data-focus="pathway-scaling">
+              <img src="./assets/asi-pathways.png" alt="Four abstract pathways converging toward ASI" />
+              <figcaption>
+                <span>Pathways</span>
+                Scaling, paradigm shifts, recursive improvement, and collectives.
+              </figcaption>
+            </figure>
+            <figure class="image-panel" data-focus="open-frictions-bottlenecks">
+              <img src="./assets/frictions-bottlenecks.png" alt="Abstract bottlenecks and a red dead-end path" />
+              <figcaption>
+                <span>Friction</span>
+                Bottlenecks, uncertainty, and the rejected single-step-change frame.
+              </figcaption>
+            </figure>
+          </div>
+        </section>
+
+        <section class="stage">
+          <div class="canvas-wrap">
+            <div class="motion-orbit" aria-hidden="true">
+              <span></span>
+              <span></span>
+              <span></span>
+              <span></span>
+            </div>
+            <svg id="trace-map" viewBox="0 0 960 680" role="img" aria-label="Concept graph"></svg>
+          </div>
+
+          <aside class="inspector" aria-label="Selected trace details">
+            <div class="selected-mark" id="selected-mark"></div>
+            <p class="eyebrow" id="selected-kind">Concept</p>
+            <h2 id="selected-title">Select a node</h2>
+            <p id="selected-summary"></p>
+            <dl class="facts" id="selected-facts"></dl>
+          </aside>
+        </section>
+
+        <section class="claim-ribbon" aria-label="Extracted claims">
+          <div class="section-head">
+            <p class="eyebrow">Falsifiable Claims</p>
+            <div id="claim-count"></div>
+          </div>
+          <div class="claims" id="claims"></div>
+        </section>
+      </section>
+
+      <aside class="proof-panel" aria-label="Proof and integrity">
+        <div class="status-pill">Verified Local Package</div>
+        <h2>Integrity</h2>
+        <div class="meter" aria-label="Review score">
+          <div id="review-score"></div>
+        </div>
+        <div class="proof-grid" id="proof-grid"></div>
+      </aside>
+    </main>
+
+    <script src="./vendor/anime.min.js"></script>
+    <script src="./app.js"></script>
+  </body>
+</html>

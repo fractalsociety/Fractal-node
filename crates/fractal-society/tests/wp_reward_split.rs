@@ -1,4 +1,4 @@
-use fractal_society::pkgs::reward_split::{RewardShare, split};
+use fractal_society::pkgs::reward_split::{split, RewardShare};
 
 fn amount(shares: &[RewardShare], recipient: &str) -> u64 {
     shares

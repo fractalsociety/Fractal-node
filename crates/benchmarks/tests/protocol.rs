@@ -62,17 +62,23 @@ fn protocol_bench_runs_both_protocol_reports() {
 }
 
 #[test]
-fn proof_latency_cost_bench_verifies_dev_digest_proofs() {
+fn proof_latency_cost_bench_verifies_production_fixture_proofs() {
     let report = run_proof_latency_cost_bench(10, 3, 17, 41);
 
     assert_eq!(report.proof_count, 10);
     assert_eq!(report.covered_blocks_per_proof, 3);
-    assert_eq!(report.proof_bytes, 32);
+    assert!(report.proof_bytes > 32);
     assert_eq!(report.verified_proofs, 10);
     assert_eq!(report.estimated_cost_per_proof_micro_frac, 51);
     assert_eq!(report.estimated_total_prover_cost_micro_frac, 510);
-    assert_eq!(report.proof_verify_fee_per_proof, 10_032);
-    assert_eq!(report.estimated_total_proof_verify_fee, 100_320);
+    assert_eq!(
+        report.proof_verify_fee_per_proof,
+        10_000 + report.proof_bytes as u128
+    );
+    assert_eq!(
+        report.estimated_total_proof_verify_fee,
+        10 * report.proof_verify_fee_per_proof
+    );
     assert!(report.avg_verify_latency_micros.is_finite());
     assert!(report.proofs_per_second > 0.0);
 }
