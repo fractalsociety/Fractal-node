@@ -15,6 +15,7 @@ members = [
     "crates/mempool",
     "crates/eth-wire",
     "crates/rpc",
+    "crates/rlvr",
     "crates/node",
     "crates/cli",
     "crates/sdk-rust",

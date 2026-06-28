@@ -30,7 +30,7 @@ async fn persisted_pipeline_loads_and_verifies_offline() {
 }
 
 #[tokio::test]
-async fn tampered_persisted_scorecard_loads_as_invalid() {
+async fn tampered_persisted_scorecard_is_rejected_at_load() {
     let (root, mut store, mut event_log) = stores("tampered");
     let signer = AuthorSigner::from_seed(&[82u8; 32]);
     let result = run_persisted(&mut store, &mut event_log, &signer).await;
@@ -43,9 +43,14 @@ async fn tampered_persisted_scorecard_loads_as_invalid() {
     )
     .unwrap();
 
-    let loaded = load_proof(&store, &result.bundle, &signer.public_key()).unwrap();
-
-    assert!(matches!(loaded.verdict, VerifyVerdict::Invalid { .. }));
+    // Fix 1 (bytes-verified loading): the tampered bytes no longer hash to their
+    // content-addressed key, so load_proof rejects them at the storage layer
+    // (a stronger guarantee than returning an Invalid verdict after the fact).
+    let loaded = load_proof(&store, &result.bundle, &signer.public_key());
+    assert!(
+        loaded.is_err(),
+        "tampering persisted scorecard bytes must be detected at load"
+    );
     let _ = std::fs::remove_dir_all(root);
 }
 

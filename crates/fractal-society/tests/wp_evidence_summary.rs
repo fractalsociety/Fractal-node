@@ -1,5 +1,5 @@
 use fractal_society::adapters::trading::{TradingAdapter, TradingAgent, TradingConfig};
-use fractal_society::kernel::{KernelConfig, run};
+use fractal_society::kernel::{run, KernelConfig};
 use fractal_society::pkgs::evidence_summary::summarize;
 use std::collections::HashMap;
 

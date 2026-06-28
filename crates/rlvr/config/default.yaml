@@ -1,0 +1,8 @@
+local_only: true
+default_actor_model: ""
+default_judge_model: ""
+max_turns: 3
+training_mode: "RouteCorrectness"
+reward_policy: "reward-v0.1"
+chain_commit_enabled: false
+raw_data_on_chain: false

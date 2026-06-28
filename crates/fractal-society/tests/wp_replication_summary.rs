@@ -1,4 +1,4 @@
-use fractal_society::pkgs::replication_summary::{ReplicationSummary, summarize};
+use fractal_society::pkgs::replication_summary::{summarize, ReplicationSummary};
 use fractal_society::verifier::Replication;
 
 fn replication(id: &str, success: bool) -> Replication {

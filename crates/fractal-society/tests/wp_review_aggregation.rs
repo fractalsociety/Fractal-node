@@ -1,4 +1,4 @@
-use fractal_society::pkgs::review_aggregation::{Consensus, aggregate};
+use fractal_society::pkgs::review_aggregation::{aggregate, Consensus};
 use fractal_society::verifier::{Review, ReviewConfidence, ReviewDecision};
 
 fn review(id: &str, decision: ReviewDecision) -> Review {

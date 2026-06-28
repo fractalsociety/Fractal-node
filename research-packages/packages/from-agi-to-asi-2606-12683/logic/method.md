@@ -1,0 +1,1 @@
+Conceptual report: characterize the AGI-to-ASI continuum, enumerate transition pathways, discuss frictions and bottlenecks, and surface open research questions under high uncertainty.

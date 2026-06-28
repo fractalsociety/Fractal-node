@@ -57,8 +57,9 @@ async fn fixture() -> (RunBundle, ProofManifest, Scorecard, [u8; 32]) {
 #[tokio::test]
 async fn valid_proof_verifies_offline() {
     let (bundle, manifest, scorecard, public_key) = fixture().await;
+    let scorecard_bytes = fractal_society::canonical::canonical_json(&scorecard).unwrap();
     assert_eq!(
-        verify(&bundle, &manifest, &scorecard, &public_key),
+        verify(&bundle, &manifest, &scorecard_bytes, &public_key),
         VerifyVerdict::Valid,
         "a genuine proof must verify offline without re-running"
     );
@@ -68,7 +69,8 @@ async fn valid_proof_verifies_offline() {
 async fn tampered_scorecard_is_rejected() {
     let (bundle, manifest, mut scorecard, public_key) = fixture().await;
     scorecard.id = "tampered".to_string();
-    let verdict = verify(&bundle, &manifest, &scorecard, &public_key);
+    let scorecard_bytes = fractal_society::canonical::canonical_json(&scorecard).unwrap();
+    let verdict = verify(&bundle, &manifest, &scorecard_bytes, &public_key);
     assert!(
         matches!(verdict, VerifyVerdict::Invalid { .. }),
         "a tampered scorecard must be rejected"
@@ -78,8 +80,9 @@ async fn tampered_scorecard_is_rejected() {
 #[tokio::test]
 async fn wrong_public_key_is_rejected() {
     let (bundle, manifest, scorecard, _public_key) = fixture().await;
+    let scorecard_bytes = fractal_society::canonical::canonical_json(&scorecard).unwrap();
     let wrong = AuthorSigner::from_seed(&[99u8; 32]).public_key();
-    let verdict = verify(&bundle, &manifest, &scorecard, &wrong);
+    let verdict = verify(&bundle, &manifest, &scorecard_bytes, &wrong);
     assert!(
         matches!(verdict, VerifyVerdict::Invalid { .. }),
         "a proof must not verify under the wrong author key"

@@ -26,8 +26,10 @@ pub mod canonical;
 #[cfg(feature = "live-chain")]
 pub mod chain;
 pub mod commit_service;
+pub mod concept_index;
 pub mod error;
 pub mod exploration;
+pub mod git_output;
 pub mod kernel;
 pub mod market_data;
 pub mod offline_verify;
@@ -35,6 +37,7 @@ pub mod persistence;
 pub mod pipeline;
 pub mod pkgs;
 pub mod protocol;
+pub mod research_package;
 pub mod rigor;
 pub mod signing;
 pub mod simulation;

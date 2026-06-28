@@ -135,6 +135,8 @@ pub enum ProofVerifyError {
     Production(#[from] ProductionProofVerifyError),
     #[error("dev digest proof does not match public inputs")]
     BadDevDigest,
+    #[error("dev digest proofs are disabled for this runtime")]
+    DevDigestDisabled,
     #[error("data availability sidecar invalid")]
     DataAvailability,
     #[error(transparent)]
@@ -317,11 +319,32 @@ impl Block {
 }
 
 #[derive(BorshSerialize, BorshDeserialize, Clone, Debug, PartialEq, Eq)]
+#[borsh(use_discriminant = true)]
 pub enum ValidityProofSystem {
     /// Test/dev proof receipt: `proof_bytes == validity_proof_public_input_digest(proof)`.
-    DevDigest,
+    #[cfg(feature = "dev-digest")]
+    DevDigest = 0,
     /// Production target. Verification must be wired before this mode can finalize blocks.
-    StwoPlonky2,
+    StwoPlonky2 = 1,
+}
+
+#[cfg(feature = "dev-digest")]
+#[must_use]
+pub fn dev_digest_allowed_for_runtime(network: Option<&str>, environment: Option<&str>) -> bool {
+    fn production_like(value: &str) -> bool {
+        matches!(
+            value.to_ascii_lowercase().as_str(),
+            "mainnet" | "production" | "prod" | "release"
+        )
+    }
+    !network.is_some_and(production_like) && !environment.is_some_and(production_like)
+}
+
+#[cfg(feature = "dev-digest")]
+fn dev_digest_allowed_for_current_runtime() -> bool {
+    let network = std::env::var("FRACTAL_NETWORK").ok();
+    let environment = std::env::var("FRACTAL_ENV").ok();
+    dev_digest_allowed_for_runtime(network.as_deref(), environment.as_deref())
 }
 
 #[derive(BorshSerialize, BorshDeserialize, Clone, Debug, PartialEq, Eq)]
@@ -2034,7 +2057,11 @@ pub fn verify_block_validity_proof(
         return Err(ProofVerifyError::EmptyProof);
     }
     match proof.proof_system {
+        #[cfg(feature = "dev-digest")]
         ValidityProofSystem::DevDigest => {
+            if !dev_digest_allowed_for_current_runtime() {
+                return Err(ProofVerifyError::DevDigestDisabled);
+            }
             let expected = validity_proof_public_input_digest(proof)?;
             if proof.proof_bytes.as_slice() != expected {
                 return Err(ProofVerifyError::BadDevDigest);
@@ -2314,7 +2341,50 @@ mod tests {
         assert_ne!(block.header.state_root, [0u8; 32]);
     }
 
+    #[cfg(not(feature = "dev-digest"))]
     #[test]
+    fn production_build_rejects_dev_digest_discriminant() {
+        assert!(ValidityProofSystem::try_from_slice(&[0]).is_err());
+        assert_eq!(
+            ValidityProofSystem::try_from_slice(&[1]).unwrap(),
+            ValidityProofSystem::StwoPlonky2
+        );
+        assert_eq!(
+            borsh::to_vec(&ValidityProofSystem::StwoPlonky2).unwrap(),
+            vec![1]
+        );
+    }
+
+    #[cfg(feature = "dev-digest")]
+    #[test]
+    fn dev_digest_feature_preserves_explicit_discriminants() {
+        assert_eq!(
+            borsh::to_vec(&ValidityProofSystem::DevDigest).unwrap(),
+            vec![0]
+        );
+        assert_eq!(
+            borsh::to_vec(&ValidityProofSystem::StwoPlonky2).unwrap(),
+            vec![1]
+        );
+    }
+
+    #[cfg(feature = "dev-digest")]
+    #[test]
+    fn dev_digest_runtime_gate_rejects_production_like_configs() {
+        assert!(dev_digest_allowed_for_runtime(Some("local"), Some("dev")));
+        assert!(!dev_digest_allowed_for_runtime(
+            Some("mainnet"),
+            Some("dev")
+        ));
+        assert!(!dev_digest_allowed_for_runtime(
+            Some("testnet"),
+            Some("prod")
+        ));
+        assert!(!dev_digest_allowed_for_runtime(None, Some("production")));
+    }
+
+    #[test]
+    #[cfg(feature = "dev-digest")]
     fn dev_digest_proof_verifies_against_block_public_inputs() {
         let mut st = State::default();
         let addr = [9u8; 20];
@@ -3395,6 +3465,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "dev-digest")]
     fn dev_digest_proof_rejects_timestamp_mismatch() {
         let mut st = State::default();
         let block = execute_and_build_block(
@@ -3431,7 +3502,7 @@ mod tests {
             )
             .unwrap(),
             feature_set: block.header.feature_set,
-            proof_system: ValidityProofSystem::DevDigest,
+            proof_system: ValidityProofSystem::StwoPlonky2,
             proof_bytes: Vec::new(),
         };
         proof.proof_bytes = validity_proof_public_input_digest(&proof).unwrap().to_vec();
@@ -3443,6 +3514,167 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "dev-digest")]
+    fn dev_digest_proof_rejects_every_public_input_root_mismatch() {
+        let signer = [0xA1; 20];
+        let mut st = State::default();
+        st.accounts.insert(
+            signer,
+            Account {
+                nonce: 0,
+                balance: 1_000,
+            },
+        );
+        let tx = Transaction {
+            signer,
+            nonce: 0,
+            vm: VmKind::Native,
+            body: TxBody::Native(NativeCall::NoOp),
+        };
+        let block = execute_and_build_block(
+            41,
+            1,
+            0,
+            [7u8; 32],
+            [0u8; 32],
+            [0u8; 32],
+            1_000,
+            60_000_000,
+            &mut st,
+            vec![tx],
+            eth_signed_raws_for_txs(1),
+        )
+        .unwrap();
+        let valid_proof = || {
+            let mut proof = BlockValidityProof {
+                chain_id: block.header.chain_id,
+                height: block.header.height,
+                block_hash: header_hash(&block.header).unwrap(),
+                timestamp_ms: block.header.timestamp_ms,
+                parent_state_root: block.header.parent_state_root,
+                state_root: block.header.state_root,
+                tx_root: block.header.tx_root,
+                receipt_root: block.header.receipt_root,
+                native_event_root: block.header.native_event_root,
+                evm_log_root: block.header.evm_log_root,
+                gas_used: block.header.gas_used,
+                zone_namespace: block.header.zone_namespace,
+                da_root: block.header.da_root,
+                circuit_version: CircuitVersion::DevMixedV1,
+                coverage_manifest_digest: coverage_manifest_digest(
+                    &coverage_manifest_for_circuit_version(CircuitVersion::DevMixedV1),
+                )
+                .unwrap(),
+                feature_set: block.header.feature_set,
+                proof_system: ValidityProofSystem::DevDigest,
+                proof_bytes: Vec::new(),
+            };
+            proof.proof_bytes = validity_proof_public_input_digest(&proof).unwrap().to_vec();
+            proof
+        };
+
+        let mut cases: Vec<(&str, BlockValidityProof, ProofVerifyError)> = Vec::new();
+
+        let mut proof = valid_proof();
+        proof.parent_state_root[0] ^= 0x01;
+        cases.push((
+            "parent_state_root bit flip",
+            proof,
+            ProofVerifyError::ParentStateRoot,
+        ));
+
+        let mut proof = valid_proof();
+        proof.state_root[0] ^= 0x01;
+        cases.push(("state_root bit flip", proof, ProofVerifyError::StateRoot));
+
+        let mut proof = valid_proof();
+        proof.tx_root[0] ^= 0x01;
+        cases.push(("tx_root bit flip", proof, ProofVerifyError::TxRoot));
+
+        let mut proof = valid_proof();
+        proof.da_root[0] ^= 0x01;
+        cases.push(("da_root bit flip", proof, ProofVerifyError::DaRoot));
+
+        let mut proof = valid_proof();
+        proof.receipt_root[0] ^= 0x01;
+        cases.push((
+            "receipt_root bit flip",
+            proof,
+            ProofVerifyError::ReceiptRoot,
+        ));
+
+        let mut proof = valid_proof();
+        proof.native_event_root[0] ^= 0x01;
+        cases.push((
+            "native_event_root bit flip",
+            proof,
+            ProofVerifyError::NativeEventRoot,
+        ));
+
+        let mut proof = valid_proof();
+        proof.evm_log_root[0] ^= 0x01;
+        cases.push(("evm_log_root bit flip", proof, ProofVerifyError::EvmLogRoot));
+
+        let mut proof = valid_proof();
+        proof.zone_namespace = *b"badroot!";
+        cases.push((
+            "DA namespace mismatch",
+            proof,
+            ProofVerifyError::ZoneNamespace,
+        ));
+
+        let mut proof = valid_proof();
+        proof.tx_root = block.header.da_root;
+        cases.push((
+            "cross-root confusion tx_root<-da_root",
+            proof,
+            ProofVerifyError::TxRoot,
+        ));
+
+        let mut proof = valid_proof();
+        proof.da_root = block.header.tx_root;
+        cases.push((
+            "cross-root confusion da_root<-tx_root",
+            proof,
+            ProofVerifyError::DaRoot,
+        ));
+
+        let mut proof = valid_proof();
+        proof.parent_state_root = [0xAA; 32];
+        cases.push((
+            "stale parent_state_root replay",
+            proof,
+            ProofVerifyError::ParentStateRoot,
+        ));
+
+        let mut proof = valid_proof();
+        proof.coverage_manifest_digest[0] ^= 0x01;
+        cases.push((
+            "coverage manifest metadata",
+            proof,
+            ProofVerifyError::CoverageManifest,
+        ));
+
+        for (name, proof, expected) in cases {
+            let err = verify_block_validity_proof(&block, &proof)
+                .expect_err("tampered proof must reject");
+            assert_eq!(
+                std::mem::discriminant(&err),
+                std::mem::discriminant(&expected),
+                "{name} rejected with {err:?}, expected {expected:?}"
+            );
+        }
+
+        let mut truncated = valid_proof();
+        truncated.proof_bytes.truncate(16);
+        assert!(matches!(
+            verify_block_validity_proof(&block, &truncated),
+            Err(ProofVerifyError::BadDevDigest)
+        ));
+    }
+
+    #[test]
+    #[cfg(feature = "dev-digest")]
     fn native_circuit_coverage_rejects_evm_feature_set() {
         let mut st = State::default();
         let signer = [8u8; 20];
@@ -3501,8 +3733,8 @@ mod tests {
             )
             .unwrap(),
             feature_set: block.header.feature_set,
-            proof_system: ValidityProofSystem::DevDigest,
-            proof_bytes: Vec::new(),
+            proof_system: ValidityProofSystem::StwoPlonky2,
+            proof_bytes: vec![1],
         };
         proof.proof_bytes = validity_proof_public_input_digest(&proof).unwrap().to_vec();
 
@@ -3788,6 +4020,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "dev-digest")]
     fn dev_digest_proof_rejects_wrong_state_root() {
         let mut st = State::default();
         let addr = [9u8; 20];
@@ -3832,7 +4065,7 @@ mod tests {
             )
             .unwrap(),
             feature_set: block.header.feature_set,
-            proof_system: ValidityProofSystem::DevDigest,
+            proof_system: ValidityProofSystem::StwoPlonky2,
             proof_bytes: vec![1],
         };
 
@@ -4278,6 +4511,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "dev-digest")]
     fn proof_rejects_wrong_da_root() {
         let mut st = State::default();
         let addr = [9u8; 20];
@@ -4322,7 +4556,7 @@ mod tests {
             )
             .unwrap(),
             feature_set: block.header.feature_set,
-            proof_system: ValidityProofSystem::DevDigest,
+            proof_system: ValidityProofSystem::StwoPlonky2,
             proof_bytes: vec![1],
         };
 
@@ -4333,6 +4567,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "dev-digest")]
     fn proof_rejects_tampered_zone_blob_da_sidecar() {
         let mut st = State::default();
         let mut block = execute_and_build_block(
@@ -4370,7 +4605,7 @@ mod tests {
         block.header.da_fee_paid = da_fee_for_gas(block.header.da_gas_used);
         block.header.extra = proof_ingestion_header_extra(payload_root, &commitment).unwrap();
         block.da_sidecar = sidecar;
-        let mut proof = BlockValidityProof {
+        let proof = BlockValidityProof {
             chain_id: block.header.chain_id,
             height: block.header.height,
             block_hash: header_hash(&block.header).unwrap(),
@@ -4390,10 +4625,9 @@ mod tests {
             )
             .unwrap(),
             feature_set: block.header.feature_set,
-            proof_system: ValidityProofSystem::DevDigest,
-            proof_bytes: Vec::new(),
+            proof_system: ValidityProofSystem::StwoPlonky2,
+            proof_bytes: vec![1],
         };
-        proof.proof_bytes = validity_proof_public_input_digest(&proof).unwrap().to_vec();
         block.da_sidecar.shares[0].data[0] ^= 0xff;
 
         assert!(matches!(
@@ -4403,6 +4637,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "dev-digest")]
     fn proof_rejects_wrong_zone_namespace() {
         let mut st = State::default();
         let block = execute_and_build_zone_block(
@@ -4440,7 +4675,7 @@ mod tests {
             )
             .unwrap(),
             feature_set: block.header.feature_set,
-            proof_system: ValidityProofSystem::DevDigest,
+            proof_system: ValidityProofSystem::StwoPlonky2,
             proof_bytes: vec![1],
         };
 

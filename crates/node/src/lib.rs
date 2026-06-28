@@ -33,6 +33,7 @@ use fractal_mempool::{
     next_base_fee, BaseFeeParams, CertificateFinalityRecord, CertificatePool, CertificatePoolError,
     Mempool, PooledProofUpdate, PooledTx, ProofPool, ProofPoolError,
 };
+use fractal_rlvr::RlvrNodeFlags;
 use fractal_rpc::{
     logs_bloom_256, make_rpc_log, ChainInteraction, ProofCommitmentResponse, RpcChainConfig,
     RpcConsensusDiagnostics, RpcDaMetrics, RpcMempoolLaneMetrics, RpcOwnedObjectCertificate,
@@ -212,6 +213,7 @@ pub struct ChainConfig {
     pub proofs_required_for_settlement: ExecutionFeatureSetV1,
     pub phase_config: ProtocolPhaseConfig,
     pub block_payload_mode: BlockPayloadMode,
+    pub rlvr: RlvrNodeFlags,
 }
 
 impl Default for ChainConfig {
@@ -222,6 +224,12 @@ impl Default for ChainConfig {
             proofs_required_for_settlement: ExecutionFeatureSetV1::empty(),
             phase_config: ProtocolPhaseConfig::testnet(),
             block_payload_mode: BlockPayloadMode::Legacy,
+            rlvr: RlvrNodeFlags {
+                enabled: false,
+                chain_commit_enabled: false,
+                raw_data_on_chain: false,
+                raw_data_on_chain_requested: false,
+            },
         }
     }
 }
@@ -696,6 +704,10 @@ impl NodeInner {
     /// Wire gossip vote publishing (`docs/prd.md` §18 M7-d-5). When `None`, votes stay local only.
     pub fn set_vote_sink(&mut self, sink: Option<tokio::sync::mpsc::UnboundedSender<Vec<u8>>>) {
         self.vote_sink = sink;
+    }
+
+    pub fn set_rlvr_node_flags(&mut self, flags: RlvrNodeFlags) {
+        self.chain_config.rlvr = flags;
     }
 
     pub fn set_proof_required_settlement(&mut self, required: bool) {
@@ -1919,6 +1931,10 @@ impl ChainInteraction for NodeInner {
             prover_rewards: self.chain_config.phase_config.prover_rewards,
             sequencer_rewards: self.chain_config.phase_config.sequencer_rewards,
             block_payload_mode: self.chain_config.block_payload_mode.as_str().into(),
+            rlvr_enabled: self.chain_config.rlvr.enabled,
+            rlvr_chain_commit_enabled: self.chain_config.rlvr.chain_commit_enabled,
+            rlvr_raw_data_on_chain: self.chain_config.rlvr.raw_data_on_chain,
+            rlvr_raw_data_on_chain_requested: self.chain_config.rlvr.raw_data_on_chain_requested,
             settlement_finality: if self.chain_config.proof_required_settlement {
                 "proof"
             } else {
@@ -2089,6 +2105,7 @@ fn proof_rejection_reason(err: &ProofVerifyError) -> String {
         ProofVerifyError::EmptyProof => "empty_proof",
         ProofVerifyError::Production(_) => "production_proof",
         ProofVerifyError::BadDevDigest => "bad_dev_digest",
+        ProofVerifyError::DevDigestDisabled => "dev_digest_disabled",
         ProofVerifyError::DataAvailability => "data_availability",
         ProofVerifyError::Io(_) => "io",
     }
@@ -2441,19 +2458,23 @@ pub async fn run_dev() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     inner.set_native_transition_proofs_enabled(native_transition_proofs_enabled_from_env());
     inner.set_proofs_required_for_settlement(proof_required_feature_mask_from_env(proof_required));
     inner.set_block_payload_mode(BlockPayloadMode::from_env());
+    inner.set_rlvr_node_flags(RlvrNodeFlags::from_env());
     if let Some(path) = proof_finality_store_from_env() {
         inner.set_proof_finality_store(ProofFinalityStore::open(&path)?)?;
         eprintln!("fractal-node: proof_finality_store={}", path.display());
     }
     inner.set_vote_sink(Some(vote_tx));
     eprintln!(
-        "fractal-node: settlement_finality={} block_payload_mode={}",
+        "fractal-node: settlement_finality={} block_payload_mode={} rlvr_enabled={} rlvr_chain_commit_enabled={} rlvr_raw_data_on_chain={}",
         if inner.settlement_requires_proof() {
             "proof"
         } else {
             "soft"
         },
-        inner.block_payload_mode().as_str()
+        inner.block_payload_mode().as_str(),
+        inner.chain_config.rlvr.enabled,
+        inner.chain_config.rlvr.chain_commit_enabled,
+        inner.chain_config.rlvr.raw_data_on_chain
     );
     inner.log_startup_consensus_diagnostics("fractal-node");
     let node: NodeHandle = Arc::new(Mutex::new(inner));
@@ -2524,6 +2545,7 @@ pub async fn run_follower() -> Result<(), Box<dyn std::error::Error + Send + Syn
     inner.set_native_transition_proofs_enabled(native_transition_proofs_enabled_from_env());
     inner.set_proofs_required_for_settlement(proof_required_feature_mask_from_env(proof_required));
     inner.set_block_payload_mode(BlockPayloadMode::from_env());
+    inner.set_rlvr_node_flags(RlvrNodeFlags::from_env());
     if let Some(path) = proof_finality_store_from_env() {
         inner.set_proof_finality_store(ProofFinalityStore::open(&path)?)?;
         eprintln!(
@@ -2533,13 +2555,16 @@ pub async fn run_follower() -> Result<(), Box<dyn std::error::Error + Send + Syn
     }
     inner.set_vote_sink(Some(vote_tx));
     eprintln!(
-        "fractal-node follower: settlement_finality={} block_payload_mode={}",
+        "fractal-node follower: settlement_finality={} block_payload_mode={} rlvr_enabled={} rlvr_chain_commit_enabled={} rlvr_raw_data_on_chain={}",
         if inner.settlement_requires_proof() {
             "proof"
         } else {
             "soft"
         },
-        inner.block_payload_mode().as_str()
+        inner.block_payload_mode().as_str(),
+        inner.chain_config.rlvr.enabled,
+        inner.chain_config.rlvr.chain_commit_enabled,
+        inner.chain_config.rlvr.raw_data_on_chain
     );
     inner.log_startup_consensus_diagnostics("fractal-node follower");
     let node: NodeHandle = Arc::new(Mutex::new(inner));

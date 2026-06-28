@@ -17,10 +17,11 @@
 //! matches `fractalwork/packages/core`'s `hashObjectJcs` (SHA-256 + JCS) so a
 //! manifest hashed in Rust verifies against the same manifest hashed in the
 //! TypeScript app. Rust is the reference implementation; the JS twin must apply
-//! the same rules. Number formatting uses Rust's shortest round-trip `Display`
-//! (integer-valued floats render without a trailing `.0`, matching ES6
-//! `String()`); the small set of ES6 exponential-threshold edge cases is
-//! deferred to the cross-language conformance test.
+//! the same rules. Number formatting is ES6 `Number.prototype.toString`
+//! (RFC 8785 JCS), implemented in [`format_f64_jcs`], so Rust and TS hash
+//! float-bearing objects identically — including exponent-threshold edge cases
+//! (`1e-7`, `1e21`). Cross-language parity is locked by a float corpus in the
+//! `golden_hashes.json` conformance fixture.
 
 use crate::error::{Error, Result};
 use crate::protocol::Hash;
@@ -108,20 +109,76 @@ fn write_number(n: &serde_json::Number, out: &mut String) -> Result<()> {
                 "canonical JSON rejects NaN/Infinity".to_string(),
             ));
         }
-        // Normalize -0.0 (and +0.0) to "0".
-        if f == 0.0 {
-            out.push('0');
-        } else {
-            // Rust's float `Display` is shortest round-trip and renders
-            // integer-valued floats without ".0" (e.g. 5.0 -> "5").
-            out.push_str(&format!("{}", f));
-        }
+        out.push_str(&format_f64_jcs(f));
     } else {
         return Err(Error::Serialization(
             "unsupported number kind in canonical JSON".to_string(),
         ));
     }
     Ok(())
+}
+
+/// Format a finite `f64` per ES6 `Number.prototype.toString` (ECMA-262
+/// §6.1.6.1.20), which is the number serialization RFC 8785 JCS specifies and
+/// the TypeScript `canonicalize` package implements. This makes Rust and TS
+/// hash float-containing objects identically — Rust's default `Display` diverges
+/// from ES6 at exponent thresholds (e.g. Rust prints `0.0000001`, ES6 prints
+/// `1e-7`) and would otherwise produce different content hashes.
+///
+/// Both `+0` and `-0` render as `"0"`. The algorithm: take Rust's shortest
+/// round-trip scientific form `{:e}` (`d.ddd e<exp>`), extract the significant
+/// digits and exponent, then apply the four ES6 formatting cases.
+fn format_f64_jcs(f: f64) -> String {
+    if f == 0.0 {
+        // Normalizes both +0 and -0 to "0".
+        return "0".to_string();
+    }
+    let neg = f.is_sign_negative();
+    let body = format_f64_abs_body(f.abs());
+    if neg {
+        format!("-{body}")
+    } else {
+        body
+    }
+}
+
+/// Format the body (no sign) of a positive, non-zero `f64`. The caller passes
+/// the absolute value so the `{:e}` output never carries a leading `-`.
+fn format_f64_abs_body(abs: f64) -> String {
+    let sci = format!("{:e}", abs);
+    let (mantissa, exp_str) = sci
+        .split_once('e')
+        .expect("Rust {:e} output always contains 'e'");
+    let exp: i32 = exp_str.parse().expect("exponent is a decimal integer");
+    let digits: String = mantissa.chars().filter(|c| *c != '.').collect();
+    let k = digits.len() as i32;
+    let n = exp + 1; // ES6 n: 1-based position of the decimal point.
+
+    if k <= n && n <= 21 {
+        // Case 1: integer, possibly with trailing zeros.
+        let zeros = "0".repeat((n - k) as usize);
+        format!("{digits}{zeros}")
+    } else if 0 < n && n <= 21 {
+        // Case 2: fixed point with a fractional part (n < k here).
+        let (int_part, frac_part) = digits.split_at(n as usize);
+        format!("{int_part}.{frac_part}")
+    } else if -6 < n && n <= 0 {
+        // Case 3: small magnitude, leading "0.".
+        let zeros = "0".repeat((-n) as usize);
+        format!("0.{zeros}{digits}")
+    } else {
+        // Case 4: exponential.
+        let first = &digits[..1];
+        let rest_digits = &digits[1..];
+        let exp_val = n - 1;
+        let sign = if exp_val >= 0 { "+" } else { "-" };
+        let frac = if rest_digits.is_empty() {
+            String::new()
+        } else {
+            format!(".{rest_digits}")
+        };
+        format!("{first}{frac}e{sign}{}", exp_val.abs())
+    }
 }
 
 #[cfg(test)]
@@ -160,5 +217,40 @@ mod tests {
         let as_int = String::from_utf8(canonical_json(&json!({"v": 5_u64})).unwrap()).unwrap();
         assert_eq!(as_float, r#"{"v":5}"#);
         assert_eq!(as_float, as_int);
+    }
+
+    #[test]
+    fn floats_render_per_es6_jcs() {
+        // Each (input, expected ES6 Number.prototype.toString output). These are
+        // the cases where Rust's default `Display` diverges from ES6 (exponent
+        // thresholds) plus canonical reference values.
+        let cases: &[(f64, &str)] = &[
+            (0.0, "0"),
+            (-0.0, "0"),
+            (5.0, "5"),
+            (-5.0, "-5"),
+            (2.5, "2.5"),
+            (0.1 + 0.2, "0.30000000000000004"),
+            (1.0 / 3.0, "0.3333333333333333"),
+            (1e-6, "0.000001"),              // last fixed-point magnitude
+            (1e-7, "1e-7"),                  // first exponential (negative)
+            (1e21, "1e+21"),                 // first exponential (positive)
+            (1e20, "100000000000000000000"), // last fixed integer
+            (1.23456e30, "1.23456e+30"),
+            (-0.00018429404999999998, "-0.00018429404999999998"),
+        ];
+        for (input, expected) in cases {
+            assert_eq!(format_f64_jcs(*input), *expected, "input {input}");
+        }
+    }
+
+    #[test]
+    fn float_object_canonical_matches_es6() {
+        // A float-bearing object canonicalizes with ES6 number tokens.
+        let bytes = canonical_json(&json!({"a": 1e-7, "b": 1e21, "c": 0.1})).unwrap();
+        assert_eq!(
+            String::from_utf8(bytes).unwrap(),
+            r#"{"a":1e-7,"b":1e+21,"c":0.1}"#
+        );
     }
 }

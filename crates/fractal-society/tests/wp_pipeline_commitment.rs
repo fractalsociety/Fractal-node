@@ -34,7 +34,7 @@ async fn mock_adapter_populates_chain_reference_and_proof_still_verifies() {
         verify(
             &result.bundle,
             &result.proof_manifest,
-            &result.scorecard,
+            &fractal_society::canonical::canonical_json(&result.scorecard).unwrap(),
             &signer.public_key()
         ),
         VerifyVerdict::Valid

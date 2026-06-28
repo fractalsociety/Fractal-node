@@ -1908,6 +1908,117 @@ mod tests {
     }
 
     #[test]
+    fn zone_proof_public_input_digest_rejects_each_bound_field_mutation() {
+        let header = zone_header(103, 9);
+        let base = zone_proof_final_update_from_header(&header, [0x4A; 32], [0x55; 20]);
+        assert!(verify_zone_update_public_inputs(&base).is_ok());
+
+        let mut cases: Vec<(&str, ZoneProofFinalUpdateV1)> = Vec::new();
+
+        let mut changed = base.clone();
+        changed.zone_block_height += 1;
+        cases.push(("zone_block_height", changed));
+
+        let mut changed = base.clone();
+        changed.zone_block_hash[0] ^= 0x01;
+        cases.push(("zone_block_hash", changed));
+
+        let mut changed = base.clone();
+        changed.state_root[0] ^= 0x01;
+        cases.push(("state_root", changed));
+
+        let mut changed = base.clone();
+        changed.message_root[0] ^= 0x01;
+        cases.push(("message_root", changed));
+
+        let mut changed = base.clone();
+        changed.tx_root[0] ^= 0x01;
+        cases.push(("tx_root", changed));
+
+        let mut changed = base.clone();
+        changed.da_root[0] ^= 0x01;
+        cases.push(("da_root", changed));
+
+        let mut changed = base.clone();
+        changed.da_namespace = *b"badroot!";
+        cases.push(("da_namespace", changed));
+
+        let mut changed = base.clone();
+        changed.forced_inclusion_root[0] ^= 0x01;
+        cases.push(("forced_inclusion_root", changed));
+
+        let mut changed = base.clone();
+        changed.timestamp_ms += 1;
+        cases.push(("timestamp_ms", changed));
+
+        for (field, changed) in cases {
+            assert_eq!(
+                verify_zone_update_public_inputs(&changed),
+                Err(ExecutionZoneError::ZonePublicInputs),
+                "zone public input digest did not bind {field}"
+            );
+        }
+    }
+
+    #[test]
+    fn zone_proof_rejects_cross_root_confusion_and_stale_replay() {
+        let mut registry = ExecutionZoneRegistryV1::default();
+        registry
+            .create_zone(103, [0x11; 20], zone_metadata(2, *b"zone0103"))
+            .unwrap();
+        let mut header = zone_header(103, 9);
+        header.message_root = [0xA1; 32];
+        header.da_root = [0xD1; 32];
+        header.forced_inclusion_root = [0xF1; 32];
+
+        let mut message_da_swap =
+            zone_proof_final_update_from_header(&header, [0x4B; 32], [0x55; 20]);
+        message_da_swap.message_root = header.da_root;
+        message_da_swap.source_message_root = header.message_root;
+        message_da_swap.forced_inclusion_root = [0u8; 32];
+        message_da_swap.required_forced_inclusion_root = [0u8; 32];
+        message_da_swap.public_input_digest = zone_proof_public_input_digest(&message_da_swap);
+        assert_eq!(
+            registry.submit_proof_final_update(message_da_swap),
+            Err(ExecutionZoneError::SourceMessageRootMismatch)
+        );
+
+        let mut forced_message_swap =
+            zone_proof_final_update_from_header(&header, [0x4C; 32], [0x55; 20]);
+        forced_message_swap.required_forced_inclusion_root = header.message_root;
+        forced_message_swap.public_input_digest =
+            zone_proof_public_input_digest(&forced_message_swap);
+        assert_eq!(
+            registry.submit_proof_final_update(forced_message_swap),
+            Err(ExecutionZoneError::ForcedInclusionRootMismatch)
+        );
+
+        let request = registry
+            .submit_forced_inclusion(103, [0xAA; 20], [0xCC; 32], vec![1, 2, 3])
+            .unwrap();
+        registry.advance_masterchain_height(request.deadline_masterchain_height);
+        let due_root = registry.required_forced_inclusion_root_for_zone(103);
+
+        let mut stale_forced = zone_proof_final_update_from_header(&header, [0x4D; 32], [0x55; 20]);
+        stale_forced.required_forced_inclusion_root = [0u8; 32];
+        stale_forced.forced_inclusion_root = [0u8; 32];
+        stale_forced.public_input_digest = zone_proof_public_input_digest(&stale_forced);
+        assert_eq!(
+            registry.submit_proof_final_update(stale_forced),
+            Err(ExecutionZoneError::ForcedInclusionRootMismatch)
+        );
+
+        let mut satisfied = zone_proof_final_update_from_header(&header, [0x4E; 32], [0x55; 20]);
+        satisfied.zone_block_height = 10;
+        satisfied.forced_inclusion_root = due_root;
+        satisfied.required_forced_inclusion_root = due_root;
+        satisfied.public_input_digest = zone_proof_public_input_digest(&satisfied);
+        registry
+            .submit_proof_final_update(satisfied)
+            .expect("due forced root included");
+    }
+
+    #[test]
     fn cross_zone_message_delivery_requires_proven_source_message_root() {
         let messages = vec![
             AsyncCrossZoneMessageV1 {
@@ -2037,6 +2148,20 @@ mod tests {
             Vec::new(),
             vec![ZoneProofCommitmentV1::from(&update)],
         );
+        assert_eq!(
+            verify_zone_proof_update_against_masterchain(&tampered_update, &masterchain),
+            Err(ExecutionZoneError::ZoneProofNotCommitted)
+        );
+
+        let mut tampered_update = update.clone();
+        tampered_update.proof_digest[0] ^= 0x01;
+        assert_eq!(
+            verify_zone_proof_update_against_masterchain(&tampered_update, &masterchain),
+            Err(ExecutionZoneError::ZoneProofNotCommitted)
+        );
+
+        let mut tampered_update = update;
+        tampered_update.prover[0] ^= 0x01;
         assert_eq!(
             verify_zone_proof_update_against_masterchain(&tampered_update, &masterchain),
             Err(ExecutionZoneError::ZoneProofNotCommitted)

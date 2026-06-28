@@ -4,6 +4,10 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 
+[features]
+default = []
+dev-digest = []
+
 [dependencies]
 borsh.workspace = true
 fractal-core = { path = "../core" }
@@ -12,3 +16,6 @@ fractal-crypto = { path = "../crypto" }
 qp-plonky2-verifier = { version = "1.5.1", features = ["std"] }
 reed-solomon-erasure.workspace = true
 thiserror.workspace = true
+
+[dev-dependencies]
+proptest = "1.6"

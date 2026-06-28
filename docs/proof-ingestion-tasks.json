@@ -1,16 +1,16 @@
 {
   "meta": {
-    "title": "Proof-Ingestion Decoupling — Parallel Task Breakdown (Tasks 1–22)",
+    "title": "Proof-Ingestion Decoupling — Parallel Task Breakdown (Tasks 1–27)",
     "source_prd": "docs/proof-ingestion-decoupling-prd.md",
     "repo": "/Users/jamesstar/fractalchain2",
     "created": "2026-06-21",
-    "scope": "Tasks 1–22 cover the full PRD: A (Block Payload Refactor), B (Proof Pool & Ingestion), C (Replay-Free Apply Path), D (DA Decoupling), E (Owned-Object Certificate Fast Path), F (Scope-Aware Routing), G (Cross-Zone Messages & Forced Inclusion), H (Benchmark Harness).",
+    "scope": "Tasks 1–22 cover the full PRD: A (Block Payload Refactor), B (Proof Pool & Ingestion), C (Replay-Free Apply Path), D (DA Decoupling), E (Owned-Object Certificate Fast Path), F (Scope-Aware Routing), G (Cross-Zone Messages & Forced Inclusion), H (Benchmark Harness). Tasks 23–27 (Workstream S: Safety, Hardening & Adversarial Testing) extend the plan beyond the PRD.",
     "wave_summary": {
       "0_run_now": [1, 3, 4, 7, 9, 11, 12, 13, 14, 16, 17, 20],
       "1_after_A1": [2, 5, 10, 15, 18, 19],
-      "2_after_A2": [6],
-      "3_after_verify": [8],
-      "4_after_proof_path": [21],
+      "2_after_A2": [6, 25, 27],
+      "3_after_verify": [8, 23, 24],
+      "4_after_proof_path": [21, 26],
       "5_final_report": [22]
     },
     "critical_path": [1, 2, 6, 8],
@@ -209,7 +209,7 @@
       "prd_ref": "C2",
       "workstream": "C: Replay-Free Apply Path",
       "subject": "Update state roots from verified proof updates",
-      "status": "pending",
+      "status": "completed",
       "wave": 3,
       "blocked_by": [7, 6],
       "blocks": [],
@@ -602,6 +602,151 @@
       "completion_notes": "Added scripts/compare-proof-ingestion-bench.py. The script reads H1 baseline and H2 proof-ingestion JSON summaries, canonicalizes comparable scenario names, computes per-metric deltas, classifies bottlenecks across consensus/proof verification/DA sampling/network/storage, and emits JSON, Markdown, and HTML reports. Verified with small fractal-baseline-bench and fractal-proof-ingestion-bench runs plus generated comparison JSON/Markdown/HTML.",
       "files_likely_touched": [
         "scripts/ (new compare/report script)"
+      ]
+    },
+    {
+      "id": 23,
+      "prd_ref": "S1",
+      "workstream": "S: Safety, Hardening & Adversarial Testing",
+      "subject": "Make DevDigest impossible in production builds/configs",
+      "status": "completed",
+      "wave": 3,
+      "blocked_by": [6],
+      "blocks": [],
+      "anchor": {
+        "devdigest_variant": "crates/consensus/src/lib.rs:322 (ValidityProofSystem::DevDigest)",
+        "verify_arm": "crates/consensus/src/lib.rs:2037-2040",
+        "error": "crates/consensus/src/lib.rs:136-137 (BadDevDigest)",
+        "usage": "crates/benchmarks/src/lib.rs:809, crates/consensus/src/lib.rs:2368,3434"
+      },
+      "build": "Combine compile-time and runtime hard-gating so a production build cannot construct or accept a DevDigest proof. Gate the DevDigest variant + its verify arm behind a Cargo feature 'dev-digest' that is OFF by default and excluded from release/mainnet profiles. Add a runtime guard that hard-rejects DevDigest at BOTH submission and verification when a production/release profile or FRACTAL_NETWORK=mainnet-style flag is active. Remove any ambient default that could enable it.",
+      "acceptance": [
+        "A release/non-dev build physically cannot construct or verify a DevDigest proof (compile-time where possible, else runtime hard-reject).",
+        "DevDigest remains usable ONLY under the explicit dev-digest feature + local benchmark configs.",
+        "A test asserts that under production config a DevDigest proof is rejected at submission AND verification.",
+        "No regression to benchmark scenarios that legitimately use DevDigest (they run under the dev feature)."
+      ],
+      "dependencies": "B3 (#6, proof verifier where the DevDigest arm lives)",
+      "completion_notes": "Gated ValidityProofSystem::DevDigest behind the non-default fractal-consensus/dev-digest feature, preserved explicit Borsh discriminants so default builds reject DevDigest tag 0 instead of mapping it to production proofs, added a production/mainnet runtime guard for opt-in dev builds, mapped disabled dev proofs to a node rejection reason, moved proof-latency benchmarks to production fixture proofs, and updated node proof-finality tests to use production proof fixtures. Verified with cargo test -p fractal-consensus --lib, cargo test -p fractal-consensus --features dev-digest --lib dev_digest, cargo test -p fractal-node --test apply_synced_rpc_maps, cargo test -p fractal-bench, and cargo check --workspace.",
+      "files_likely_touched": [
+        "crates/consensus/src/lib.rs",
+        "Cargo.toml (dev-digest feature + profile gates)",
+        "crates/node/src/lib.rs (runtime guard)"
+      ]
+    },
+    {
+      "id": 24,
+      "prd_ref": "S2",
+      "workstream": "S: Safety, Hardening & Adversarial Testing",
+      "subject": "Adversarial tests for proof public-input mismatches across every root",
+      "status": "completed",
+      "wave": 3,
+      "blocked_by": [6, 10, 15, 18, 19],
+      "blocks": [],
+      "anchor": {
+        "zone_verify": "crates/shard/src/lib.rs:742 (verify_zone_update_public_inputs)",
+        "zone_digest": "crates/shard/src/lib.rs:1041 (zone_proof_public_input_digest)",
+        "payload_root": "crates/consensus/src/payload.rs:98 (payload_root())",
+        "cert_root_hook": "crates/node/src/lib.rs:821",
+        "reject_pattern": "crates/consensus/src/lib.rs:3398 (dev_digest_proof_rejects_timestamp_mismatch)"
+      },
+      "build": "Adversarial test suite that, for EVERY committed root (proof-update root #2, certificate-batch root #15, message root #18, DA root #10, forced-inclusion queue root #19, legacy tx_root), mutates each bound public-input field and asserts verification FAILS. Cover field swap, single-bit flip, truncation, stale-root replay, and cross-root confusion (root A inputs under root B). Fields: parent_state_root, state_root, tx_root, da_root, message_root, circuit_version/metadata, proof_digest, public_input_digest.",
+      "acceptance": [
+        "One test per (root x field) mismatch; every case rejects.",
+        "Cross-root confusion cases reject.",
+        "Tampered / stale / timestamp-mismatch cases reject (extend the 3398 pattern).",
+        "Suite runs in CI; no input mutation slips through verification."
+      ],
+      "completion_notes": "Added adversarial tests for proof-update roots, certificate-batch roots, consensus block validity public inputs, shard zone proof public-input digests, message/DA/forced-inclusion cross-root confusion, stale forced-inclusion replay, and zone-proof commitment proof_digest/prover tampering. Gated DevDigest-only tests behind the dev-digest feature so default CI remains green while the DevDigest adversarial suite runs with --features dev-digest. Verified with cargo test -p fractal-consensus --lib, cargo test -p fractal-consensus --features dev-digest --lib, cargo test -p fractal-shard --lib, cargo check --workspace, cargo fmt --all --check.",
+      "dependencies": "B3 (#6 verifier) + all roots: #2(done), #10, #15, #18, #19",
+      "files_likely_touched": [
+        "crates/shard/tests or crates/consensus/tests (new adversarial suite)",
+        "crates/node/tests"
+      ]
+    },
+    {
+      "id": 25,
+      "prd_ref": "S3",
+      "workstream": "S: Safety, Hardening & Adversarial Testing",
+      "subject": "Property/fuzz tests for payload root ordering and mutation resistance",
+      "status": "pending",
+      "wave": 2,
+      "blocked_by": [2, 10, 15, 18, 19],
+      "blocks": [],
+      "anchor": {
+        "payload_root": "crates/consensus/src/payload.rs:98 (payload_root())",
+        "fuzz_dir": "fuzz/fuzz_targets/proof_envelope.rs (existing fuzz target)"
+      },
+      "build": "proptest + cargo-fuzz targets over every payload-root function asserting ordering sensitivity (any non-identity permutation yields a different root), mutation resistance (single-bit flip in any leaf yields a different root), determinism (identical inputs -> identical root), ordered/non-commutative behavior where required, empty/single-leaf boundaries, and no trivial collisions over small input spaces. Add targets under fuzz/fuzz_targets/.",
+      "acceptance": [
+        "proptest/cargo-fuzz targets added for each root fn.",
+        "All properties hold over generated input distributions; failing shrinks reproduce the bug.",
+        "Property tests run in CI; fuzz targets documented for nightly/periodic runs."
+      ],
+      "dependencies": "root fns #2(done), #10, #15, #18, #19",
+      "files_likely_touched": [
+        "crates/consensus/tests (property tests)",
+        "fuzz/fuzz_targets/ (new targets)",
+        "fuzz/Cargo.toml"
+      ],
+      "completion_notes": "Added proptest coverage for proof-update roots, certificate-batch roots, full/mixed payload roots, DA commitment hashes, ordering sensitivity, single-bit mutation resistance, determinism, and small-space collision checks. Added cargo-fuzz targets for payload roots and DA commitment/header roots under fuzz/fuzz_targets/. Verified with cargo test -p fractal-consensus --lib payload --no-fail-fast, cargo check --manifest-path fuzz/Cargo.toml --bins, and cargo fmt --all --check."
+    },
+    {
+      "id": 26,
+      "prd_ref": "S4",
+      "workstream": "S: Safety, Hardening & Adversarial Testing",
+      "subject": "Stress forced-inclusion liveness (multi-zone, delayed proofs)",
+      "status": "completed",
+      "wave": 4,
+      "blocked_by": [8, 19],
+      "blocks": [],
+      "anchor": {
+        "forced_types": "crates/masterchain/src/ledger.rs:69-91 (ForcedInclusionRequestV1/EventV1)",
+        "queue": "crates/masterchain/src/ledger.rs:290-291 (pending_forced_inclusions, forced_inclusion_events)",
+        "timeout_error": "crates/masterchain/src/ledger.rs:332 (InvalidForcedInclusionTimeout)",
+        "queue_root": "crates/masterchain/src/bft.rs:148 (forced_inclusion_queue_root)"
+      },
+      "build": "Integration/stress harness with multiple execution zones and delayed/withheld proofs asserting BOTH liveness (after deadline_masterchain_height a forced-inclusion request is eventually included; report worst-case inclusion latency in blocks) and safety (a zone proof omitting a DUE forced-inclusion item is rejected, finality withheld, until included). Stress dimensions: zone count, proof-delay distribution, adversarial sequencer withholding, concurrent forced requests.",
+      "acceptance": [
+        "Multi-zone liveness: forced requests included within a bounded number of blocks after deadline.",
+        "Delayed-proof: missing forced items reject zone-proof finality until included.",
+        "Adversarial sequencer withholding eventually overridden by the forced-inclusion path.",
+        "Latency/throughput reported in the benchmark metric style."
+      ],
+      "completion_notes": "Added a multi-zone forced-inclusion stress harness in the dedicated masterchain tests. The scenario creates four zones with staggered deadlines, submits eight concurrent forced-inclusion requests, withholds proofs until all deadlines have elapsed, asserts base-chain queue roots stay committed, reports worst_inclusion_latency_blocks, rejects omitted due roots, and then accepts satisfied forced-inclusion roots for each zone. Verified with cargo test -p fractal-masterchain and cargo check --workspace.",
+      "dependencies": "G2 (#19 forced-inclusion root) + C2 (#8 state-root apply / finality); soft link to C3 (#9)",
+      "files_likely_touched": [
+        "crates/masterchain/tests or crates/shard/tests (new stress harness)",
+        "crates/benchmarks (scenario hooks)"
+      ]
+    },
+    {
+      "id": 27,
+      "prd_ref": "S5",
+      "workstream": "S: Safety, Hardening & Adversarial Testing",
+      "subject": "Define minimum DA sampling parameters, reject undersampled receipts",
+      "status": "pending",
+      "wave": 2,
+      "blocked_by": [10, 11],
+      "blocks": [],
+      "anchor": {
+        "receipt": "crates/consensus/src/lib.rs:254 (DaSamplingReceipt), 267 (min_samples)",
+        "build_fn": "crates/consensus/src/lib.rs:1408 (build_da_sampling_receipt)",
+        "verify_fn": "crates/consensus/src/lib.rs:1451-1463 (verify_da_sampling_receipt, checks sample_count < min_samples)",
+        "commitment_check": "crates/consensus/src/lib.rs:1648 (sample_count < min_samples)",
+        "test_literal": "crates/consensus/src/lib.rs:3990 (hardcoded min_samples: 4)"
+      },
+      "build": "Replace ad-hoc/parameter-passed minimums with a single DaSamplingPolicy source of truth, justified by soundness: min sample count as a function of blob share count + Reed-Solomon expansion ratio + target collision probability; min columns/rows; confidence threshold. Enforce the policy at BOTH the receipt-verify boundary (strengthen 1451-1463) AND the commitment-build boundary (1648). Eliminate magic-number literals (e.g. min_samples: 4) in callers/tests - reference the policy.",
+      "acceptance": [
+        "A single DaSamplingPolicy module/source of truth; all callers reference it instead of literals.",
+        "Receipts below the policy minimum are rejected at BOTH build and verify boundaries.",
+        "Policy parameters documented with their soundness rationale (sample count vs blob size).",
+        "Tests: receipt at min-1 rejects; receipt at min+ passes; required sample count scales with share count."
+      ],
+      "dependencies": "D2 (#11 receipt, done) + D1 (#10 zone-blob DA share structure)",
+      "files_likely_touched": [
+        "crates/consensus/src/lib.rs (or new da_policy module)",
+        "crates/consensus/tests"
       ]
     }
   ]
