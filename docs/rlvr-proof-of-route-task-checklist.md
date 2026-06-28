@@ -589,13 +589,15 @@ tests for advantage normalization/checkpoint writing and invalid GRPO inputs.
 
 ### RLVR-032: Add fallback DPO/SFT path
 
-- [ ] Convert high/low reward rollouts into preference pairs.
-- [ ] Add DPO mode.
-- [ ] Add SFT mode for high-quality rollouts.
+- [x] Convert high/low reward rollouts into preference pairs.
+- [x] Add DPO mode.
+- [x] Add SFT mode for high-quality rollouts.
 
 Done when:
 
-- [ ] `fractal-rlvr train --mode dpo` works on small machines.
+- [x] `fractal-rlvr train --mode dpo` works on small machines.
+
+Status: Completed in `crates/rlvr/src/trainer/dpo_sft.rs` + CLI dispatch in `crates/rlvr/src/lib.rs` (`train_command`). `build_dpo_dataset` groups `ScoredRollout`s by prompt and pairs the highest-reward response (chosen) against the weakest whose gap meets `min_reward_margin` (default 0.10); `build_sft_dataset` keeps rollouts with reward ≥ `sft_reward_threshold` (default 0.70). Both are deterministic, CPU-only, local-only (raw prompts/responses never leave the machine; the report carries only counts + a dataset hash). `run_fallback_train_cli` reads scored-rollouts JSONL and writes `dpo_pairs.jsonl` / `sft_examples.jsonl`; `run_argv` routes `train --mode dpo|sft --rollouts <jsonl> --out <dir>` to it (other modes stay registered for GRPO). Now also runs the RLVR-033 training-resource guard. Covered by 12 unit tests + 4 `run_argv` end-to-end integration tests (`crates/rlvr/tests/train_fallback_cli.rs`); full crate 130 lib + 12 integration tests pass. Lives under `trainer::dpo_sft::` (kept out of the `trainer` re-export namespace to avoid collisions with concurrent RLVR-030/031/033 work in `trainer/mod.rs`).
 
 ### RLVR-033: Add training resource guard
 
@@ -668,34 +670,47 @@ Done when:
 
 ### RLVR-037: Implement metrics report
 
-- [ ] Final answer accuracy.
-- [ ] Checkpoint coverage.
-- [ ] Redundant question rate.
-- [ ] Premature answer rate.
-- [ ] Correct route rate.
-- [ ] Unnecessary escalation rate.
-- [ ] Private-data leakage rate.
-- [ ] Average cost.
-- [ ] Average latency.
+- [x] Final answer accuracy.
+- [x] Checkpoint coverage.
+- [x] Redundant question rate.
+- [x] Premature answer rate.
+- [x] Correct route rate.
+- [x] Unnecessary escalation rate.
+- [x] Private-data leakage rate.
+- [x] Average cost.
+- [x] Average latency.
 
 Done when:
 
-- [ ] `fractal-rlvr eval-report` creates HTML and JSON reports.
+- [x] `fractal-rlvr eval-report` creates HTML and JSON reports.
+
+Status: implemented in `crates/rlvr/src/evals/mod.rs` and wired into the
+`fractal-rlvr eval-report --input <trace-file-or-dir> --out <report-dir>` CLI.
+The report writes `eval_report.json` and `eval_report.html` with per-trace and
+aggregate metrics.
 
 ### RLVR-038: Implement adapter promotion gate
 
-- [ ] Require coverage improvement.
-- [ ] Require route correctness improvement.
-- [ ] Require bounded cost.
-- [ ] Require bounded latency.
-- [ ] Require no single-turn accuracy collapse.
-- [ ] Require redundant question rate under limit.
-- [ ] Require zero privacy violations.
-- [ ] Add rollback metadata.
+- [x] Require coverage improvement.
+- [x] Require route correctness improvement.
+- [x] Require bounded cost.
+- [x] Require bounded latency.
+- [x] Require no single-turn accuracy collapse.
+- [x] Require redundant question rate under limit.
+- [x] Require zero privacy violations.
+- [x] Add rollback metadata.
 
 Done when:
 
-- [ ] Bad adapters are blocked automatically.
+- [x] Bad adapters are blocked automatically.
+
+Status: Completed in `crates/rlvr/src/evals/mod.rs` with
+`AdapterPromotionGatePolicy`, `AdapterPromotionDecision`,
+`PromotionGateCheck`, `AdapterRollbackMetadata`, and
+`evaluate_adapter_promotion_gate`. The gate compares baseline and candidate eval
+reports, blocks failed adapters automatically, and records rollback metadata for
+safe disable/revert paths. Exported from `crates/rlvr/src/lib.rs` and covered by
+promotion-pass, promotion-block, and invalid-policy tests.
 
 ### RLVR-039: Add MVP success metrics
 
@@ -714,22 +729,26 @@ Done when:
 
 ### RLVR-040: Define proof object schema
 
-- [ ] Define `ProofOfRoute`.
-- [ ] Define `ProofOfEval`.
-- [ ] Define `ProofOfTraining`.
-- [ ] Include `trace_hash`.
-- [ ] Include `rubric_hash`.
-- [ ] Include `reward_policy_hash`.
-- [ ] Include `router_policy_hash`.
-- [ ] Include `model_id_hash`.
-- [ ] Include `adapter_hash`.
-- [ ] Include `eval_result_hash`.
-- [ ] Include `timestamp`.
-- [ ] Include `node_signature`.
+- [x] Define `ProofOfRoute`.
+- [x] Define `ProofOfEval`.
+- [x] Define `ProofOfTraining`.
+- [x] Include `trace_hash`.
+- [x] Include `rubric_hash`.
+- [x] Include `reward_policy_hash`.
+- [x] Include `router_policy_hash`.
+- [x] Include `model_id_hash`.
+- [x] Include `adapter_hash`.
+- [x] Include `eval_result_hash`.
+- [x] Include `timestamp`.
+- [x] Include `node_signature`.
 
 Done when:
 
-- [ ] Proof object can be generated without exposing raw data.
+- [x] Proof object can be generated without exposing raw data.
+
+Status: implemented in `crates/rlvr/src/chain/mod.rs`. The schema supports
+`ProofOfRoute`, `ProofOfEval`, and `ProofOfTraining` with hash-only fields and
+tests that generated proof JSON excludes raw prompts, answers, and rubric text.
 
 ### RLVR-041: Add deterministic proof hashing
 

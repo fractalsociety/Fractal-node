@@ -28,9 +28,12 @@ pub use data::{
     VerifierOutput,
 };
 pub use evals::{
-    run_adversarial_privacy_suite, run_proof_route_benchmark, v01_release_gate_report,
-    AdversarialPrivacyReport, Phase11TestCoverageReport, ProofRouteBenchmarkReport,
-    V01ReleaseGateReport,
+    build_eval_metrics_report, evaluate_adapter_promotion_gate, read_eval_traces,
+    render_eval_report_html, run_adversarial_privacy_suite, run_proof_route_benchmark,
+    v01_release_gate_report, write_eval_report, AdapterPromotionDecision,
+    AdapterPromotionGatePolicy, AdapterRollbackMetadata, AdversarialPrivacyReport,
+    EvalMetricsReport, EvalReportFiles, EvalTraceMetrics, Phase11TestCoverageReport,
+    PromotionGateCheck, ProofRouteBenchmarkReport, V01ReleaseGateReport,
 };
 pub use rewards::{
     compute_reward_vector, detect_anti_reward_hacking, score_mvp_reward_v01,
@@ -348,6 +351,11 @@ const CLI_COMMANDS: &[CliCommand] = &[
         description: "Register the before/after evaluation command surface.",
     },
     CliCommand {
+        name: "eval-report",
+        usage: "fractal-rlvr eval-report --input runs/rollout-001 --out reports/router-rlvr-v0.1",
+        description: "Create RLVR metrics reports as JSON and HTML from local rollout traces.",
+    },
+    CliCommand {
         name: "promote",
         usage: "fractal-rlvr promote --adapter adapters/router-rlvr-v0.1 --if-passes-gate",
         description: "Register the adapter promotion command surface.",
@@ -384,6 +392,7 @@ pub fn run_argv(argv: &[String]) -> Result<String, RlvrError> {
         "collect-traces" | "make-rubrics" | "eval" | "promote" | "proof" => {
             command_registered(command)
         }
+        "eval-report" => eval_report_command(argv),
         "train" => train_command(argv),
         "rollout" => rollout_command(argv),
         "bench-proof-route" => bench_proof_route_command(argv),
@@ -528,6 +537,23 @@ fn bench_proof_route_command(argv: &[String]) -> Result<String, RlvrError> {
 
 fn release_gate_command() -> Result<String, RlvrError> {
     serde_json::to_string_pretty(&v01_release_gate_report()).map_err(RlvrError::from)
+}
+
+fn eval_report_command(argv: &[String]) -> Result<String, RlvrError> {
+    let input = value_after(argv, "--input")
+        .or_else(|| value_after(argv, "--traces"))
+        .map(PathBuf::from)
+        .ok_or_else(|| {
+            RlvrError::UnsupportedCommand("eval-report requires --input <path>".into())
+        })?;
+    let out = value_after(argv, "--out")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("reports/rlvr-eval"));
+    let files = write_eval_report(&input, &out)?;
+    Ok(format!(
+        "eval-report ok: json={} html={}",
+        files.json_path, files.html_path
+    ))
 }
 
 fn value_after(argv: &[String], flag: &str) -> Option<String> {
