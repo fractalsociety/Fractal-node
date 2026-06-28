@@ -100,12 +100,116 @@ impl Default for PrivacyPolicy {
 
 impl PrivacyPolicy {
     pub fn validate(&self) -> Result<(), RlvrError> {
-        if self.local_only && self.allow_export {
+        if self.local_only && self.allow_external_models {
             return Err(RlvrError::Config(
-                "local_only privacy policy cannot allow export by default".into(),
+                "local_only privacy policy cannot allow external model routing".into(),
             ));
         }
         Ok(())
+    }
+
+    pub fn from_scan(scan: &PrivacyScan, explicit_export_approval: bool) -> Self {
+        if scan.is_private {
+            Self {
+                local_only: true,
+                allow_external_models: false,
+                allow_export: explicit_export_approval,
+                pii_tags: scan
+                    .tags
+                    .iter()
+                    .map(|tag| tag.as_str().to_string())
+                    .collect(),
+            }
+        } else {
+            Self {
+                local_only: false,
+                allow_external_models: true,
+                allow_export: explicit_export_approval,
+                pii_tags: Vec::new(),
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+pub enum PrivacyTag {
+    Email,
+    PhoneNumber,
+    Address,
+    ApiKey,
+    FinancialData,
+    HealthData,
+    LegalData,
+    PrivateFile,
+}
+
+impl PrivacyTag {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Email => "email",
+            Self::PhoneNumber => "phone_number",
+            Self::Address => "address",
+            Self::ApiKey => "api_key",
+            Self::FinancialData => "financial_data",
+            Self::HealthData => "health_data",
+            Self::LegalData => "legal_data",
+            Self::PrivateFile => "private_file",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PrivacyScan {
+    pub is_private: bool,
+    pub tags: Vec<PrivacyTag>,
+}
+
+impl PrivacyScan {
+    pub fn policy(&self, explicit_export_approval: bool) -> PrivacyPolicy {
+        PrivacyPolicy::from_scan(self, explicit_export_approval)
+    }
+}
+
+pub fn scan_privacy_tags(text: &str) -> PrivacyScan {
+    let lower = text.to_ascii_lowercase();
+    let mut tags = Vec::new();
+    push_if(&mut tags, PrivacyTag::Email, contains_email(text));
+    push_if(
+        &mut tags,
+        PrivacyTag::PhoneNumber,
+        contains_phone_number(text),
+    );
+    push_if(&mut tags, PrivacyTag::Address, contains_address(&lower));
+    push_if(
+        &mut tags,
+        PrivacyTag::ApiKey,
+        contains_api_key(text, &lower),
+    );
+    push_if(
+        &mut tags,
+        PrivacyTag::FinancialData,
+        contains_financial_data(text, &lower),
+    );
+    push_if(
+        &mut tags,
+        PrivacyTag::HealthData,
+        contains_health_data(&lower),
+    );
+    push_if(
+        &mut tags,
+        PrivacyTag::LegalData,
+        contains_legal_data(&lower),
+    );
+    push_if(
+        &mut tags,
+        PrivacyTag::PrivateFile,
+        contains_private_file_reference(text, &lower),
+    );
+    tags.sort();
+    tags.dedup();
+    PrivacyScan {
+        is_private: !tags.is_empty(),
+        tags,
     }
 }
 
@@ -376,6 +480,38 @@ pub struct DialogueTrace {
     pub final_reward: f64,
 }
 
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct RedactedDialogueTurn {
+    pub role: String,
+    pub content_hash: String,
+    pub model_id: Option<String>,
+    pub route_decision: Option<String>,
+    pub latency_ms: Option<u64>,
+    pub cost_estimate: Option<f64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct RedactedDialogueTrace {
+    pub trace_id: String,
+    pub task_id: String,
+    pub turns: Vec<RedactedDialogueTurn>,
+    pub verifier_outputs_hash: String,
+    pub reward_vector_hash: String,
+    pub final_reward: f64,
+    pub privacy_tags: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TraceHashCommitment {
+    pub trace_id: String,
+    pub task_id: String,
+    pub trace_hash: String,
+    pub redacted_trace_hash: String,
+    pub verifier_outputs_hash: String,
+    pub reward_vector_hash: String,
+    pub privacy_tags: Vec<String>,
+}
+
 impl DialogueTrace {
     pub fn validate(&self) -> Result<(), RlvrError> {
         require_non_empty("dialogue_trace.trace_id", &self.trace_id)?;
@@ -399,6 +535,73 @@ impl DialogueTrace {
         self.validate()?;
         stable_hash(self)
     }
+
+    pub fn raw_trace_hash(&self) -> Result<String, RlvrError> {
+        self.stable_hash()
+    }
+
+    pub fn verifier_outputs_hash(&self) -> Result<String, RlvrError> {
+        for output in &self.verifier_outputs {
+            output.validate()?;
+        }
+        stable_hash(&self.verifier_outputs)
+    }
+
+    pub fn reward_vector_hash(&self) -> Result<String, RlvrError> {
+        self.reward_vector.validate()?;
+        stable_hash(&self.reward_vector)
+    }
+
+    pub fn redacted_trace(&self) -> Result<RedactedDialogueTrace, RlvrError> {
+        self.validate()?;
+        let mut privacy_tags = Vec::new();
+        let mut turns = Vec::with_capacity(self.turns.len());
+        for turn in &self.turns {
+            let scan = scan_privacy_tags(&turn.content);
+            privacy_tags.extend(
+                scan.tags
+                    .into_iter()
+                    .map(PrivacyTag::as_str)
+                    .map(str::to_string),
+            );
+            turns.push(RedactedDialogueTurn {
+                role: turn.role.clone(),
+                content_hash: stable_hash(&turn.content)?,
+                model_id: turn.model_id.clone(),
+                route_decision: turn.route_decision.clone(),
+                latency_ms: turn.latency_ms,
+                cost_estimate: turn.cost_estimate,
+            });
+        }
+        privacy_tags.sort();
+        privacy_tags.dedup();
+        Ok(RedactedDialogueTrace {
+            trace_id: self.trace_id.clone(),
+            task_id: self.task_id.clone(),
+            turns,
+            verifier_outputs_hash: self.verifier_outputs_hash()?,
+            reward_vector_hash: self.reward_vector_hash()?,
+            final_reward: self.final_reward,
+            privacy_tags,
+        })
+    }
+
+    pub fn redacted_trace_hash(&self) -> Result<String, RlvrError> {
+        stable_hash(&self.redacted_trace()?)
+    }
+
+    pub fn trace_hash_commitment(&self) -> Result<TraceHashCommitment, RlvrError> {
+        let redacted = self.redacted_trace()?;
+        Ok(TraceHashCommitment {
+            trace_id: self.trace_id.clone(),
+            task_id: self.task_id.clone(),
+            trace_hash: self.raw_trace_hash()?,
+            redacted_trace_hash: stable_hash(&redacted)?,
+            verifier_outputs_hash: redacted.verifier_outputs_hash,
+            reward_vector_hash: redacted.reward_vector_hash,
+            privacy_tags: redacted.privacy_tags,
+        })
+    }
 }
 
 fn require_non_empty(name: &str, value: &str) -> Result<(), RlvrError> {
@@ -421,4 +624,168 @@ fn require_finite_non_negative(name: &str, value: f64) -> Result<(), RlvrError> 
         return Err(RlvrError::Config(format!("{name} cannot be negative")));
     }
     Ok(())
+}
+
+fn push_if(tags: &mut Vec<PrivacyTag>, tag: PrivacyTag, present: bool) {
+    if present {
+        tags.push(tag);
+    }
+}
+
+fn contains_email(text: &str) -> bool {
+    text.split_whitespace().any(|token| {
+        let trimmed = token.trim_matches(|c: char| {
+            !c.is_ascii_alphanumeric() && c != '@' && c != '.' && c != '_' && c != '-' && c != '+'
+        });
+        let Some((local, domain)) = trimmed.split_once('@') else {
+            return false;
+        };
+        !local.is_empty()
+            && domain.contains('.')
+            && domain.split('.').all(|part| {
+                !part.is_empty() && part.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
+            })
+    })
+}
+
+fn contains_phone_number(text: &str) -> bool {
+    let mut digits = 0usize;
+    let mut separators = 0usize;
+    for ch in text.chars() {
+        if ch.is_ascii_digit() {
+            digits += 1;
+        } else if matches!(ch, ' ' | '-' | '(' | ')' | '.' | '+') {
+            separators += 1;
+        } else {
+            if (10..=15).contains(&digits) && separators >= 2 {
+                return true;
+            }
+            digits = 0;
+            separators = 0;
+        }
+    }
+    (10..=15).contains(&digits) && separators >= 2
+}
+
+fn contains_address(lower: &str) -> bool {
+    let has_street_suffix = [
+        " street",
+        " st.",
+        " st ",
+        " road",
+        " rd.",
+        " avenue",
+        " ave",
+        " lane",
+        " ln.",
+        " drive",
+        " dr.",
+        " boulevard",
+        " blvd",
+        " court",
+        " ct.",
+        " way",
+    ]
+    .iter()
+    .any(|needle| lower.contains(needle));
+    has_street_suffix
+        && lower
+            .split_whitespace()
+            .any(|word| word.chars().any(|c| c.is_ascii_digit()))
+}
+
+fn contains_api_key(text: &str, lower: &str) -> bool {
+    let known_prefix = [
+        "sk-",
+        "sk_or_",
+        "sk-or-",
+        "sk_live_",
+        "sk_test_",
+        "hf_",
+        "github_pat_",
+        "ghp_",
+        "xoxb-",
+        "akia",
+    ]
+    .iter()
+    .any(|prefix| lower.contains(prefix));
+    known_prefix
+        || text.split_whitespace().any(|token| {
+            let clean =
+                token.trim_matches(|c: char| !c.is_ascii_alphanumeric() && c != '_' && c != '-');
+            clean.len() >= 32
+                && clean.chars().any(|c| c.is_ascii_uppercase())
+                && clean.chars().any(|c| c.is_ascii_lowercase())
+                && clean.chars().any(|c| c.is_ascii_digit())
+        })
+}
+
+fn contains_financial_data(text: &str, lower: &str) -> bool {
+    let keyword = [
+        "credit card",
+        "debit card",
+        "bank account",
+        "routing number",
+        "account number",
+        "ssn",
+        "social security",
+        "tax id",
+        "w-2",
+        "1099",
+    ]
+    .iter()
+    .any(|needle| lower.contains(needle));
+    keyword || contains_card_like_number(text)
+}
+
+fn contains_card_like_number(text: &str) -> bool {
+    let digits: String = text.chars().filter(|ch| ch.is_ascii_digit()).collect();
+    (13..=19).contains(&digits.len())
+}
+
+fn contains_health_data(lower: &str) -> bool {
+    [
+        "diagnosis",
+        "prescription",
+        "medical record",
+        "patient",
+        "blood pressure",
+        "doctor",
+        "hipaa",
+        "medication",
+        "symptom",
+        "lab result",
+    ]
+    .iter()
+    .any(|needle| lower.contains(needle))
+}
+
+fn contains_legal_data(lower: &str) -> bool {
+    [
+        "attorney",
+        "lawyer",
+        "lawsuit",
+        "subpoena",
+        "contract",
+        "nda",
+        "legal advice",
+        "court order",
+        "settlement agreement",
+        "privileged",
+    ]
+    .iter()
+    .any(|needle| lower.contains(needle))
+}
+
+fn contains_private_file_reference(text: &str, lower: &str) -> bool {
+    lower.contains("file://")
+        || lower.contains("/users/")
+        || lower.contains("/home/")
+        || lower.contains("\\users\\")
+        || lower.contains("c:\\")
+        || text.split_whitespace().any(|token| {
+            let clean = token.trim_matches(|c: char| c == '"' || c == '\'' || c == ',' || c == ';');
+            (clean.starts_with("./") || clean.starts_with("../") || clean.starts_with('~'))
+                && clean.contains('.')
+        })
 }

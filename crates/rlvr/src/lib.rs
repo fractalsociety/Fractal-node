@@ -6,6 +6,7 @@ pub mod evals;
 pub mod rewards;
 pub mod rubrics;
 pub mod simulator;
+pub mod tracing;
 pub mod trainer;
 pub mod verifier;
 
@@ -15,9 +16,61 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
+pub use adapters::{
+    list_adapter_metadata, register_adapter_metadata, AdapterMetadata, AdapterRegistry,
+    AdapterRegistryStore, AdapterTrainingMode,
+};
+pub use chain::{RlvrProofObject, RlvrProofType};
 pub use data::{
-    Checkpoint, CheckpointType, DialogueTrace, DialogueTurn, Difficulty, PrivacyPolicy,
-    RewardVector, RoutePolicy, RouteRule, TrainingItem, TrainingMode, VerifierOutput,
+    scan_privacy_tags, Checkpoint, CheckpointType, DialogueTrace, DialogueTurn, Difficulty,
+    PrivacyPolicy, PrivacyScan, PrivacyTag, RedactedDialogueTrace, RedactedDialogueTurn,
+    RewardVector, RoutePolicy, RouteRule, TraceHashCommitment, TrainingItem, TrainingMode,
+    VerifierOutput,
+};
+pub use evals::{
+    run_adversarial_privacy_suite, run_proof_route_benchmark, v01_release_gate_report,
+    AdversarialPrivacyReport, Phase11TestCoverageReport, ProofRouteBenchmarkReport,
+    V01ReleaseGateReport,
+};
+pub use rewards::{
+    compute_reward_vector, detect_anti_reward_hacking, score_mvp_reward_v01,
+    score_mvp_reward_with_policy, write_reward_vector_json, AntiRewardHackingInput,
+    AntiRewardHackingReport, MvpRewardPolicyInput, MvpRewardPolicyReport, MvpRewardPolicyV01,
+    RewardSignalInput, RewardVectorArtifact, MVP_REWARD_POLICY_V01_ID,
+};
+pub use rubrics::{
+    generate_compression_loss_rubric, generate_route_correctness_rubric, generate_tool_use_rubric,
+    CompressionLossRubricInput, CompressionRequiredFact, ModelInventoryItem,
+    RouteCorrectnessRubricInput, ToolInventoryItem, ToolUseRequirementKind, ToolUseRubricInput,
+};
+pub use simulator::{
+    build_simulated_rollout_trace, simulate_local_user_reply, simulate_local_user_reply_with_mode,
+    AdversarialSimulatorStyle, LocalUserSimulator, LocalUserSimulatorInput,
+    LocalUserSimulatorReply, SimulatedRolloutTraceInput, SimulatorMode,
+};
+pub use tracing::{RouteTraceInput, RouteTraceLogger, RouteTraceRow};
+pub use trainer::{
+    demo_rollout_tasks, run_rollout_batch, sample_rollout_tasks, train_grpo_adapter,
+    validate_training_resources, write_rollout_traces, GrpoEvalSummary, GrpoRolloutAdvantage,
+    GrpoTrainerInput, GrpoTrainerReport, RolloutRunReport, RolloutRunnerInput, RolloutTaskBatch,
+    RolloutTaskFilter, RolloutTaskSamplerInput, RolloutTaskSource, SampledRolloutTask,
+    TrainingComputeMode, TrainingResourceGuardInput, TrainingResourceLimits,
+    TrainingResourceReport, TrainingResourceSnapshot,
+};
+pub use trainer::{
+    ActorRole, ActorRuntime, ActorRuntimeRequest, ActorRuntimeResponse,
+    DeterministicLocalActorRuntime,
+};
+pub use verifier::{
+    evaluate_single_local_verifier_for_item, evaluate_verifier_panel_for_item,
+    parse_strict_verifier_output, parse_verifier_output_with_retries,
+    parse_verifier_output_with_retries_and_logger, score_checkpoint_coverage,
+    score_checkpoint_coverage_for_item, score_final_answer_for_item,
+    score_final_answer_from_coverage, CheckpointCoverageReport, FinalAnswerScoreReport,
+    ParsedVerifierOutput, StrictVerifierOutput, UnparseableVerifierLogRow,
+    UnparseableVerifierLogger, VerifierLogContext, VerifierPanelJudge, VerifierPanelReport,
+    VerifierParseFailure, VerifierParseReport, VerifierQaExportRecord, VerifierQaRecord,
+    VerifierQaRecordInput, VerifierQaStore,
 };
 
 pub const DEFAULT_CONFIG_FILE: &str = "fractal_rlvr/config.yaml";
@@ -30,6 +83,8 @@ pub const DEFAULT_CONFIG_YAML: &str = include_str!("../config/default.yaml");
 pub enum RlvrError {
     #[error("config error: {0}")]
     Config(String),
+    #[error("resource error: {0}")]
+    Resource(String),
     #[error("unsupported command: {0}")]
     UnsupportedCommand(String),
     #[error("io: {0}")]
@@ -200,12 +255,27 @@ pub struct RlvrNodeFlags {
 
 impl RlvrNodeFlags {
     pub fn from_env() -> Self {
-        let raw_requested = env_flag("FRACTAL_RLVR_RAW_DATA_ON_CHAIN", false);
+        Self::from_values(
+            std::env::var("FRACTAL_RLVR_ENABLED").ok().as_deref(),
+            std::env::var("FRACTAL_RLVR_CHAIN_COMMIT_ENABLED")
+                .ok()
+                .as_deref(),
+            std::env::var("FRACTAL_RLVR_RAW_DATA_ON_CHAIN")
+                .ok()
+                .as_deref(),
+        )
+    }
+
+    pub fn from_values(
+        enabled: Option<&str>,
+        chain_commit_enabled: Option<&str>,
+        raw_data_on_chain: Option<&str>,
+    ) -> Self {
         Self {
-            enabled: env_flag("FRACTAL_RLVR_ENABLED", false),
-            chain_commit_enabled: env_flag("FRACTAL_RLVR_CHAIN_COMMIT_ENABLED", false),
+            enabled: parse_flag_value(enabled, false),
+            chain_commit_enabled: parse_flag_value(chain_commit_enabled, false),
             raw_data_on_chain: false,
-            raw_data_on_chain_requested: raw_requested,
+            raw_data_on_chain_requested: parse_flag_value(raw_data_on_chain, false),
         }
     }
 }
@@ -227,17 +297,97 @@ pub fn stable_hash<T: Serialize>(value: &T) -> Result<String, RlvrError> {
     Ok(hex::encode(blake3::hash(&bytes).as_bytes()))
 }
 
+/// Raw blake3 of `bytes`, hex-encoded. Used for content-addressing prompts,
+/// answers, and corrections in trace rows where JSON-wrapping ([`stable_hash`])
+/// would be inappropriate.
+pub fn hash_bytes(bytes: &[u8]) -> String {
+    hex::encode(blake3::hash(bytes).as_bytes())
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct CliCommand {
+    name: &'static str,
+    usage: &'static str,
+    description: &'static str,
+}
+
+const CLI_COMMANDS: &[CliCommand] = &[
+    CliCommand {
+        name: "init",
+        usage: "fractal-rlvr init [--root path]",
+        description: "Create the local RLVR workspace folders and default config.",
+    },
+    CliCommand {
+        name: "config",
+        usage: "fractal-rlvr config validate [--config path]",
+        description: "Validate the RLVR config file or embedded default config.",
+    },
+    CliCommand {
+        name: "collect-traces",
+        usage: "fractal-rlvr collect-traces --source fractal-chat --out data/traces.jsonl",
+        description: "Register the trace collection command surface.",
+    },
+    CliCommand {
+        name: "make-rubrics",
+        usage: "fractal-rlvr make-rubrics --mode route-correctness --input data/traces.jsonl --out data/rubrics.jsonl",
+        description: "Register the rubric generation command surface.",
+    },
+    CliCommand {
+        name: "rollout",
+        usage: "fractal-rlvr rollout --n 100 --out runs/rollout-001",
+        description: "Run deterministic local RLVR rollout traces.",
+    },
+    CliCommand {
+        name: "train",
+        usage: "fractal-rlvr train --method grpo --actor local-tiny-model --rollouts runs/rollout-001 --out adapters/router-rlvr-v0.1",
+        description: "Register the adapter training command surface.",
+    },
+    CliCommand {
+        name: "eval",
+        usage: "fractal-rlvr eval --base local-tiny-model --adapter adapters/router-rlvr-v0.1 --out reports/router-rlvr-v0.1",
+        description: "Register the before/after evaluation command surface.",
+    },
+    CliCommand {
+        name: "promote",
+        usage: "fractal-rlvr promote --adapter adapters/router-rlvr-v0.1 --if-passes-gate",
+        description: "Register the adapter promotion command surface.",
+    },
+    CliCommand {
+        name: "proof",
+        usage: "fractal-rlvr proof --adapter adapters/router-rlvr-v0.1 --report reports/router-rlvr-v0.1 --local-only",
+        description: "Register the hash-only proof generation command surface.",
+    },
+    CliCommand {
+        name: "bench-proof-route",
+        usage: "fractal-rlvr bench-proof-route [--iterations 1000]",
+        description: "Run the local Proof of Route overhead benchmark.",
+    },
+    CliCommand {
+        name: "release-gate",
+        usage: "fractal-rlvr release-gate",
+        description: "Print the v0.1 RLVR release-gate report.",
+    },
+];
+
 pub fn run_argv(argv: &[String]) -> Result<String, RlvrError> {
     let command = argv.get(1).map(String::as_str).unwrap_or("help");
+    if matches!(
+        argv.get(2).map(String::as_str),
+        Some("--help" | "-h" | "help")
+    ) {
+        return command_help(command).ok_or_else(|| RlvrError::UnsupportedCommand(command.into()));
+    }
     match command {
         "help" | "--help" | "-h" => Ok(help_text()),
         "init" => init_command(argv),
         "config" => config_command(argv),
-        "collect-traces" | "make-rubrics" | "rollout" | "train" | "eval" | "promote" | "proof" => {
-            Ok(format!(
-                "{command}: command registered; implementation starts after Phase 0"
-            ))
+        "collect-traces" | "make-rubrics" | "eval" | "promote" | "proof" => {
+            command_registered(command)
         }
+        "train" => train_command(argv),
+        "rollout" => rollout_command(argv),
+        "bench-proof-route" => bench_proof_route_command(argv),
+        "release-gate" => release_gate_command(),
         other => Err(RlvrError::UnsupportedCommand(other.into())),
     }
 }
@@ -293,24 +443,91 @@ fn config_command(argv: &[String]) -> Result<String, RlvrError> {
                 config_hash(&cfg)?
             ))
         }
-        _ => Ok("usage: fractal-rlvr config validate [--config path]".into()),
+        _ => Ok(command_help("config").expect("config command help exists")),
     }
 }
 
 fn help_text() -> String {
-    [
-        "fractal-rlvr commands:",
-        "  init [--root path]",
-        "  config validate [--config path]",
-        "  collect-traces",
-        "  make-rubrics",
-        "  rollout",
-        "  train",
-        "  eval",
-        "  promote",
-        "  proof",
-    ]
-    .join("\n")
+    let mut out = String::from("fractal-rlvr commands:");
+    for command in CLI_COMMANDS {
+        out.push_str("\n  ");
+        out.push_str(command.usage);
+    }
+    out
+}
+
+fn command_help(command: &str) -> Option<String> {
+    CLI_COMMANDS
+        .iter()
+        .find(|spec| spec.name == command)
+        .map(|spec| format!("{}\n\n{}", spec.usage, spec.description))
+}
+
+fn command_registered(command: &str) -> Result<String, RlvrError> {
+    let Some(spec) = CLI_COMMANDS.iter().find(|spec| spec.name == command) else {
+        return Err(RlvrError::UnsupportedCommand(command.into()));
+    };
+    Ok(format!(
+        "{}: registered for later implementation.\n{}",
+        spec.name, spec.usage
+    ))
+}
+
+/// RLVR-032: `train --mode dpo|sft` builds a fallback DPO/SFT dataset from
+/// scored rollouts on a small machine. Other modes stay registered for GRPO.
+fn train_command(argv: &[String]) -> Result<String, RlvrError> {
+    if let Some(mode) = value_after(argv, "--mode") {
+        if matches!(mode.as_str(), "dpo" | "sft") {
+            return crate::trainer::dpo_sft::run_fallback_train_cli(argv);
+        }
+    }
+    command_registered("train")
+}
+
+fn rollout_command(argv: &[String]) -> Result<String, RlvrError> {
+    let n = value_after(argv, "--n")
+        .as_deref()
+        .unwrap_or("100")
+        .parse::<usize>()
+        .map_err(|_| RlvrError::Config("--n must be a positive integer".into()))?;
+    if n == 0 {
+        return Err(RlvrError::Config("--n must be greater than zero".into()));
+    }
+    let out = value_after(argv, "--out")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("runs/rollout-001"));
+    let actor_model = value_after(argv, "--actor").unwrap_or_else(|| "local-tiny-model".into());
+    let runtime = DeterministicLocalActorRuntime::new(actor_model.clone());
+    let report = run_rollout_batch(
+        &runtime,
+        RolloutRunnerInput {
+            tasks: demo_rollout_tasks(n),
+            actor_id: actor_model,
+            trace_id_prefix: "rollout".into(),
+            max_turns: 3,
+            simulator_mode: SimulatorMode::Clean,
+        },
+    )?;
+    let paths = write_rollout_traces(&report, &out)?;
+    Ok(format!(
+        "rollout ok: traces={} out={}",
+        paths.len(),
+        out.to_string_lossy()
+    ))
+}
+
+fn bench_proof_route_command(argv: &[String]) -> Result<String, RlvrError> {
+    let iterations = value_after(argv, "--iterations")
+        .as_deref()
+        .unwrap_or("1000")
+        .parse()
+        .map_err(|_| RlvrError::Config("--iterations must be a positive integer".into()))?;
+    let report = run_proof_route_benchmark(iterations)?;
+    serde_json::to_string_pretty(&report).map_err(RlvrError::from)
+}
+
+fn release_gate_command() -> Result<String, RlvrError> {
+    serde_json::to_string_pretty(&v01_release_gate_report()).map_err(RlvrError::from)
 }
 
 fn value_after(argv: &[String], flag: &str) -> Option<String> {
@@ -335,14 +552,14 @@ fn escape_yaml_string(raw: &str) -> String {
     raw.replace('\\', "\\\\").replace('"', "\\\"")
 }
 
-fn env_flag(name: &str, default: bool) -> bool {
-    match std::env::var(name) {
-        Ok(raw) => matches!(
-            raw.trim().to_ascii_lowercase().as_str(),
+fn parse_flag_value(raw: Option<&str>, default: bool) -> bool {
+    raw.map(|value| {
+        matches!(
+            value.trim().to_ascii_lowercase().as_str(),
             "1" | "true" | "yes" | "on" | "enabled"
-        ),
-        Err(_) => default,
-    }
+        )
+    })
+    .unwrap_or(default)
 }
 
 #[cfg(test)]
@@ -407,6 +624,82 @@ mod tests {
         let out = run_argv(&["fractal-rlvr".into(), "--help".into()]).unwrap();
         assert!(out.contains("config validate"));
         assert!(out.contains("rollout"));
+    }
+
+    #[test]
+    fn cli_each_registered_command_has_help_text() {
+        for command in [
+            "init",
+            "config",
+            "collect-traces",
+            "make-rubrics",
+            "rollout",
+            "train",
+            "eval",
+            "promote",
+            "proof",
+            "bench-proof-route",
+            "release-gate",
+        ] {
+            let out = run_argv(&["fractal-rlvr".into(), command.into(), "--help".into()]).unwrap();
+            assert!(out.contains("fractal-rlvr"), "{command} help missing usage");
+            assert!(out.contains(command), "{command} help missing command name");
+        }
+    }
+
+    #[test]
+    fn cli_future_phase_commands_exit_cleanly_with_registered_usage() {
+        for command in [
+            "collect-traces",
+            "make-rubrics",
+            "train",
+            "eval",
+            "promote",
+            "proof",
+        ] {
+            let out = run_argv(&["fractal-rlvr".into(), command.into()]).unwrap();
+            assert!(out.contains("registered for later implementation"));
+            assert!(out.contains(command));
+        }
+    }
+
+    #[test]
+    fn cli_rollout_writes_requested_trace_files() {
+        let out_dir =
+            std::env::temp_dir().join(format!("fractal-rlvr-cli-rollout-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&out_dir);
+        let out = run_argv(&[
+            "fractal-rlvr".into(),
+            "rollout".into(),
+            "--n".into(),
+            "3".into(),
+            "--out".into(),
+            out_dir.display().to_string(),
+        ])
+        .unwrap();
+
+        assert!(out.contains("rollout ok: traces=3"));
+        let trace_count = fs::read_dir(&out_dir).unwrap().count();
+        assert_eq!(trace_count, 3);
+        let _ = fs::remove_dir_all(out_dir);
+    }
+
+    #[test]
+    fn rlvr_node_flags_default_to_disabled_and_local_hash_only() {
+        let flags = RlvrNodeFlags::from_values(None, None, None);
+        assert!(!flags.enabled);
+        assert!(!flags.chain_commit_enabled);
+        assert!(!flags.raw_data_on_chain);
+        assert!(!flags.raw_data_on_chain_requested);
+    }
+
+    #[test]
+    fn rlvr_node_flags_record_but_never_enable_raw_on_chain_data() {
+        let flags = RlvrNodeFlags::from_values(Some("true"), Some("1"), Some("enabled"));
+        assert!(flags.enabled);
+        assert!(flags.chain_commit_enabled);
+        assert!(flags.raw_data_on_chain_requested);
+        assert!(!flags.raw_data_on_chain);
     }
 
     #[test]
@@ -560,5 +853,217 @@ mod tests {
             final_reward: 0.0,
         };
         assert!(trace.validate().is_err());
+    }
+
+    #[test]
+    fn privacy_scan_detects_required_private_trace_tags() {
+        let text = concat!(
+            "Email me at user@example.com or call (555) 123-4567. ",
+            "Ship to 123 Main Street. ",
+            "Use key sk-or-v1-abcdef1234567890abcdef1234567890. ",
+            "Credit card 4242 4242 4242 4242 and routing number are in the file. ",
+            "Patient diagnosis includes blood pressure medication. ",
+            "Attorney says the contract is privileged. ",
+            "Private file: /Users/alice/Documents/tax.pdf"
+        );
+        let scan = scan_privacy_tags(text);
+        assert!(scan.is_private);
+        for tag in [
+            PrivacyTag::Email,
+            PrivacyTag::PhoneNumber,
+            PrivacyTag::Address,
+            PrivacyTag::ApiKey,
+            PrivacyTag::FinancialData,
+            PrivacyTag::HealthData,
+            PrivacyTag::LegalData,
+            PrivacyTag::PrivateFile,
+        ] {
+            assert!(scan.tags.contains(&tag), "missing privacy tag {tag:?}");
+        }
+    }
+
+    #[test]
+    fn private_scan_enforces_local_only_and_blocks_export_without_approval() {
+        let scan = scan_privacy_tags("My API key is sk-test-secret and my file is ~/private.txt");
+        let policy = scan.policy(false);
+        assert!(policy.local_only);
+        assert!(!policy.allow_external_models);
+        assert!(!policy.allow_export);
+        assert!(policy.pii_tags.contains(&"api_key".to_string()));
+        assert!(policy.pii_tags.contains(&"private_file".to_string()));
+        policy.validate().unwrap();
+
+        let approved_policy = scan.policy(true);
+        assert!(approved_policy.allow_export);
+        assert!(approved_policy.local_only);
+        assert!(!approved_policy.allow_external_models);
+        approved_policy.validate().unwrap();
+    }
+
+    #[test]
+    fn public_scan_allows_non_private_external_policy() {
+        let scan =
+            scan_privacy_tags("Explain why proof-of-route hashes should not include raw data.");
+        assert!(!scan.is_private);
+        assert!(scan.tags.is_empty());
+        let policy = scan.policy(false);
+        assert!(!policy.local_only);
+        assert!(policy.allow_external_models);
+        assert!(!policy.allow_export);
+        policy.validate().unwrap();
+    }
+
+    #[test]
+    fn trace_hash_commitment_hashes_raw_redacted_verifier_and_reward_data() {
+        let trace = private_trace_fixture();
+        let commitment = trace.trace_hash_commitment().unwrap();
+        assert_eq!(commitment.trace_id, "trace-private-1");
+        assert_eq!(commitment.task_id, "task-private-1");
+        assert_eq!(commitment.trace_hash, trace.raw_trace_hash().unwrap());
+        assert_eq!(
+            commitment.redacted_trace_hash,
+            trace.redacted_trace_hash().unwrap()
+        );
+        assert_eq!(
+            commitment.verifier_outputs_hash,
+            trace.verifier_outputs_hash().unwrap()
+        );
+        assert_eq!(
+            commitment.reward_vector_hash,
+            trace.reward_vector_hash().unwrap()
+        );
+        assert!(commitment.privacy_tags.contains(&"email".to_string()));
+        assert!(commitment.privacy_tags.contains(&"api_key".to_string()));
+    }
+
+    #[test]
+    fn redacted_trace_and_commitment_do_not_serialize_raw_content() {
+        let trace = private_trace_fixture();
+        let redacted_json = serde_json::to_string(&trace.redacted_trace().unwrap()).unwrap();
+        let commitment_json =
+            serde_json::to_string(&trace.trace_hash_commitment().unwrap()).unwrap();
+        for raw in [
+            "user@example.com",
+            "sk-test-super-secret-token-1234567890",
+            "My private answer",
+        ] {
+            assert!(!redacted_json.contains(raw), "redacted trace leaked {raw}");
+            assert!(!commitment_json.contains(raw), "commitment leaked {raw}");
+        }
+        assert!(redacted_json.contains("content_hash"));
+        assert!(commitment_json.contains("trace_hash"));
+    }
+
+    #[test]
+    fn proof_object_is_hash_only_and_rejects_malformed_hashes() {
+        let trace = private_trace_fixture();
+        let commitment = trace.trace_hash_commitment().unwrap();
+        let proof = RlvrProofObject::from_trace_commitment(
+            RlvrProofType::ProofOfRoute,
+            &commitment,
+            stable_hash(&DEFAULT_REWARD_POLICY).unwrap(),
+            route_policy_hash(&RoutePolicy::default()).unwrap(),
+            hash_bytes(b"tiny-local-model"),
+            1,
+            "sig-test",
+        );
+        proof.validate_hash_only().unwrap();
+        let proof_json = serde_json::to_string(&proof).unwrap();
+        for raw in [
+            "user@example.com",
+            "sk-test-super-secret-token-1234567890",
+            "My private answer",
+            "raw_prompt",
+        ] {
+            assert!(!proof_json.contains(raw), "proof object leaked {raw}");
+        }
+
+        let mut invalid = proof;
+        invalid.trace_hash = "raw prompt leak".into();
+        assert!(invalid.validate_hash_only().is_err());
+    }
+
+    #[test]
+    fn adversarial_privacy_suite_blocks_chain_payload_leaks() {
+        let report = run_adversarial_privacy_suite().unwrap();
+        assert!(report.passed());
+        assert_eq!(report.results.len(), 5);
+        assert!(report.malicious_raw_prompt_rejected);
+        assert!(report.results.iter().all(|result| {
+            result.local_only && !result.allow_external_models && result.chain_payload_raw_data_free
+        }));
+    }
+
+    #[test]
+    fn proof_of_route_benchmark_reports_overhead_metrics() {
+        let report = run_proof_route_benchmark(8).unwrap();
+        assert_eq!(report.iterations, 8);
+        assert!(report.proof_submission_throughput_per_sec > 0.0);
+        assert!(report.proof_payload_bytes > report.normal_proof_payload_bytes);
+        assert!(report.payload_byte_overhead > 0);
+    }
+
+    #[test]
+    fn release_gate_report_lists_completed_and_blocked_v01_items() {
+        let report = v01_release_gate_report();
+        assert_eq!(report.version, "v0.1");
+        assert!(!report.passed);
+        assert!(report
+            .items
+            .iter()
+            .any(|item| item.name == "proof hash can be generated" && item.passed));
+        assert!(report.items.iter().any(|item| {
+            item.name == "proof hash can be committed by running Fractal Chain node" && !item.passed
+        }));
+        assert!(!report.failed_items().is_empty());
+    }
+
+    fn private_trace_fixture() -> DialogueTrace {
+        DialogueTrace {
+            trace_id: "trace-private-1".into(),
+            task_id: "task-private-1".into(),
+            turns: vec![
+                DialogueTurn {
+                    role: "user".into(),
+                    content: "My email is user@example.com and key is sk-test-super-secret-token-1234567890".into(),
+                    model_id: None,
+                    route_decision: Some("local-only".into()),
+                    latency_ms: Some(0),
+                    cost_estimate: Some(0.0),
+                },
+                DialogueTurn {
+                    role: "assistant".into(),
+                    content: "My private answer should not appear on-chain.".into(),
+                    model_id: Some("tiny-local-model".into()),
+                    route_decision: Some("local-only".into()),
+                    latency_ms: Some(15),
+                    cost_estimate: Some(0.0),
+                },
+            ],
+            verifier_outputs: vec![VerifierOutput {
+                is_final_answer: true,
+                is_clarification_question: false,
+                targeted_checkpoints: vec!["privacy".into()],
+                missed_checkpoints: Vec::new(),
+                redundant_question: false,
+                premature_answer: false,
+                false_premise_corrected: None,
+                route_valid: true,
+                reward: 1.0,
+            }],
+            reward_vector: RewardVector {
+                correctness: 1.0,
+                checkpoint_coverage: 1.0,
+                clarification_quality: 0.0,
+                false_premise_detection: 0.0,
+                route_correctness: 1.0,
+                tool_use_correctness: 0.0,
+                cost_efficiency: 1.0,
+                latency_efficiency: 1.0,
+                privacy_compliance: 1.0,
+                non_redundancy: 1.0,
+            },
+            final_reward: 0.9,
+        }
     }
 }
