@@ -398,6 +398,149 @@ pub struct ProofCommitmentResponse {
     pub finalized: bool,
 }
 
+/// Allowed values for `promotionDecision` in an RLMF attestation record.
+pub const RLMF_PROMOTION_DECISIONS: [&str; 6] = [
+    "promote",
+    "reject",
+    "inconclusive",
+    "shadow",
+    "canary",
+    "rollback",
+];
+
+/// Maximum entries accepted in `evidenceHashes` / `lineageHashes`.
+pub const RLMF_MAX_HASH_LIST: usize = 64;
+
+/// Schema tag mixed into the canonical RLMF attestation commitment.
+pub const RLMF_ATTESTATION_SCHEMA_V2: &str = "rlmf.chain_attestation.v2";
+
+/// RLMF attestation record submitted by Fractalwork / DataEvol via
+/// `fractal_submitRlmfAttestation`. All hash fields are 0x-prefixed 32-byte
+/// hex strings. `commitment_hash` must equal the canonical commitment over
+/// the remaining fields (see [`RlmfAttestationRecord::canonical_commitment`]).
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RlmfAttestationRecord {
+    pub commitment_hash: String,
+    pub subject_id: String,
+    pub source_system: String,
+    pub dataset_hash: String,
+    pub job_hash: String,
+    pub judge_report_hash: String,
+    pub benchmark_report_hash: String,
+    pub model_artifact_hash: String,
+    pub promotion_decision: String,
+    #[serde(default)]
+    pub evidence_hashes: Vec<String>,
+    #[serde(default)]
+    pub lineage_hashes: Vec<String>,
+}
+
+/// Indexed RLMF attestation as stored by the node and returned by queries.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RlmfAttestationStored {
+    pub record: RlmfAttestationRecord,
+    pub transaction_hash: String,
+    pub block_number: u64,
+    pub finalized: bool,
+}
+
+/// Response from `fractal_submitRlmfAttestation`.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RlmfAttestationResponse {
+    pub network: String,
+    pub transaction_hash: String,
+    pub block_number: u64,
+    pub finalized: bool,
+    pub attestation: RlmfAttestationRecord,
+}
+
+fn parse_hash32_hex(value: &str) -> Result<[u8; 32], &'static str> {
+    let hex_str = value.strip_prefix("0x").unwrap_or(value);
+    let bytes = hex::decode(hex_str).map_err(|_| "invalid hash hex")?;
+    if bytes.len() != 32 {
+        return Err("hash must be 32 bytes");
+    }
+    let mut out = [0u8; 32];
+    out.copy_from_slice(&bytes);
+    Ok(out)
+}
+
+impl RlmfAttestationRecord {
+    /// Deterministic canonical commitment over every field except
+    /// `commitment_hash` itself: keccak256 of the schema tag plus each field
+    /// encoded as `len(u32 LE) || bytes` in declaration order; hash lists are
+    /// encoded as `count(u32 LE)` followed by raw 32-byte entries.
+    ///
+    /// Returns an error when any field fails validation, so a canonical
+    /// commitment only exists for well-formed records.
+    pub fn canonical_commitment(&self) -> Result<[u8; 32], &'static str> {
+        self.validate_fields()?;
+        let mut buf: Vec<u8> = Vec::with_capacity(512);
+        let push_str = |buf: &mut Vec<u8>, value: &str| {
+            buf.extend_from_slice(&(value.len() as u32).to_le_bytes());
+            buf.extend_from_slice(value.as_bytes());
+        };
+        push_str(&mut buf, RLMF_ATTESTATION_SCHEMA_V2);
+        push_str(&mut buf, &self.subject_id);
+        push_str(&mut buf, &self.source_system);
+        for field in [
+            &self.dataset_hash,
+            &self.job_hash,
+            &self.judge_report_hash,
+            &self.benchmark_report_hash,
+            &self.model_artifact_hash,
+        ] {
+            let hash = parse_hash32_hex(field)?;
+            buf.extend_from_slice(&hash);
+        }
+        push_str(&mut buf, &self.promotion_decision);
+        for list in [&self.evidence_hashes, &self.lineage_hashes] {
+            buf.extend_from_slice(&(list.len() as u32).to_le_bytes());
+            for entry in list {
+                let hash = parse_hash32_hex(entry)?;
+                buf.extend_from_slice(&hash);
+            }
+        }
+        Ok(keccak256(&buf))
+    }
+
+    fn validate_fields(&self) -> Result<(), &'static str> {
+        if self.subject_id.is_empty() || self.subject_id.len() > 256 {
+            return Err("subjectId must be 1..=256 characters");
+        }
+        if self.source_system.is_empty() || self.source_system.len() > 256 {
+            return Err("sourceSystem must be 1..=256 characters");
+        }
+        if !RLMF_PROMOTION_DECISIONS.contains(&self.promotion_decision.as_str()) {
+            return Err(
+                "promotionDecision must be one of promote|reject|inconclusive|shadow|canary|rollback",
+            );
+        }
+        if self.evidence_hashes.len() > RLMF_MAX_HASH_LIST {
+            return Err("too many evidenceHashes (max 64)");
+        }
+        if self.lineage_hashes.len() > RLMF_MAX_HASH_LIST {
+            return Err("too many lineageHashes (max 64)");
+        }
+        Ok(())
+    }
+
+    /// Validate the record and verify `commitment_hash` matches the canonical
+    /// commitment. Returns the parsed 32-byte commitment.
+    pub fn validate(&self) -> Result<[u8; 32], &'static str> {
+        let claimed =
+            parse_hash32_hex(&self.commitment_hash).map_err(|_| "invalid commitmentHash hex")?;
+        let computed = self.canonical_commitment()?;
+        if claimed != computed {
+            return Err("commitmentHash does not match canonical commitment of record fields");
+        }
+        Ok(claimed)
+    }
+}
+
 /// Response from `fractal_submitProofUpdate`.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -818,6 +961,31 @@ pub trait ChainInteraction: Send {
         _max_priority_fee: u128,
     ) -> Result<RpcProofUpdateSubmission, String> {
         Err("fractal_submitProofUpdate not supported on this node".to_string())
+    }
+
+    /// Submit an RLMF attestation record. Default: not supported.
+    fn submit_rlmf_attestation(
+        &mut self,
+        _record: RlmfAttestationRecord,
+    ) -> Result<RlmfAttestationResponse, String> {
+        Err("fractal_submitRlmfAttestation not supported on this node".to_string())
+    }
+
+    /// Look up an indexed RLMF attestation by its 32-byte commitment hash.
+    fn rlmf_attestation_by_commitment(&self, _hash: [u8; 32]) -> Option<RlmfAttestationStored> {
+        None
+    }
+
+    /// List indexed RLMF attestations with optional filters, newest block first.
+    fn list_rlmf_attestations(
+        &self,
+        _subject_id: Option<&str>,
+        _source_system: Option<&str>,
+        _block_number: Option<u64>,
+        _transaction_hash: Option<&str>,
+        _limit: usize,
+    ) -> Vec<RlmfAttestationStored> {
+        Vec::new()
     }
 }
 
@@ -1865,6 +2033,115 @@ pub fn build_module(ctx: SharedChain) -> RpcModule<SharedChain> {
             },
         )
         .expect("register fractal_submitProofHash");
+
+    module
+        .register_async_method(
+            "fractal_submitRlmfAttestation",
+            |params: Params<'static>, ctx, _| {
+                let ctx = ctx.clone();
+                async move {
+                    let arr: Vec<serde_json::Value> = params
+                        .parse()
+                        .map_err(|_| err_invalid_params("expected attestation record object"))?;
+                    let obj = arr
+                        .first()
+                        .cloned()
+                        .ok_or(err_invalid_params("expected attestation record object"))?;
+                    let record: RlmfAttestationRecord = serde_json::from_value(obj)
+                        .map_err(|_| err_invalid_params("malformed attestation record"))?;
+                    record.validate().map_err(err_invalid_params)?;
+                    let mut g = ctx.lock().await;
+                    let response = g
+                        .submit_rlmf_attestation(record)
+                        .map_err(|e| ErrorObjectOwned::owned(-32603, e, None::<()>))?;
+                    Ok::<RlmfAttestationResponse, ErrorObjectOwned>(response)
+                }
+            },
+        )
+        .expect("register fractal_submitRlmfAttestation");
+
+    module
+        .register_async_method(
+            "fractal_getRlmfAttestation",
+            |params: Params<'static>, ctx, _| {
+                let ctx = ctx.clone();
+                async move {
+                    let arr: Vec<serde_json::Value> = params
+                        .parse()
+                        .map_err(|_| err_invalid_params("expected commitment hash"))?;
+                    let obj = arr
+                        .first()
+                        .ok_or(err_invalid_params("expected commitment hash"))?;
+                    let hex_value = obj
+                        .get("commitmentHash")
+                        .and_then(|v| v.as_str())
+                        .or_else(|| obj.as_str())
+                        .ok_or(err_invalid_params("missing commitmentHash string"))?;
+                    let hash = {
+                        let hex_str = hex_value.strip_prefix("0x").unwrap_or(hex_value);
+                        let bytes = hex::decode(hex_str)
+                            .map_err(|_| err_invalid_params("invalid commitmentHash hex"))?;
+                        if bytes.len() != 32 {
+                            return Err(err_invalid_params("commitmentHash must be 32 bytes"));
+                        }
+                        let mut hash = [0u8; 32];
+                        hash.copy_from_slice(&bytes);
+                        hash
+                    };
+                    let g = ctx.lock().await;
+                    Ok::<Option<RlmfAttestationStored>, ErrorObjectOwned>(
+                        g.rlmf_attestation_by_commitment(hash),
+                    )
+                }
+            },
+        )
+        .expect("register fractal_getRlmfAttestation");
+
+    module
+        .register_async_method(
+            "fractal_listRlmfAttestations",
+            |params: Params<'static>, ctx, _| {
+                let ctx = ctx.clone();
+                async move {
+                    let arr: Vec<serde_json::Value> = params.parse().unwrap_or_default();
+                    let filter = arr.first().cloned().unwrap_or(serde_json::Value::Null);
+                    let subject_id = filter
+                        .get("subjectId")
+                        .and_then(|v| v.as_str())
+                        .map(str::to_string);
+                    let source_system = filter
+                        .get("sourceSystem")
+                        .and_then(|v| v.as_str())
+                        .map(str::to_string);
+                    let block_number = filter.get("blockNumber").and_then(|v| {
+                        v.as_u64().or_else(|| {
+                            v.as_str().and_then(|raw| {
+                                let raw = raw.strip_prefix("0x").unwrap_or(raw);
+                                u64::from_str_radix(raw, 16).ok()
+                            })
+                        })
+                    });
+                    let transaction_hash = filter
+                        .get("transactionHash")
+                        .and_then(|v| v.as_str())
+                        .map(str::to_string);
+                    let limit = filter
+                        .get("limit")
+                        .and_then(|v| v.as_u64())
+                        .map(|v| v.min(256) as usize)
+                        .unwrap_or(64);
+                    let g = ctx.lock().await;
+                    Ok::<Vec<RlmfAttestationStored>, ErrorObjectOwned>(g.list_rlmf_attestations(
+                        subject_id.as_deref(),
+                        source_system.as_deref(),
+                        block_number,
+                        transaction_hash.as_deref(),
+                        limit,
+                    ))
+                }
+            },
+        )
+        .expect("register fractal_listRlmfAttestations");
 
     module
 }

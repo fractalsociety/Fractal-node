@@ -10,9 +10,10 @@ pub use gateway::{
 };
 pub use module::{
     build_module, evm_log_matches_topic_filters, logs_bloom_256, logs_bloom_hex, make_rpc_log,
-    serve_http, ChainInteraction, LogsFilter, ProofCommitmentResponse, RpcChainConfig,
-    RpcConsensusDiagnostics, RpcDaMetrics, RpcLog, RpcMempoolLaneMetrics,
-    RpcOwnedObjectCertificate, RpcOwnedObjectCountersignature, RpcOwnedObjectFinality,
-    RpcOwnedObjectPrecheck, RpcProofMetrics, RpcProofRejectionMetric, RpcProofSubmission,
-    RpcProofUpdateSubmission, RpcRoutingDiagnostics, RpcSettlementBlock, SharedChain, TopicMatch,
+    serve_http, ChainInteraction, LogsFilter, ProofCommitmentResponse, RlmfAttestationRecord,
+    RlmfAttestationResponse, RlmfAttestationStored, RpcChainConfig, RpcConsensusDiagnostics,
+    RpcDaMetrics, RpcLog, RpcMempoolLaneMetrics, RpcOwnedObjectCertificate,
+    RpcOwnedObjectCountersignature, RpcOwnedObjectFinality, RpcOwnedObjectPrecheck,
+    RpcProofMetrics, RpcProofRejectionMetric, RpcProofSubmission, RpcProofUpdateSubmission,
+    RpcRoutingDiagnostics, RpcSettlementBlock, SharedChain, TopicMatch,
 };

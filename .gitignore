@@ -18,3 +18,13 @@ fuzz/target/
 .hyperbft-bft7-shard/
 .pilot-shards/
 .track-b-lab/
+
+# Local node state, keys, and generated run artifacts (never commit)
+/.devnet/
+fractal_rlvr/data/
+route_traces.jsonl
+*.p2p.key
+p2p.key
+/data/
+*.node-key
+fractal-devnet-smoke.*.log

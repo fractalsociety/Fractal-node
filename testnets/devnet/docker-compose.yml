@@ -14,6 +14,22 @@ services:
       FRACTAL_P2P_IDENTITY_PATH: "/data/p2p.key"
     volumes:
       - node-data:/data
+    networks:
+      default:
+        aliases:
+          # Stable RPC hostname for ecosystem services (Fractalwork/DataEvol):
+          #   FRACTAL_CHAIN_RPC_URL=http://fractalchain-node:8545
+          - fractalchain-node
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "curl -sf -X POST -H 'Content-Type: application/json' -d '{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"eth_blockNumber\",\"params\":[]}' http://127.0.0.1:8545 | grep -q result",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
 
   faucet:
     build:

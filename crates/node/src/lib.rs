@@ -39,10 +39,11 @@ use fractal_rlvr::{
     RouteTraceLogger, RouteTraceRow,
 };
 use fractal_rpc::{
-    logs_bloom_256, make_rpc_log, ChainInteraction, ProofCommitmentResponse, RpcChainConfig,
-    RpcConsensusDiagnostics, RpcDaMetrics, RpcMempoolLaneMetrics, RpcOwnedObjectCertificate,
-    RpcOwnedObjectCountersignature, RpcOwnedObjectPrecheck, RpcProofMetrics,
-    RpcProofRejectionMetric, RpcProofUpdateSubmission, RpcRoutingDiagnostics,
+    logs_bloom_256, make_rpc_log, ChainInteraction, ProofCommitmentResponse, RlmfAttestationRecord,
+    RlmfAttestationResponse, RlmfAttestationStored, RpcChainConfig, RpcConsensusDiagnostics,
+    RpcDaMetrics, RpcMempoolLaneMetrics, RpcOwnedObjectCertificate, RpcOwnedObjectCountersignature,
+    RpcOwnedObjectPrecheck, RpcProofMetrics, RpcProofRejectionMetric, RpcProofUpdateSubmission,
+    RpcRoutingDiagnostics,
 };
 use fractal_storage::{
     ProofFinalityStore, StoredProofFinalityRecord, StoredZoneProofFinalityRecord,
@@ -557,6 +558,9 @@ pub struct NodeInner {
     pub latest_proof_final_height_by_zone: BTreeMap<u64, u64>,
     /// Research proof-hash commitments keyed by proof hash.
     pub proof_commitments: BTreeMap<fractal_crypto::Hash256, u64>,
+    /// Indexed RLMF attestation records keyed by commitment hash.
+    /// In-memory devnet index (same durability as `proof_commitments`).
+    pub rlmf_attestations: BTreeMap<fractal_crypto::Hash256, RlmfAttestationStored>,
     pub proof_finality_store: Option<ProofFinalityStore>,
     pub witness_metadata: BTreeMap<fractal_crypto::Hash256, MixedExecutionWitnessMetadataV1>,
     pub chain_config: ChainConfig,
@@ -651,6 +655,7 @@ impl NodeInner {
             zone_proof_finality: BTreeMap::new(),
             latest_proof_final_height_by_zone: BTreeMap::new(),
             proof_commitments: BTreeMap::new(),
+            rlmf_attestations: BTreeMap::new(),
             proof_finality_store: None,
             witness_metadata: BTreeMap::new(),
             chain_config: ChainConfig::default(),
@@ -2139,6 +2144,87 @@ impl ChainInteraction for NodeInner {
             block_number,
             finalized: true,
         })
+    }
+
+    fn submit_rlmf_attestation(
+        &mut self,
+        record: RlmfAttestationRecord,
+    ) -> Result<RlmfAttestationResponse, String> {
+        let commitment = record
+            .validate()
+            .map_err(|e| format!("invalid RLMF attestation: {e}"))?;
+        if let Some(existing) = self.rlmf_attestations.get(&commitment) {
+            if existing.record == record {
+                // Idempotent resubmission of an identical record returns the
+                // original inclusion data instead of double-committing.
+                return Ok(RlmfAttestationResponse {
+                    network: format!("fractalchain-{}", self.chain_id()),
+                    transaction_hash: existing.transaction_hash.clone(),
+                    block_number: existing.block_number,
+                    finalized: existing.finalized,
+                    attestation: existing.record.clone(),
+                });
+            }
+            return Err(
+                "attestation already recorded with different contents for this commitment"
+                    .to_string(),
+            );
+        }
+        // Reuse the generic proof-commitment path: the canonical commitment is
+        // the 32-byte on-chain footprint; the full record stays in the index.
+        let response = ChainInteraction::submit_proof_hash(self, commitment)?;
+        let stored = RlmfAttestationStored {
+            record: record.clone(),
+            transaction_hash: response.transaction_hash.clone(),
+            block_number: response.block_number,
+            finalized: response.finalized,
+        };
+        self.rlmf_attestations.insert(commitment, stored);
+        Ok(RlmfAttestationResponse {
+            network: response.network,
+            transaction_hash: response.transaction_hash,
+            block_number: response.block_number,
+            finalized: response.finalized,
+            attestation: record,
+        })
+    }
+
+    fn rlmf_attestation_by_commitment(&self, hash: [u8; 32]) -> Option<RlmfAttestationStored> {
+        self.rlmf_attestations.get(&hash).cloned()
+    }
+
+    fn list_rlmf_attestations(
+        &self,
+        subject_id: Option<&str>,
+        source_system: Option<&str>,
+        block_number: Option<u64>,
+        transaction_hash: Option<&str>,
+        limit: usize,
+    ) -> Vec<RlmfAttestationStored> {
+        let wanted_tx = transaction_hash.map(|raw| {
+            let raw = raw.strip_prefix("0x").unwrap_or(raw).to_ascii_lowercase();
+            format!("0x{raw}")
+        });
+        let mut records: Vec<RlmfAttestationStored> = self
+            .rlmf_attestations
+            .values()
+            .filter(|stored| {
+                subject_id.is_none_or(|wanted| stored.record.subject_id == wanted)
+                    && source_system.is_none_or(|wanted| stored.record.source_system == wanted)
+                    && block_number.is_none_or(|wanted| stored.block_number == wanted)
+                    && wanted_tx
+                        .as_deref()
+                        .is_none_or(|wanted| stored.transaction_hash.eq_ignore_ascii_case(wanted))
+            })
+            .cloned()
+            .collect();
+        records.sort_by(|a, b| {
+            b.block_number
+                .cmp(&a.block_number)
+                .then_with(|| a.record.commitment_hash.cmp(&b.record.commitment_hash))
+        });
+        records.truncate(limit.min(256));
+        records
     }
 
     fn submit_proof_update(
