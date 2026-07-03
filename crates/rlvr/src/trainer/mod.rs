@@ -475,6 +475,38 @@ pub fn write_rollout_traces(
     Ok(paths)
 }
 
+/// Read every `*.json` [`DialogueTrace`] from a directory (sorted by name) —
+/// the inverse of [`write_rollout_traces`], used by the GRPO train CLI and the
+/// local RLVR API to consume a chosen set of rollout traces.
+pub fn read_dialogue_traces_dir(dir: impl AsRef<Path>) -> Result<Vec<DialogueTrace>, RlvrError> {
+    let dir = dir.as_ref();
+    let mut paths: Vec<PathBuf> = fs::read_dir(dir)?
+        .filter_map(|entry| entry.ok())
+        .map(|entry| entry.path())
+        .filter(|path| path.extension().and_then(|ext| ext.to_str()) == Some("json"))
+        .collect();
+    paths.sort();
+    let mut traces = Vec::with_capacity(paths.len());
+    for path in paths {
+        let raw = fs::read_to_string(&path)?;
+        let trace: DialogueTrace = serde_json::from_str(&raw).map_err(|err| {
+            RlvrError::Config(format!(
+                "rollout trace {} is not a valid DialogueTrace: {err}",
+                path.display()
+            ))
+        })?;
+        trace.validate()?;
+        traces.push(trace);
+    }
+    if traces.is_empty() {
+        return Err(RlvrError::Config(format!(
+            "no *.json rollout traces found in {}",
+            dir.display()
+        )));
+    }
+    Ok(traces)
+}
+
 pub fn demo_rollout_tasks(n: usize) -> Vec<TrainingItem> {
     (0..n)
         .map(|idx| TrainingItem {
@@ -1081,6 +1113,76 @@ fn sanitize_file_stem(raw: &str) -> String {
             }
         })
         .collect()
+}
+
+/// CLI entrypoint for `fractal-rlvr train --method grpo`.
+///
+/// Reads rollout [`DialogueTrace`]s from `--rollouts <dir>`, groups them by
+/// `task_id` (GRPO needs ≥ 2 rollouts per prompt), trains an adapter-only
+/// checkpoint via [`train_grpo_adapter`], and returns a one-line summary. This is
+/// the trainer step the "Improve My Local Model" UI (RLVR-054) drives through the
+/// local RLVR API.
+pub fn run_grpo_train_cli(argv: &[String]) -> Result<String, RlvrError> {
+    let rollouts_dir = value_after(argv, "--rollouts").ok_or_else(|| {
+        RlvrError::UnsupportedCommand("train --method grpo requires --rollouts <dir>".into())
+    })?;
+    let adapter_id = value_after(argv, "--adapter").ok_or_else(|| {
+        RlvrError::UnsupportedCommand("train --method grpo requires --adapter <id>".into())
+    })?;
+    let base_model_id = value_after(argv, "--base-model")
+        .or_else(|| value_after(argv, "--base"))
+        .unwrap_or_else(|| "local-tiny-model".into());
+    let out_dir = value_after(argv, "--out")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("runs/train"));
+    let learning_rate = value_after(argv, "--lr")
+        .map(|raw| parse_f64(&raw, "--lr"))
+        .transpose()?
+        .unwrap_or(0.05);
+    if !learning_rate.is_finite() || learning_rate <= 0.0 {
+        return Err(RlvrError::Config(
+            "--lr must be finite and greater than zero".into(),
+        ));
+    }
+    let epochs = value_after(argv, "--epochs")
+        .map(|raw| {
+            raw.parse::<u32>()
+                .map_err(|_| RlvrError::Config("--epochs must be a positive integer".into()))
+        })
+        .transpose()?
+        .unwrap_or(2);
+
+    let rollouts = read_dialogue_traces_dir(&rollouts_dir)?;
+    let report = train_grpo_adapter(GrpoTrainerInput {
+        base_model_id,
+        adapter_id,
+        rollouts,
+        output_dir: out_dir,
+        learning_rate,
+        epochs,
+    })?;
+    Ok(format!(
+        "train --method grpo ok: adapter={} rollouts={} groups={} improved={} before_avg_reward={:.4} after_avg_reward_estimate={:.4} checkpoint={}",
+        report.adapter_id,
+        report.rollout_count,
+        report.group_count,
+        report.eval.improved,
+        report.eval.before_avg_reward,
+        report.eval.after_avg_reward_estimate,
+        report.checkpoint_path,
+    ))
+}
+
+fn value_after(argv: &[String], flag: &str) -> Option<String> {
+    argv.windows(2)
+        .find(|pair| pair[0] == flag)
+        .map(|pair| pair[1].clone())
+}
+
+fn parse_f64(raw: &str, flag: &str) -> Result<f64, RlvrError> {
+    raw.trim_matches('"')
+        .parse::<f64>()
+        .map_err(|_| RlvrError::Config(format!("{flag} must be a number")))
 }
 
 #[cfg(test)]

@@ -1,5 +1,7 @@
 //! Adapter registry and export model-card support.
 
+pub mod export;
+
 use std::fs;
 use std::path::{Path, PathBuf};
 

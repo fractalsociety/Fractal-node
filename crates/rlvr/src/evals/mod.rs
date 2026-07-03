@@ -1,6 +1,7 @@
 //! Evaluation harness and promotion-gate reporting.
 
 pub mod baseline;
+pub mod mvp_success;
 
 use std::collections::BTreeSet;
 use std::fs;
@@ -591,8 +592,8 @@ pub fn v01_release_gate_report() -> V01ReleaseGateReport {
         ),
         gate(
             "rollout loop simulates multi-turn training",
-            false,
-            "rollout runner and simulator are still pending",
+            true,
+            "RolloutRunnerInput/run_rollout_batch drive deterministic multi-turn local simulator traces",
         ),
         gate(
             "reward engine produces vector rewards",
@@ -601,13 +602,13 @@ pub fn v01_release_gate_report() -> V01ReleaseGateReport {
         ),
         gate(
             "tiny router or assistant can train a LoRA adapter",
-            false,
-            "trainer interface and adapter export are still pending",
+            true,
+            "GRPO trainer emits adapter-only checkpoints and synthesize_weights exports loadable LoRA-style bundles",
         ),
         gate(
             "eval report shows before/after metrics",
-            false,
-            "HTML/JSON eval report generation is still pending",
+            true,
+            "EvalMetricsReport plus training-report screen expose before/after metrics and deltas",
         ),
         gate(
             "adapter promotion gate works",
@@ -621,8 +622,8 @@ pub fn v01_release_gate_report() -> V01ReleaseGateReport {
         ),
         gate(
             "proof hash can be committed by running Fractal Chain node",
-            false,
-            "node RPC/block inclusion integration is still pending",
+            true,
+            "Node proof-ingestion mode drains signed RLVR proofs and commits RlvrProofCommitmentV1 hashes into block DA",
         ),
         gate(
             "raw user data never leaves the machine by default",

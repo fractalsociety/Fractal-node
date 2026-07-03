@@ -1,7 +1,12 @@
 //! Rubric generation modules: AskMind, AskOverconfidence, RouteCorrectness, ToolUse, and CompressionLoss.
 
+pub mod ask_mind;
 pub mod ask_overconfidence;
 
+pub use ask_mind::{
+    generate_ask_mind_rubric, sample_ask_mind_fixtures, AskMindFixture, AskMindMissingFact,
+    AskMindRubric, AskMindRubricInput,
+};
 pub use ask_overconfidence::{
     generate_ask_overconfidence_rubric, sample_fixtures, AskOverconfidenceFixture,
     AskOverconfidenceRubric, AskOverconfidenceRubricInput,
@@ -504,7 +509,8 @@ fn classify_route_task(input: &RouteCorrectnessRubricInput) -> String {
         || contains_any(&reason, &["medical", "legal", "financial", "high-stakes"])
     {
         "high_stakes_advice".into()
-    } else if contains_any(&prompt, &["code", "implement", "bug", "api"])
+    } else if contains_any(&prompt, &["code", "implement", "bug"])
+        || contains_api_token(&prompt)
         || contains_any(&reason, &["code", "coding"])
     {
         "code_implementation".into()
@@ -665,6 +671,12 @@ fn checkpoint(
 
 fn contains_any(haystack: &str, needles: &[&str]) -> bool {
     needles.iter().any(|needle| haystack.contains(needle))
+}
+
+fn contains_api_token(haystack: &str) -> bool {
+    haystack
+        .split(|ch: char| !ch.is_ascii_alphanumeric())
+        .any(|token| token == "api")
 }
 
 fn require_non_empty(name: &str, value: &str) -> Result<(), RlvrError> {

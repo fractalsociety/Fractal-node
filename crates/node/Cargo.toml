@@ -24,3 +24,6 @@ hex.workspace = true
 libp2p.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true

@@ -16,16 +16,47 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
+pub use adapters::export::{
+    default_target_modules, export_adapter_bundle, load_adapter_bundle, synthesize_weights,
+    AdapterArtifactRole, AdapterConfig, AdapterEvalReport, AdapterExportInput, AdapterExportReport,
+    AdapterManifest, AdapterManifestFile, AdapterModelCard, AdapterPrivacyStatement, AdapterTensor,
+    AdapterTensorKind, AdapterTrainingSummary, AdapterWeights, LoadedAdapterBundle,
+    RewardPolicyArtifact, ADAPTER_BUNDLE_FORMAT_VERSION, ADAPTER_WEIGHTS_FORMAT,
+    DEFAULT_ADAPTER_RANK, DEFAULT_MODEL_DIM,
+};
 pub use adapters::{
     list_adapter_metadata, register_adapter_metadata, AdapterMetadata, AdapterRegistry,
     AdapterRegistryStore, AdapterTrainingMode,
 };
-pub use chain::{RlvrProofObject, RlvrProofType};
+pub use api::{
+    fractal_create_rlvr_proof_object, fractal_export_rlvr_adapter, fractal_get_rlvr_proof,
+    fractal_list_local_traces, fractal_make_rlvr_rubrics, fractal_run_rlvr_eval,
+    fractal_run_rlvr_rollout, fractal_submit_rlvr_proof, CreateProofObjectRequest,
+    CreateProofObjectResponse, ExportAdapterRequest, ExportAdapterResponse, GetRlvrProofResponse,
+    ListLocalTracesResponse, LocalTraceSummary, MakeRubricsRequest, MakeRubricsResponse,
+    RunEvalRequest, RunEvalResponse, RunRolloutRequest, RunRolloutResponse,
+    SubmitRlvrProofResponse,
+};
+pub use chain::{
+    apply_rlvr_proof_block_payload, CommittedRlvrProof, NodeSigningKey, RlvrAcceptedProofState,
+    RlvrBlockApplyReport, RlvrCommittedProofIndex, RlvrCommittedProofIndexMetrics,
+    RlvrDisputeRecord, RlvrDisputeStore, RlvrDisputeStoreMetrics, RlvrDisputeTarget,
+    RlvrPooledProof, RlvrProofBlockPayloadItem, RlvrProofBlockReference, RlvrProofObject,
+    RlvrProofPool, RlvrProofPoolMetrics, RlvrProofStatus, RlvrProofType,
+};
 pub use data::{
     scan_privacy_tags, Checkpoint, CheckpointType, DialogueTrace, DialogueTurn, Difficulty,
     PrivacyPolicy, PrivacyScan, PrivacyTag, RedactedDialogueTrace, RedactedDialogueTurn,
     RewardVector, RoutePolicy, RouteRule, TraceHashCommitment, TrainingItem, TrainingMode,
     VerifierOutput,
+};
+pub use evals::baseline::{
+    askmind_baseline_eval_set, askoverconfidence_baseline_eval_set, baseline_eval_set,
+    baseline_eval_set_manifest, compare_baseline_eval_set, compressionloss_baseline_eval_set,
+    default_baseline_eval_sets, routecorrectness_baseline_eval_set, score_baseline_eval_set,
+    tooluse_baseline_eval_set, user_trace_replay_baseline_eval_set, BaselineComparisonReport,
+    BaselineEvalItemScore, BaselineEvalSet, BaselineEvalSetKind, BaselineEvalSetManifest,
+    BaselineEvalSetManifestEntry, BaselineEvalSystemReport,
 };
 pub use evals::{
     build_eval_metrics_report, evaluate_adapter_promotion_gate, read_eval_traces,
@@ -42,7 +73,10 @@ pub use rewards::{
     RewardSignalInput, RewardVectorArtifact, MVP_REWARD_POLICY_V01_ID,
 };
 pub use rubrics::{
-    generate_compression_loss_rubric, generate_route_correctness_rubric, generate_tool_use_rubric,
+    generate_ask_mind_rubric, generate_ask_overconfidence_rubric, generate_compression_loss_rubric,
+    generate_route_correctness_rubric, generate_tool_use_rubric, sample_ask_mind_fixtures,
+    sample_fixtures, AskMindFixture, AskMindMissingFact, AskMindRubric, AskMindRubricInput,
+    AskOverconfidenceFixture, AskOverconfidenceRubric, AskOverconfidenceRubricInput,
     CompressionLossRubricInput, CompressionRequiredFact, ModelInventoryItem,
     RouteCorrectnessRubricInput, ToolInventoryItem, ToolUseRequirementKind, ToolUseRubricInput,
 };
@@ -51,7 +85,9 @@ pub use simulator::{
     AdversarialSimulatorStyle, LocalUserSimulator, LocalUserSimulatorInput,
     LocalUserSimulatorReply, SimulatedRolloutTraceInput, SimulatorMode,
 };
-pub use tracing::{RouteTraceInput, RouteTraceLogger, RouteTraceRow};
+pub use tracing::{
+    LocalTraceStore, RouteTraceInput, RouteTraceLogger, RouteTraceRow, TraceStoreMetadata,
+};
 pub use trainer::{
     demo_rollout_tasks, run_rollout_batch, sample_rollout_tasks, train_grpo_adapter,
     validate_training_resources, write_rollout_traces, GrpoEvalSummary, GrpoRolloutAdvantage,
@@ -337,7 +373,7 @@ const CLI_COMMANDS: &[CliCommand] = &[
     },
     CliCommand {
         name: "rollout",
-        usage: "fractal-rlvr rollout --n 100 --out runs/rollout-001",
+        usage: "fractal-rlvr rollout --n 100 --out runs/rollout-001 [--per-task 2] [--actor local-tiny-model]",
         description: "Run deterministic local RLVR rollout traces.",
     },
     CliCommand {
@@ -375,6 +411,11 @@ const CLI_COMMANDS: &[CliCommand] = &[
         usage: "fractal-rlvr release-gate",
         description: "Print the v0.1 RLVR release-gate report.",
     },
+    CliCommand {
+        name: "export",
+        usage: "fractal-rlvr export --adapter <id> --base-model <id> --method grpo --out adapters/<id> [--registry adapters/registry.json] [--rank 8]",
+        description: "Export a loadable, hash-verified adapter bundle (weights, config, reward policy, eval report, model card, manifest).",
+    },
 ];
 
 pub fn run_argv(argv: &[String]) -> Result<String, RlvrError> {
@@ -393,6 +434,7 @@ pub fn run_argv(argv: &[String]) -> Result<String, RlvrError> {
             command_registered(command)
         }
         "eval-report" => eval_report_command(argv),
+        "export" => export_command(argv),
         "train" => train_command(argv),
         "rollout" => rollout_command(argv),
         "bench-proof-route" => bench_proof_route_command(argv),
@@ -490,6 +532,11 @@ fn train_command(argv: &[String]) -> Result<String, RlvrError> {
             return crate::trainer::dpo_sft::run_fallback_train_cli(argv);
         }
     }
+    if let Some(method) = value_after(argv, "--method") {
+        if matches!(method.as_str(), "grpo") {
+            return crate::trainer::run_grpo_train_cli(argv);
+        }
+    }
     command_registered("train")
 }
 
@@ -502,15 +549,32 @@ fn rollout_command(argv: &[String]) -> Result<String, RlvrError> {
     if n == 0 {
         return Err(RlvrError::Config("--n must be greater than zero".into()));
     }
+    let per_task = value_after(argv, "--per-task")
+        .as_deref()
+        .unwrap_or("1")
+        .parse::<usize>()
+        .map_err(|_| RlvrError::Config("--per-task must be a positive integer".into()))?;
+    if per_task == 0 {
+        return Err(RlvrError::Config(
+            "--per-task must be greater than zero".into(),
+        ));
+    }
     let out = value_after(argv, "--out")
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from("runs/rollout-001"));
     let actor_model = value_after(argv, "--actor").unwrap_or_else(|| "local-tiny-model".into());
     let runtime = DeterministicLocalActorRuntime::new(actor_model.clone());
+    // Repeat each generated task `per_task` times so GRPO (which needs ≥ 2
+    // rollouts per prompt) can train from the demo data.
+    let base_tasks = demo_rollout_tasks(n);
+    let mut tasks = Vec::with_capacity(n * per_task);
+    for _ in 0..per_task {
+        tasks.extend(base_tasks.iter().cloned());
+    }
     let report = run_rollout_batch(
         &runtime,
         RolloutRunnerInput {
-            tasks: demo_rollout_tasks(n),
+            tasks,
             actor_id: actor_model,
             trace_id_prefix: "rollout".into(),
             max_turns: 3,
@@ -553,6 +617,94 @@ fn eval_report_command(argv: &[String]) -> Result<String, RlvrError> {
     Ok(format!(
         "eval-report ok: json={} html={}",
         files.json_path, files.html_path
+    ))
+}
+
+/// RLVR-035: export a loadable, hash-verified adapter bundle.
+///
+/// Builds a deterministic demo GRPO report (so the CLI produces a real,
+/// end-to-end-loadable bundle from the shell); programmatic callers pass a real
+/// `GrpoTrainerReport` to [`export_adapter_bundle`] directly.
+fn export_command(argv: &[String]) -> Result<String, RlvrError> {
+    let adapter_id = value_after(argv, "--adapter")
+        .ok_or_else(|| RlvrError::UnsupportedCommand("export requires --adapter <id>".into()))?;
+    let base_model_id = value_after(argv, "--base-model")
+        .or_else(|| value_after(argv, "--base"))
+        .ok_or_else(|| RlvrError::UnsupportedCommand("export requires --base-model <id>".into()))?;
+    let out = value_after(argv, "--out")
+        .map(PathBuf::from)
+        .ok_or_else(|| RlvrError::UnsupportedCommand("export requires --out <dir>".into()))?;
+    let rank = value_after(argv, "--rank")
+        .map(|raw| {
+            raw.parse::<u32>()
+                .map_err(|_| RlvrError::Config("--rank must be a positive integer".into()))
+        })
+        .transpose()?
+        .unwrap_or(DEFAULT_ADAPTER_RANK);
+    let registry_path = value_after(argv, "--registry").map(PathBuf::from);
+
+    let runtime = DeterministicLocalActorRuntime::new(&base_model_id);
+    let rollouts = run_rollout_batch(
+        &runtime,
+        RolloutRunnerInput {
+            tasks: demo_rollout_tasks(2),
+            actor_id: base_model_id.clone(),
+            trace_id_prefix: "export-rollout".into(),
+            max_turns: 3,
+            simulator_mode: SimulatorMode::Clean,
+        },
+    )?;
+    // GRPO needs >= 2 rollouts per task_id, so duplicate the demo traces.
+    let mut traces = rollouts.traces;
+    let cloned = traces.clone();
+    traces.extend(cloned);
+    let report = train_grpo_adapter(GrpoTrainerInput {
+        base_model_id: base_model_id.clone(),
+        adapter_id: adapter_id.clone(),
+        rollouts: traces,
+        output_dir: std::env::temp_dir(),
+        learning_rate: 0.05,
+        epochs: 2,
+    })?;
+
+    let weights = synthesize_weights(&report, rank, default_target_modules(), DEFAULT_MODEL_DIM)?;
+    let config = AdapterConfig {
+        adapter_id: weights.adapter_id.clone(),
+        base_model_id: weights.base_model_id.clone(),
+        training_mode: weights.training_mode,
+        rank: weights.rank,
+        target_modules: weights.target_modules.clone(),
+        max_turns: 3,
+        data_local_only: true,
+        base_model_hash: hash_bytes(weights.base_model_id.as_bytes()),
+        created_from_checkpoint: Some(report.checkpoint_path.clone()),
+    };
+    let timestamp_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_millis() as u64)
+        .unwrap_or(1)
+        .max(1);
+
+    let export_report = export_adapter_bundle(
+        AdapterExportInput {
+            weights,
+            config,
+            reward_version: MVP_REWARD_POLICY_V01_ID.into(),
+            timestamp_ms,
+            registry_path,
+        },
+        &report,
+        &out,
+    )?;
+    // Self-verify: the bundle the Fractal router/chat runtime would load.
+    let _loaded = load_adapter_bundle(&export_report.out_dir)?;
+    Ok(format!(
+        "export ok: adapter={} adapter_hash={} out={} files={} loadable=true registered={}",
+        export_report.adapter_id,
+        export_report.adapter_hash,
+        export_report.out_dir.display(),
+        export_report.files.len(),
+        export_report.registered,
     ))
 }
 
@@ -666,6 +818,7 @@ mod tests {
             "proof",
             "bench-proof-route",
             "release-gate",
+            "export",
         ] {
             let out = run_argv(&["fractal-rlvr".into(), command.into(), "--help".into()]).unwrap();
             assert!(out.contains("fractal-rlvr"), "{command} help missing usage");
@@ -707,6 +860,43 @@ mod tests {
         assert!(out.contains("rollout ok: traces=3"));
         let trace_count = fs::read_dir(&out_dir).unwrap().count();
         assert_eq!(trace_count, 3);
+        let _ = fs::remove_dir_all(out_dir);
+    }
+
+    #[test]
+    fn cli_export_writes_loadable_bundle() {
+        let out_dir =
+            std::env::temp_dir().join(format!("fractal-rlvr-cli-export-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&out_dir);
+        let out = run_argv(&[
+            "fractal-rlvr".into(),
+            "export".into(),
+            "--adapter".into(),
+            "cli-demo-router".into(),
+            "--base-model".into(),
+            "tiny-router-base".into(),
+            "--rank".into(),
+            "4".into(),
+            "--out".into(),
+            out_dir.display().to_string(),
+        ])
+        .unwrap();
+
+        assert!(out.contains("export ok:"), "got: {out}");
+        assert!(out.contains("loadable=true"), "got: {out}");
+        for file in [
+            "adapter_weights.json",
+            "adapter_config.json",
+            "reward_policy.json",
+            "eval_report.json",
+            "model_card.json",
+            "manifest.json",
+        ] {
+            assert!(out_dir.join(file).exists(), "missing {file}");
+        }
+        let loaded = load_adapter_bundle(&out_dir).unwrap();
+        assert_eq!(loaded.weights.adapter_id, "cli-demo-router");
+        assert_eq!(loaded.weights.rank, 4);
         let _ = fs::remove_dir_all(out_dir);
     }
 
@@ -1025,23 +1215,61 @@ mod tests {
         let report = run_proof_route_benchmark(8).unwrap();
         assert_eq!(report.iterations, 8);
         assert!(report.proof_submission_throughput_per_sec > 0.0);
+        assert!(report.proof_verification_time_ms_avg >= 0.0);
+        assert!(report.proof_index_query_latency_ms_avg >= 0.0);
+        assert!(report.block_inclusion_latency_ms_estimate > 0.0);
         assert!(report.proof_payload_bytes > report.normal_proof_payload_bytes);
         assert!(report.payload_byte_overhead > 0);
     }
 
     #[test]
-    fn release_gate_report_lists_completed_and_blocked_v01_items() {
+    fn cli_bench_proof_route_returns_json_report() {
+        let out = run_argv(&[
+            "fractal-rlvr".into(),
+            "bench-proof-route".into(),
+            "--iterations".into(),
+            "4".into(),
+        ])
+        .unwrap();
+        let report: ProofRouteBenchmarkReport = serde_json::from_str(&out).unwrap();
+
+        assert_eq!(report.iterations, 4);
+        assert!(report.proof_submission_throughput_per_sec > 0.0);
+        assert!(report.proof_verification_time_ms_avg >= 0.0);
+        assert!(report.proof_index_query_latency_ms_avg >= 0.0);
+        assert!(report.block_inclusion_latency_ms_estimate > 0.0);
+        assert!(report.proof_payload_bytes > report.normal_proof_payload_bytes);
+        assert_eq!(
+            report.payload_byte_overhead,
+            report.proof_payload_bytes as isize - report.normal_proof_payload_bytes as isize
+        );
+    }
+
+    #[test]
+    fn release_gate_report_passes_all_v01_items() {
         let report = v01_release_gate_report();
         assert_eq!(report.version, "v0.1");
-        assert!(!report.passed);
+        assert!(report.passed);
+        assert_eq!(report.items.len(), 11);
+        assert!(report.items.iter().all(|item| item.passed));
         assert!(report
             .items
             .iter()
             .any(|item| item.name == "proof hash can be generated" && item.passed));
         assert!(report.items.iter().any(|item| {
-            item.name == "proof hash can be committed by running Fractal Chain node" && !item.passed
+            item.name == "proof hash can be committed by running Fractal Chain node" && item.passed
         }));
-        assert!(!report.failed_items().is_empty());
+        assert!(report.failed_items().is_empty());
+    }
+
+    #[test]
+    fn cli_release_gate_returns_passing_json_report() {
+        let out = run_argv(&["fractal-rlvr".into(), "release-gate".into()]).unwrap();
+        let report: V01ReleaseGateReport = serde_json::from_str(&out).unwrap();
+
+        assert_eq!(report.version, "v0.1");
+        assert!(report.passed);
+        assert!(report.failed_items().is_empty());
     }
 
     fn private_trace_fixture() -> DialogueTrace {

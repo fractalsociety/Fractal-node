@@ -2574,6 +2574,7 @@ dependencies = [
  "k256",
  "libp2p",
  "rlp",
+ "serde_json",
  "thiserror 1.0.69",
  "tokio",
 ]
@@ -2618,6 +2619,7 @@ name = "fractal-rlvr"
 version = "0.1.0"
 dependencies = [
  "blake3",
+ "ed25519-dalek",
  "hex",
  "serde",
  "serde_json",

@@ -833,6 +833,7 @@
       <a href="#blocks">Blocks</a>
       <a href="#lookup">Lookup</a>
       <a href="#finality">Finality</a>
+      <a href="#proof-of-route">Proof of Route</a>
     </div>
     <a class="nav-action" href="https://fractalsociety.org">Main site</a>
   </nav>
@@ -964,6 +965,38 @@
         </div>
       </div>
     </section>
+
+    <section id="proof-of-route" class="section" aria-labelledby="proof-of-route-title">
+      <div class="section-inner">
+        <div class="section-header">
+          <h2 id="proof-of-route-title">Proof of Route</h2>
+          <p>
+            Audit the status of an RLVR Proof-of-Route / Eval / Training commitment via
+            <code>fractal_getRlvrProof</code>. The panel shows the committed hashes, route-policy and
+            model references, verifier summary, chain proof hash, and block reference — without ever
+            exposing raw prompts, answers, or traces (those stay local-only by default).
+          </p>
+        </div>
+        <div class="lookup-grid">
+          <article class="panel" style="grid-column: 1 / -1">
+            <div class="panel-title">
+              <h3>Proof-of-route lookup</h3>
+              <span class="pill">Hash-only audit</span>
+            </div>
+            <p class="lookup-copy">
+              Paste a 64-hex RLVR proof hash (the chain commitment returned by
+              <code>fractal_submitRlvrProof</code>). The explorer resolves its pending/committed
+              status and the block that includes it.
+            </p>
+            <div class="control-row">
+              <input type="text" id="rlvrProofHash" placeholder="64 hex chars (proof hash)" autocomplete="off" spellcheck="false" />
+              <button type="button" id="lookupRlvrProof" class="secondary-button">Audit proof</button>
+            </div>
+            <div id="rlvrProofOut"></div>
+          </article>
+        </div>
+      </div>
+    </section>
   </main>
 
   <script>
@@ -971,6 +1004,6 @@
       document.documentElement.style.setProperty("--scroll", String(window.scrollY));
     }, { passive: true });
   </script>
-  <script src="app.js?v=20260620-snapshot-db"></script>
+  <script src="app.js?v=20260628-rlvr-proof-route"></script>
 </body>
 </html>

@@ -1,0 +1,6 @@
+{
+  "local_only": true,
+  "target": "router",
+  "base_model": "tiny-router-base",
+  "actor_model": "local-tiny-model"
+}

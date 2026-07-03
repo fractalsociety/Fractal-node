@@ -11,6 +11,7 @@ use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use borsh::BorshDeserialize;
+use fractal_consensus::payload::{RlvrProofCommitmentV1, RlvrProofTypeTag};
 use fractal_consensus::{
     build_zone_blob_da_sidecar, coverage_manifest_for_circuit_version, da_encoded_bytes,
     da_fee_for_gas, da_gas_for_sidecar, da_root, execute_and_build_block,
@@ -33,7 +34,10 @@ use fractal_mempool::{
     next_base_fee, BaseFeeParams, CertificateFinalityRecord, CertificatePool, CertificatePoolError,
     Mempool, PooledProofUpdate, PooledTx, ProofPool, ProofPoolError,
 };
-use fractal_rlvr::RlvrNodeFlags;
+use fractal_rlvr::{
+    RlvrNodeFlags, RlvrPooledProof, RlvrProofObject, RlvrProofPool, RlvrProofType, RouteTraceInput,
+    RouteTraceLogger, RouteTraceRow,
+};
 use fractal_rpc::{
     logs_bloom_256, make_rpc_log, ChainInteraction, ProofCommitmentResponse, RpcChainConfig,
     RpcConsensusDiagnostics, RpcDaMetrics, RpcMempoolLaneMetrics, RpcOwnedObjectCertificate,
@@ -468,6 +472,40 @@ fn proof_finality_store_from_env() -> Option<std::path::PathBuf> {
         .map(std::path::PathBuf::from)
 }
 
+/// RLVR-009: explicit override for the local route-trace JSONL path. When RLVR
+/// is enabled but this is unset, the logger defaults to a local-only file under
+/// `fractal_rlvr/data/`.
+fn rlvr_trace_log_path_from_env() -> Option<std::path::PathBuf> {
+    std::env::var_os("FRACTAL_RLVR_TRACE_LOG_PATH")
+        .filter(|raw| !raw.is_empty())
+        .map(std::path::PathBuf::from)
+}
+
+/// Open (or report) the RLVR-009 route trace logger when RLVR is enabled. Logs
+/// the resolved path or the reason tracing stayed disabled.
+fn attach_rlvr_route_trace_logger(inner: &mut NodeInner, prefix: &str) {
+    if !inner.chain_config.rlvr.enabled {
+        return;
+    }
+    let path = rlvr_trace_log_path_from_env()
+        .unwrap_or_else(|| std::path::PathBuf::from("fractal_rlvr/data/route_traces.jsonl"));
+    match RouteTraceLogger::open(&path, true) {
+        Ok(logger) => {
+            eprintln!(
+                "{prefix}: rlvr_route_trace_log={} local_only=true",
+                path.display()
+            );
+            inner.set_route_trace_logger(logger);
+        }
+        Err(err) => {
+            eprintln!(
+                "{prefix}: rlvr_route_trace_log disabled (open failed at {}: {err})",
+                path.display()
+            );
+        }
+    }
+}
+
 pub struct NodeInner {
     pub chain_id: u64,
     pub shard_id: u32,
@@ -498,6 +536,7 @@ pub struct NodeInner {
     pub mempool: Mempool,
     pub proof_pool: ProofPool,
     pub certificate_pool: CertificatePool,
+    pub rlvr_proof_pool: RlvrProofPool,
     pub base_fee: u128,
     pub gas_limit: u64,
     pub fee_params: BaseFeeParams,
@@ -525,6 +564,10 @@ pub struct NodeInner {
     pub proof_metrics: ProofMetrics,
     pub p2p_connected_peers: AtomicU64,
     pub qc_diagnostics: QcDiagnostics,
+    /// RLVR-009 node trace logger. `None` when RLVR tracing is disabled. When
+    /// `Some`, each [`NodeInner::record_route_trace`] call appends one hash-only
+    /// row to a local JSONL file; raw prompt/answer text never reaches disk.
+    pub route_trace_logger: Option<RouteTraceLogger>,
 }
 
 impl NodeInner {
@@ -594,6 +637,7 @@ impl NodeInner {
             mempool: Mempool::default(),
             proof_pool: ProofPool::default(),
             certificate_pool: CertificatePool::default(),
+            rlvr_proof_pool: RlvrProofPool::default(),
             base_fee: 1,
             gas_limit: 60_000_000,
             fee_params: BaseFeeParams::default(),
@@ -614,6 +658,7 @@ impl NodeInner {
             proof_metrics: ProofMetrics::default(),
             p2p_connected_peers: AtomicU64::new(0),
             qc_diagnostics: QcDiagnostics::default(),
+            route_trace_logger: None,
         }
     }
 
@@ -708,6 +753,35 @@ impl NodeInner {
 
     pub fn set_rlvr_node_flags(&mut self, flags: RlvrNodeFlags) {
         self.chain_config.rlvr = flags;
+    }
+
+    /// Attach an RLVR-009 route trace logger. Only takes effect while
+    /// [`RlvrNodeFlags::enabled`] is set on the chain config.
+    pub fn set_route_trace_logger(&mut self, logger: RouteTraceLogger) {
+        self.route_trace_logger = Some(logger);
+    }
+
+    /// Path of the local RLVR trace log, when tracing is enabled.
+    pub fn route_trace_log_path(&self) -> Option<&std::path::Path> {
+        self.route_trace_logger.as_ref().map(|logger| logger.path())
+    }
+
+    /// RLVR-009: record one local hash-only trace row for a chat/route request.
+    ///
+    /// Returns `Ok(None)` (a no-op) when RLVR is disabled or no logger is
+    /// attached. When enabled, exactly one JSONL row is appended per call.
+    /// Raw prompt/answer/correction text is hashed in place and never written.
+    pub fn record_route_trace(
+        &self,
+        input: RouteTraceInput<'_>,
+    ) -> Result<Option<RouteTraceRow>, fractal_rlvr::RlvrError> {
+        if !self.chain_config.rlvr.enabled {
+            return Ok(None);
+        }
+        let Some(logger) = self.route_trace_logger.as_ref() else {
+            return Ok(None);
+        };
+        Ok(Some(logger.record(&input)?))
     }
 
     pub fn set_proof_required_settlement(&mut self, required: bool) {
@@ -809,6 +883,12 @@ impl NodeInner {
             max_priority_fee,
         })?;
         Ok(update_hash)
+    }
+
+    pub fn submit_rlvr_proof(&mut self, proof: RlvrProofObject) -> Result<String, String> {
+        self.rlvr_proof_pool
+            .insert(proof)
+            .map_err(|err| err.to_string())
     }
 
     pub fn submit_owned_object_certificate(
@@ -2251,29 +2331,92 @@ fn include_tx_for_payload_mode(mode: BlockPayloadMode, tx: &Transaction) -> bool
     }
 }
 
+fn rlvr_chain_commit_active(config: &ChainConfig) -> bool {
+    config.rlvr.enabled && config.rlvr.chain_commit_enabled && !config.rlvr.raw_data_on_chain
+}
+
+fn rlvr_proof_type_tag(proof_type: RlvrProofType) -> RlvrProofTypeTag {
+    match proof_type {
+        RlvrProofType::ProofOfRoute => RlvrProofTypeTag::ProofOfRoute,
+        RlvrProofType::ProofOfEval => RlvrProofTypeTag::ProofOfEval,
+        RlvrProofType::ProofOfTraining => RlvrProofTypeTag::ProofOfTraining,
+    }
+}
+
+fn decode_hash32(name: &str, raw: &str) -> Result<fractal_crypto::Hash256, String> {
+    let trimmed = raw.trim().trim_start_matches("0x");
+    let bytes = hex::decode(trimmed).map_err(|err| format!("invalid {name}: {err}"))?;
+    bytes
+        .try_into()
+        .map_err(|bytes: Vec<u8>| format!("{name} must be 32 bytes, got {}", bytes.len()))
+}
+
+fn decode_optional_hash32(
+    name: &str,
+    raw: Option<&String>,
+) -> Result<fractal_crypto::Hash256, String> {
+    match raw {
+        Some(value) => decode_hash32(name, value),
+        None => Ok([0u8; 32]),
+    }
+}
+
+fn rlvr_commitment_from_pooled(pooled: &RlvrPooledProof) -> Result<RlvrProofCommitmentV1, String> {
+    let proof_hash = decode_hash32("proof_hash", &pooled.proof_hash)?;
+    let computed_hash = decode_hash32(
+        "computed proof_hash",
+        &pooled.proof.proof_hash().map_err(|e| e.to_string())?,
+    )?;
+    if computed_hash != proof_hash {
+        return Err("pooled RLVR proof hash does not match proof object".into());
+    }
+    Ok(RlvrProofCommitmentV1 {
+        proof_type: rlvr_proof_type_tag(pooled.proof.proof_type),
+        proof_hash,
+        trace_hash: decode_hash32("trace_hash", &pooled.proof.trace_hash)?,
+        route_policy_hash: decode_hash32("route_policy_hash", &pooled.proof.route_policy_hash)?,
+        reward_policy_hash: decode_hash32("reward_policy_hash", &pooled.proof.reward_policy_hash)?,
+        model_id_hash: decode_hash32("model_id_hash", &pooled.proof.model_id_hash)?,
+        adapter_hash: decode_optional_hash32("adapter_hash", pooled.proof.adapter_hash.as_ref())?,
+        eval_result_hash: decode_optional_hash32(
+            "eval_result_hash",
+            pooled.proof.eval_result_hash.as_ref(),
+        )?,
+        timestamp_unix: pooled.proof.timestamp,
+    })
+}
+
 fn proposal_payload_for_mode(
     mode: BlockPayloadMode,
     txs: &[Transaction],
     eth_raws: &[Option<Vec<u8>>],
     proof_updates: &[ZoneProofUpdateV1],
     certificates: &[OwnedObjectCertificate],
+    rlvr_proofs: &[RlvrProofCommitmentV1],
 ) -> BlockPayload {
     match mode {
         BlockPayloadMode::Legacy => BlockPayload::FullTransactions {
             transactions: txs.to_vec(),
             eth_signed_raw: eth_raws.to_vec(),
         },
-        BlockPayloadMode::ProofIngestion if txs.is_empty() && certificates.is_empty() => {
+        BlockPayloadMode::ProofIngestion
+            if txs.is_empty() && certificates.is_empty() && rlvr_proofs.is_empty() =>
+        {
             BlockPayload::ProofUpdates(proof_updates.to_vec())
         }
-        BlockPayloadMode::ProofIngestion if txs.is_empty() && proof_updates.is_empty() => {
+        BlockPayloadMode::ProofIngestion
+            if txs.is_empty() && proof_updates.is_empty() && rlvr_proofs.is_empty() =>
+        {
             BlockPayload::CertificateBatches(vec![OwnedObjectCertificateBatchV1 {
                 certificates: certificates.to_vec(),
             }])
         }
         BlockPayloadMode::ProofIngestion | BlockPayloadMode::Mixed => {
             let mut items = Vec::with_capacity(
-                txs.len() + proof_updates.len() + usize::from(!certificates.is_empty()),
+                txs.len()
+                    + proof_updates.len()
+                    + usize::from(!certificates.is_empty())
+                    + rlvr_proofs.len(),
             );
             for (idx, tx) in txs.iter().enumerate() {
                 items.push(BlockPayloadItem::Transaction {
@@ -2294,6 +2437,7 @@ fn proposal_payload_for_mode(
                     },
                 ));
             }
+            items.extend(rlvr_proofs.iter().cloned().map(BlockPayloadItem::RlvrProof));
             BlockPayload::Mixed(items)
         }
     }
@@ -2354,6 +2498,8 @@ pub async fn try_produce_one_tick(node: &NodeHandle) -> ProduceTickOutcome {
     let base = n.base_fee;
     let gas_limit_cfg = n.gas_limit;
     let payload_mode = n.block_payload_mode();
+    let include_rlvr_proofs =
+        payload_mode != BlockPayloadMode::Legacy && rlvr_chain_commit_active(&n.chain_config);
     let pooled = n
         .mempool
         .drain_ready_gas_budget_filtered(gas_limit_cfg, base, |tx| {
@@ -2373,8 +2519,30 @@ pub async fn try_produce_one_tick(node: &NodeHandle) -> ProduceTickOutcome {
             n.certificate_pool.accepted_certificates()
         }
     };
-    let proposal_payload =
-        proposal_payload_for_mode(payload_mode, &txs, &eth_raws, &proof_updates, &certificates);
+    let rlvr_proofs = if include_rlvr_proofs {
+        let pooled_rlvr_proofs = n.rlvr_proof_pool.drain_ready(1024);
+        let mut commitments = Vec::with_capacity(pooled_rlvr_proofs.len());
+        for pooled_rlvr_proof in &pooled_rlvr_proofs {
+            match rlvr_commitment_from_pooled(pooled_rlvr_proof) {
+                Ok(commitment) => commitments.push(commitment),
+                Err(err) => {
+                    eprintln!("fractal-node: RLVR proof commitment conversion failed: {err}");
+                    return ProduceTickOutcome::BuildFailed;
+                }
+            }
+        }
+        commitments
+    } else {
+        Vec::new()
+    };
+    let proposal_payload = proposal_payload_for_mode(
+        payload_mode,
+        &txs,
+        &eth_raws,
+        &proof_updates,
+        &certificates,
+        &rlvr_proofs,
+    );
     let parent = n.head_hash;
     let qc = n.parent_qc_hash;
     let height = n.height + 1;
@@ -2463,6 +2631,7 @@ pub async fn run_dev() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         inner.set_proof_finality_store(ProofFinalityStore::open(&path)?)?;
         eprintln!("fractal-node: proof_finality_store={}", path.display());
     }
+    attach_rlvr_route_trace_logger(&mut inner, "fractal-node");
     inner.set_vote_sink(Some(vote_tx));
     eprintln!(
         "fractal-node: settlement_finality={} block_payload_mode={} rlvr_enabled={} rlvr_chain_commit_enabled={} rlvr_raw_data_on_chain={}",
@@ -2553,6 +2722,7 @@ pub async fn run_follower() -> Result<(), Box<dyn std::error::Error + Send + Syn
             path.display()
         );
     }
+    attach_rlvr_route_trace_logger(&mut inner, "fractal-node follower");
     inner.set_vote_sink(Some(vote_tx));
     eprintln!(
         "fractal-node follower: settlement_finality={} block_payload_mode={} rlvr_enabled={} rlvr_chain_commit_enabled={} rlvr_raw_data_on_chain={}",

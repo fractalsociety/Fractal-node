@@ -8,7 +8,7 @@
 //! default; a later phase (RLVR-010) commits only `trace_hash`.
 
 use std::fs::{self, OpenOptions};
-use std::io::Write;
+use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -76,6 +76,23 @@ pub struct RouteTraceRow {
     pub local_only: bool,
     /// blake3 over every field above except `trace_hash` itself.
     pub trace_hash: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TraceStoreMetadata {
+    pub store_version: String,
+    pub local_only: bool,
+    pub created_at_unix: u64,
+    pub updated_at_unix: u64,
+    pub retention_days: Option<u32>,
+    pub trace_count: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LocalTraceStore {
+    path: PathBuf,
+    metadata_path: PathBuf,
+    metadata: TraceStoreMetadata,
 }
 
 /// Serialization view used to derive `trace_hash` (excludes the hash itself to
@@ -232,6 +249,141 @@ impl RouteTraceLogger {
         file.write_all(line.as_bytes())?;
         Ok(row)
     }
+}
+
+impl LocalTraceStore {
+    pub fn open(path: impl Into<PathBuf>, retention_days: Option<u32>) -> Result<Self, RlvrError> {
+        let path = path.into();
+        if let Some(parent) = path.parent() {
+            if !parent.as_os_str().is_empty() {
+                fs::create_dir_all(parent)?;
+            }
+        }
+        if !path.exists() {
+            fs::File::create(&path)?;
+        }
+        let metadata_path = metadata_path_for(&path);
+        let now = now_unix()?;
+        let trace_count = count_trace_rows(&path)?;
+        let metadata = if metadata_path.exists() {
+            let mut metadata: TraceStoreMetadata =
+                serde_json::from_slice(&fs::read(&metadata_path)?)?;
+            metadata.local_only = true;
+            metadata.retention_days = retention_days.or(metadata.retention_days);
+            metadata.trace_count = trace_count;
+            metadata.updated_at_unix = now;
+            metadata
+        } else {
+            TraceStoreMetadata {
+                store_version: "rlvr.local-trace-store.v0.1".into(),
+                local_only: true,
+                created_at_unix: now,
+                updated_at_unix: now,
+                retention_days,
+                trace_count,
+            }
+        };
+        let store = Self {
+            path,
+            metadata_path,
+            metadata,
+        };
+        store.write_metadata()?;
+        Ok(store)
+    }
+
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+
+    pub fn metadata_path(&self) -> &Path {
+        &self.metadata_path
+    }
+
+    pub fn metadata(&self) -> &TraceStoreMetadata {
+        &self.metadata
+    }
+
+    pub fn append(&mut self, row: &RouteTraceRow) -> Result<(), RlvrError> {
+        row.validate()?;
+        let mut line = serde_json::to_string(row)?;
+        line.push('\n');
+        let mut file = OpenOptions::new().append(true).open(&self.path)?;
+        file.write_all(line.as_bytes())?;
+        self.metadata.trace_count += 1;
+        self.metadata.updated_at_unix = now_unix()?;
+        self.write_metadata()
+    }
+
+    pub fn read_all(&self) -> Result<Vec<RouteTraceRow>, RlvrError> {
+        read_trace_rows(&self.path)
+    }
+
+    pub fn find_by_hash(&self, trace_hash: &str) -> Result<Option<RouteTraceRow>, RlvrError> {
+        require_hash("trace_hash", trace_hash)?;
+        Ok(self
+            .read_all()?
+            .into_iter()
+            .find(|row| row.trace_hash == trace_hash))
+    }
+
+    fn write_metadata(&self) -> Result<(), RlvrError> {
+        fs::write(
+            &self.metadata_path,
+            serde_json::to_vec_pretty(&self.metadata)?,
+        )?;
+        Ok(())
+    }
+}
+
+fn metadata_path_for(path: &Path) -> PathBuf {
+    let mut metadata_path = path.to_path_buf();
+    let metadata_name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .map(|name| format!("{name}.metadata.json"))
+        .unwrap_or_else(|| "trace_store.metadata.json".into());
+    metadata_path.set_file_name(metadata_name);
+    metadata_path
+}
+
+fn read_trace_rows(path: &Path) -> Result<Vec<RouteTraceRow>, RlvrError> {
+    let file = fs::File::open(path)?;
+    let reader = BufReader::new(file);
+    let mut rows = Vec::new();
+    for (idx, line) in reader.lines().enumerate() {
+        let line = line?;
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let row: RouteTraceRow = serde_json::from_str(trimmed).map_err(|err| {
+            RlvrError::Config(format!("invalid trace store JSONL line {}: {err}", idx + 1))
+        })?;
+        row.validate()?;
+        rows.push(row);
+    }
+    Ok(rows)
+}
+
+fn count_trace_rows(path: &Path) -> Result<usize, RlvrError> {
+    Ok(read_trace_rows(path)?.len())
+}
+
+fn now_unix() -> Result<u64, RlvrError> {
+    Ok(SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(|_| RlvrError::Config("system clock is before the unix epoch".into()))?
+        .as_secs())
+}
+
+fn require_hash(name: &str, value: &str) -> Result<(), RlvrError> {
+    if value.len() != 64 || !value.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return Err(RlvrError::Config(format!(
+            "{name} must be a 64-character hex hash"
+        )));
+    }
+    Ok(())
 }
 
 /// Union of privacy tag *names* detected in the prompt and (optionally) the
@@ -481,6 +633,58 @@ mod tests {
         let logger = RouteTraceLogger::open(&nested, true).unwrap();
         assert!(nested.exists());
         assert_eq!(logger.path(), &nested);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn local_trace_store_saves_reads_and_finds_hash_only_rows() {
+        let dir = scratch_dir("store");
+        let path = dir.join("route_traces.jsonl");
+        let mut store = LocalTraceStore::open(&path, Some(30)).unwrap();
+        assert_eq!(store.path(), path.as_path());
+        assert!(store
+            .metadata_path()
+            .ends_with("route_traces.jsonl.metadata.json"));
+        assert!(store.metadata().local_only);
+        assert_eq!(store.metadata().retention_days, Some(30));
+        assert_eq!(store.metadata().trace_count, 0);
+
+        let policy = RoutePolicy::default();
+        let input = sample_input(&policy);
+        let row = RouteTraceRow::build(&input, "rt-store".into(), 1_700_000_000, true).unwrap();
+        store.append(&row).unwrap();
+
+        assert_eq!(store.metadata().trace_count, 1);
+        let rows = store.read_all().unwrap();
+        assert_eq!(rows, vec![row.clone()]);
+        assert_eq!(store.find_by_hash(&row.trace_hash).unwrap(), Some(row));
+        let content = fs::read_to_string(&path).unwrap();
+        assert!(!content.contains("What is the capital of France?"));
+        assert!(!content.contains("Paris"));
+
+        let metadata: TraceStoreMetadata =
+            serde_json::from_slice(&fs::read(store.metadata_path()).unwrap()).unwrap();
+        assert_eq!(metadata.trace_count, 1);
+        assert!(metadata.local_only);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn local_trace_store_reopens_existing_log_and_refreshes_metadata() {
+        let dir = scratch_dir("store-reopen");
+        let path = dir.join("route_traces.jsonl");
+        let policy = RoutePolicy::default();
+        let input = sample_input(&policy);
+        let row = RouteTraceRow::build(&input, "rt-reopen".into(), 1_700_000_000, true).unwrap();
+        {
+            let mut store = LocalTraceStore::open(&path, Some(7)).unwrap();
+            store.append(&row).unwrap();
+        }
+
+        let reopened = LocalTraceStore::open(&path, None).unwrap();
+        assert_eq!(reopened.metadata().trace_count, 1);
+        assert_eq!(reopened.metadata().retention_days, Some(7));
+        assert_eq!(reopened.read_all().unwrap(), vec![row]);
         let _ = fs::remove_dir_all(&dir);
     }
 

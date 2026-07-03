@@ -16,6 +16,13 @@ pub const PAYLOAD_LEAF_DOMAIN: &[u8] = b"fractal:block-payload-leaf:v1";
 pub const PROOF_UPDATE_LEAF_DOMAIN: &[u8] = b"fractal:proof-update-leaf:v1";
 pub const CERTIFICATE_BATCH_LEAF_DOMAIN: &[u8] = b"fractal:certificate-batch-leaf:v1";
 pub const CERTIFICATE_BATCH_ROOT_DOMAIN: &[u8] = b"fractal:certificate-batch-root:v1";
+pub const RLVR_PROOF_LEAF_DOMAIN: &[u8] = b"fractal:rlvr-proof-leaf:v1";
+pub const RLVR_PROOFS_ROOT_DOMAIN: &[u8] = b"fractal:rlvr-proofs-root:v1";
+
+/// Versioned-root tag byte for the RLVR proofs commitment (distinct from the
+/// `BlockPayloadKind` tags so RLVR proofs get their own domain without adding a
+/// new payload kind).
+pub const RLVR_PROOFS_ROOT_TAG: u8 = 4;
 
 /// Proof-ingestion update committed by a base-chain block.
 ///
@@ -42,6 +49,64 @@ pub struct OwnedObjectCertificateBatchV1 {
     pub certificates: Vec<OwnedObjectCertificate>,
 }
 
+/// Which kind of RLVR proof a commitment binds (RLVR-040 proof types, mirrored
+/// locally so the consensus payload contract does not depend on the RLVR crate).
+#[derive(BorshSerialize, BorshDeserialize, Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RlvrProofTypeTag {
+    ProofOfRoute,
+    ProofOfEval,
+    ProofOfTraining,
+}
+
+impl RlvrProofTypeTag {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::ProofOfRoute => "proof_of_route",
+            Self::ProofOfEval => "proof_of_eval",
+            Self::ProofOfTraining => "proof_of_training",
+        }
+    }
+
+    #[must_use]
+    pub const fn tag(self) -> u8 {
+        match self {
+            Self::ProofOfRoute => 0,
+            Self::ProofOfEval => 1,
+            Self::ProofOfTraining => 2,
+        }
+    }
+
+    pub fn parse(raw: &str) -> Option<Self> {
+        match raw.trim().to_ascii_lowercase().as_str() {
+            "proof_of_route" | "proof-of-route" | "route" => Some(Self::ProofOfRoute),
+            "proof_of_eval" | "proof-of-eval" | "eval" => Some(Self::ProofOfEval),
+            "proof_of_training" | "proof-of-training" | "training" => Some(Self::ProofOfTraining),
+            _ => None,
+        }
+    }
+}
+
+/// RLVR-047: a proof-of-route / proof-of-eval / proof-of-training commitment
+/// carried inside a block payload. Mirrors [`ZoneProofUpdateV1`]'s "local to
+/// consensus" contract: it binds **only hashes and metadata roots** — never raw
+/// prompts, answers, traces, or adapter weights — so it is safe to commit
+/// on-chain. The RLVR crate converts its `RlvrProofObject` into this at
+/// inclusion time.
+#[derive(BorshSerialize, BorshDeserialize, Clone, Debug, PartialEq, Eq)]
+pub struct RlvrProofCommitmentV1 {
+    pub proof_type: RlvrProofTypeTag,
+    /// Hash of the full local RLVR proof object.
+    pub proof_hash: Hash256,
+    pub trace_hash: Hash256,
+    pub route_policy_hash: Hash256,
+    pub reward_policy_hash: Hash256,
+    pub model_id_hash: Hash256,
+    pub adapter_hash: Hash256,
+    pub eval_result_hash: Hash256,
+    pub timestamp_unix: u64,
+}
+
 #[derive(BorshSerialize, BorshDeserialize, Clone, Debug, PartialEq, Eq)]
 pub enum BlockPayloadItem {
     Transaction {
@@ -50,6 +115,8 @@ pub enum BlockPayloadItem {
     },
     ProofUpdate(ZoneProofUpdateV1),
     CertificateBatch(OwnedObjectCertificateBatchV1),
+    /// RLVR-047: hash-only proof-of-route/eval/training commitment.
+    RlvrProof(RlvrProofCommitmentV1),
 }
 
 #[derive(BorshSerialize, BorshDeserialize, Clone, Debug, PartialEq, Eq)]
@@ -137,16 +204,21 @@ pub fn versioned_payload_root(kind: BlockPayloadKind, leaves: &[Hash256]) -> Has
 }
 
 pub fn payload_leaf_hash(item: &BlockPayloadItem) -> Result<Hash256, std::io::Error> {
-    if let BlockPayloadItem::CertificateBatch(batch) = item {
-        let batch_root = certificate_batch_root(batch)?;
-        let mut bytes = PAYLOAD_LEAF_DOMAIN.to_vec();
-        bytes.extend_from_slice(b"certificate_batch");
-        bytes.extend_from_slice(&batch_root);
-        return Ok(keccak256(&bytes));
+    match item {
+        BlockPayloadItem::CertificateBatch(batch) => {
+            let batch_root = certificate_batch_root(batch)?;
+            let mut bytes = PAYLOAD_LEAF_DOMAIN.to_vec();
+            bytes.extend_from_slice(b"certificate_batch");
+            bytes.extend_from_slice(&batch_root);
+            Ok(keccak256(&bytes))
+        }
+        BlockPayloadItem::RlvrProof(commitment) => rlvr_proof_leaf_hash(commitment),
+        _ => {
+            let mut bytes = PAYLOAD_LEAF_DOMAIN.to_vec();
+            bytes.extend_from_slice(&borsh::to_vec(item)?);
+            Ok(keccak256(&bytes))
+        }
     }
-    let mut bytes = PAYLOAD_LEAF_DOMAIN.to_vec();
-    bytes.extend_from_slice(&borsh::to_vec(item)?);
-    Ok(keccak256(&bytes))
 }
 
 #[derive(BorshSerialize)]
@@ -256,6 +328,55 @@ pub fn certificate_batch_leaf_hash(
     };
     let mut bytes = CERTIFICATE_BATCH_LEAF_DOMAIN.to_vec();
     bytes.extend_from_slice(&borsh::to_vec(&leaf)?);
+    Ok(keccak256(&bytes))
+}
+
+#[derive(BorshSerialize)]
+struct RlvrProofRootLeaf {
+    proof_type: u8,
+    proof_hash: Hash256,
+    trace_hash: Hash256,
+    route_policy_hash: Hash256,
+    reward_policy_hash: Hash256,
+    model_id_hash: Hash256,
+    adapter_hash: Hash256,
+    eval_result_hash: Hash256,
+    timestamp_unix: u64,
+}
+
+/// Hash a single RLVR proof commitment into a payload leaf. Binds every hash
+/// field, the proof-type tag, and the timestamp — never raw trace content.
+pub fn rlvr_proof_leaf_hash(commitment: &RlvrProofCommitmentV1) -> Result<Hash256, std::io::Error> {
+    let leaf = RlvrProofRootLeaf {
+        proof_type: commitment.proof_type.tag(),
+        proof_hash: commitment.proof_hash,
+        trace_hash: commitment.trace_hash,
+        route_policy_hash: commitment.route_policy_hash,
+        reward_policy_hash: commitment.reward_policy_hash,
+        model_id_hash: commitment.model_id_hash,
+        adapter_hash: commitment.adapter_hash,
+        eval_result_hash: commitment.eval_result_hash,
+        timestamp_unix: commitment.timestamp_unix,
+    };
+    let mut bytes = RLVR_PROOF_LEAF_DOMAIN.to_vec();
+    bytes.extend_from_slice(&borsh::to_vec(&leaf)?);
+    Ok(keccak256(&bytes))
+}
+
+/// Deterministic commitment root over a batch of RLVR proofs. Uses its own
+/// domain + tag (`RLVR_PROOFS_ROOT_TAG`) so it is distinct from the
+/// proof-update and certificate-batch roots, and is the hook RLVR-048 binds into
+/// a header extension. Order is significant.
+pub fn rlvr_proofs_root(commitments: &[RlvrProofCommitmentV1]) -> Result<Hash256, std::io::Error> {
+    let leaves = commitments
+        .iter()
+        .map(rlvr_proof_leaf_hash)
+        .collect::<Result<Vec<_>, _>>()?;
+    let root = merkle_root_from_hashes(&leaves);
+    let mut bytes = Vec::with_capacity(RLVR_PROOFS_ROOT_DOMAIN.len() + 1 + 32);
+    bytes.extend_from_slice(RLVR_PROOFS_ROOT_DOMAIN);
+    bytes.push(RLVR_PROOFS_ROOT_TAG);
+    bytes.extend_from_slice(&root);
     Ok(keccak256(&bytes))
 }
 
@@ -860,5 +981,169 @@ mod tests {
         assert_eq!(proof_roots.len(), 32);
         assert_eq!(cert_roots.len(), 32);
         assert_eq!(da_roots.len(), 32);
+    }
+
+    // ----- RLVR-047: proof-of-route payload item -----
+
+    fn rlvr_commitment(seed: u8, proof_type: RlvrProofTypeTag) -> RlvrProofCommitmentV1 {
+        RlvrProofCommitmentV1 {
+            proof_type,
+            proof_hash: hash_from(seed, 1),
+            trace_hash: hash_from(seed, 2),
+            route_policy_hash: hash_from(seed, 3),
+            reward_policy_hash: hash_from(seed, 4),
+            model_id_hash: hash_from(seed, 5),
+            adapter_hash: hash_from(seed, 6),
+            eval_result_hash: hash_from(seed, 7),
+            timestamp_unix: u64::from(seed) + 1_700_000_000,
+        }
+    }
+
+    #[test]
+    fn rlvr_proofs_root_is_stable_and_order_sensitive() {
+        let one = vec![rlvr_commitment(1, RlvrProofTypeTag::ProofOfRoute)];
+        assert_eq!(
+            rlvr_proofs_root(&one).unwrap(),
+            rlvr_proofs_root(&one).unwrap()
+        );
+
+        let multi = vec![
+            rlvr_commitment(1, RlvrProofTypeTag::ProofOfRoute),
+            rlvr_commitment(2, RlvrProofTypeTag::ProofOfEval),
+        ];
+        assert_ne!(
+            rlvr_proofs_root(&one).unwrap(),
+            rlvr_proofs_root(&multi).unwrap()
+        );
+
+        let reordered = vec![multi[1].clone(), multi[0].clone()];
+        assert_ne!(
+            rlvr_proofs_root(&multi).unwrap(),
+            rlvr_proofs_root(&reordered).unwrap()
+        );
+    }
+
+    #[test]
+    fn rlvr_proofs_root_empty_is_versioned_and_nonzero() {
+        let empty = rlvr_proofs_root(&[]).unwrap();
+        assert_ne!(empty, [0u8; 32]);
+        assert_eq!(empty, rlvr_proofs_root(&[]).unwrap());
+    }
+
+    #[test]
+    fn rlvr_proofs_root_binds_every_hash_field_type_and_timestamp() {
+        let base = rlvr_commitment(1, RlvrProofTypeTag::ProofOfRoute);
+        let base_root = rlvr_proofs_root(std::slice::from_ref(&base)).unwrap();
+
+        let mut cases = Vec::new();
+        for (name, mut mutated) in [
+            ("proof_hash", base.clone()),
+            ("trace_hash", base.clone()),
+            ("route_policy_hash", base.clone()),
+            ("reward_policy_hash", base.clone()),
+            ("model_id_hash", base.clone()),
+            ("adapter_hash", base.clone()),
+            ("eval_result_hash", base.clone()),
+        ] {
+            let target = match name {
+                "proof_hash" => &mut mutated.proof_hash,
+                "trace_hash" => &mut mutated.trace_hash,
+                "route_policy_hash" => &mut mutated.route_policy_hash,
+                "reward_policy_hash" => &mut mutated.reward_policy_hash,
+                "model_id_hash" => &mut mutated.model_id_hash,
+                "adapter_hash" => &mut mutated.adapter_hash,
+                _ => &mut mutated.eval_result_hash,
+            };
+            target[0] ^= 0x01;
+            cases.push((name, mutated));
+        }
+
+        let mut changed_type = base.clone();
+        changed_type.proof_type = RlvrProofTypeTag::ProofOfTraining;
+        cases.push(("proof_type", changed_type));
+
+        let mut changed_ts = base.clone();
+        changed_ts.timestamp_unix = changed_ts.timestamp_unix.wrapping_add(1);
+        cases.push(("timestamp_unix", changed_ts));
+
+        for (field, mutated) in cases {
+            assert_ne!(
+                base_root,
+                rlvr_proofs_root(std::slice::from_ref(&mutated.clone())).unwrap(),
+                "rlvr proofs root did not bind {field}"
+            );
+        }
+    }
+
+    #[test]
+    fn rlvr_proofs_root_is_distinct_from_other_payload_roots() {
+        let rlvr = rlvr_proofs_root(&[rlvr_commitment(1, RlvrProofTypeTag::ProofOfRoute)]).unwrap();
+        // Cross-root confusion: an RLVR root must never validate as a proof-update
+        // or certificate-batch root (different domains + tags).
+        assert_ne!(rlvr, proof_updates_root(&[update(1, 10, 9)]).unwrap());
+        assert_ne!(
+            rlvr,
+            certificate_batches_root(&[OwnedObjectCertificateBatchV1 {
+                certificates: vec![certificate(1, 1, 10)]
+            }])
+            .unwrap()
+        );
+    }
+
+    #[test]
+    fn mixed_payload_commits_rlvr_proof_item_and_preserves_other_roots() {
+        // Including an RLVR proof item in a Mixed payload changes its root.
+        let tx_item = BlockPayloadItem::Transaction {
+            transaction: noop(0),
+            eth_signed_raw: None,
+        };
+        let rlvr_item =
+            BlockPayloadItem::RlvrProof(rlvr_commitment(1, RlvrProofTypeTag::ProofOfRoute));
+
+        let without = BlockPayload::Mixed(vec![tx_item.clone()])
+            .payload_root()
+            .unwrap();
+        let with = BlockPayload::Mixed(vec![tx_item.clone(), rlvr_item.clone()])
+            .payload_root()
+            .unwrap();
+        assert_ne!(without, with);
+
+        // Reordering changes the Mixed root, and removing returns to the original.
+        let reordered = BlockPayload::Mixed(vec![rlvr_item.clone(), tx_item.clone()])
+            .payload_root()
+            .unwrap();
+        assert_ne!(with, reordered);
+        assert_eq!(
+            without,
+            BlockPayload::Mixed(vec![tx_item]).payload_root().unwrap()
+        );
+    }
+
+    #[test]
+    fn rlvr_proof_commitment_carries_only_hashes_and_metadata() {
+        // The commitment is a pure hash/metadata record (no raw prompt/answer/
+        // trace strings). Its borsh encoding is fixed-size and contains no
+        // embedded plaintext, so it is safe to commit on-chain.
+        let commitment = rlvr_commitment(3, RlvrProofTypeTag::ProofOfTraining);
+        let encoded = borsh::to_vec(&commitment).unwrap();
+        // 1 (type tag) + 7*32 (hashes) + 8 (timestamp) = 233 bytes.
+        assert_eq!(encoded.len(), 1 + 7 * 32 + 8);
+        assert!(!encoded.windows(4).any(|w| w == b"raw_"));
+    }
+
+    #[test]
+    fn rlvr_proof_type_tag_round_trips() {
+        for tag in [
+            RlvrProofTypeTag::ProofOfRoute,
+            RlvrProofTypeTag::ProofOfEval,
+            RlvrProofTypeTag::ProofOfTraining,
+        ] {
+            assert_eq!(RlvrProofTypeTag::parse(tag.as_str()), Some(tag));
+        }
+        assert!(RlvrProofTypeTag::parse("nonsense").is_none());
+        assert_eq!(
+            RlvrProofTypeTag::parse("proof-of-route"),
+            Some(RlvrProofTypeTag::ProofOfRoute)
+        );
     }
 }

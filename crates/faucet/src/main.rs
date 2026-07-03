@@ -27,8 +27,10 @@ struct AppState {
 }
 
 #[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct FundBody {
     address: String,
+    amount_wei: Option<String>,
 }
 
 fn parse_addr(s: &str) -> Result<Address, String> {
@@ -113,6 +115,22 @@ fn rate_key(ip: std::net::IpAddr, xfwd: Option<&str>) -> String {
     format!("ip:{ip}")
 }
 
+fn requested_amount(body: &FundBody, max_drip: u128) -> Result<u128, String> {
+    let Some(raw) = body.amount_wei.as_deref() else {
+        return Ok(max_drip);
+    };
+    let amount = raw
+        .parse::<u128>()
+        .map_err(|_| "amountWei must be a decimal u128 string".to_string())?;
+    if amount == 0 {
+        return Err("amountWei must be greater than zero".into());
+    }
+    if amount > max_drip {
+        return Err(format!("amountWei exceeds faucet max {}", max_drip));
+    }
+    Ok(amount)
+}
+
 async fn health() -> impl IntoResponse {
     Json(serde_json::json!({ "ok": true, "service": "fractal-faucet" }))
 }
@@ -159,6 +177,21 @@ async fn fund(
         }
     };
 
+    let amount = match requested_amount(&body, st.drip) {
+        Ok(amount) => amount,
+        Err(e) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({
+                    "error": "bad_amount",
+                    "message": e,
+                    "maxAmount": st.drip.to_string(),
+                })),
+            )
+                .into_response();
+        }
+    };
+
     let nonce = match get_nonce(&st.rpc_url, &DEVNET_FAUCET_TREASURY) {
         Ok(n) => n,
         Err(e) => {
@@ -170,7 +203,7 @@ async fn fund(
         }
     };
 
-    let tx_hash = match send_transfer(&st.rpc_url, &DEVNET_FAUCET_TREASURY, nonce, to, st.drip) {
+    let tx_hash = match send_transfer(&st.rpc_url, &DEVNET_FAUCET_TREASURY, nonce, to, amount) {
         Ok(h) => h,
         Err(e) => {
             return (
@@ -185,7 +218,8 @@ async fn fund(
         "ok": true,
         "txHash": tx_hash,
         "to": body.address,
-        "amount": st.drip.to_string(),
+        "amount": amount.to_string(),
+        "maxAmount": st.drip.to_string(),
         "treasury": addr_hex(&DEVNET_FAUCET_TREASURY),
     }))
     .into_response()

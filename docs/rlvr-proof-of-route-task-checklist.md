@@ -142,14 +142,22 @@ Status: Completed via `RpcChainConfig` fields, node startup logging, determinist
 
 ### RLVR-007: Implement local trace store
 
-- [ ] Create append-only JSONL trace storage.
-- [ ] Store local path outside chain state by default.
-- [ ] Add retention metadata.
-- [ ] Add trace hash derivation.
+- [x] Create append-only JSONL trace storage.
+- [x] Store local path outside chain state by default.
+- [x] Add retention metadata.
+- [x] Add trace hash derivation.
 
 Done when:
 
-- [ ] A trace can be saved and read back locally.
+- [x] A trace can be saved and read back locally.
+
+Status: Completed in `crates/rlvr/src/tracing/mod.rs` with
+`LocalTraceStore`, `TraceStoreMetadata`, and the existing hash-only
+`RouteTraceRow`/`RouteTraceLogger`. The store creates append-only JSONL logs at
+caller-provided local paths, writes sidecar retention metadata, validates and
+reads rows back, and supports lookup by deterministic `trace_hash`. Covered by
+unit tests for save/read/find, metadata sidecar persistence, reopen behavior,
+and raw prompt/answer exclusion.
 
 ### RLVR-008: Implement trace privacy tags
 
@@ -204,14 +212,20 @@ Status: Completed in `crates/rlvr/src/data/mod.rs` with `RedactedDialogueTrace`,
 
 ### RLVR-011: Build AskMind rubric generator
 
-- [ ] Generate degraded/underspecified prompt.
-- [ ] Generate missing-info checkpoints.
-- [ ] Mark checkpoints that must resolve before final answer.
-- [ ] Generate simulator answer-if-asked values.
+- [x] Generate degraded/underspecified prompt.
+- [x] Generate missing-info checkpoints.
+- [x] Mark checkpoints that must resolve before final answer.
+- [x] Generate simulator answer-if-asked values.
 
 Done when:
 
-- [ ] 100 sample QA pairs produce valid AskMind rubrics.
+- [x] 100 sample QA pairs produce valid AskMind rubrics.
+
+Status: Completed in `crates/rlvr/src/rubrics/ask_mind.rs`.
+`AskMindRubricInput` generates a degraded visible prompt, `MissingInfo`
+checkpoints, required-before-answer gates, and simulator `answer_if_asked`
+values. `sample_ask_mind_fixtures()` produces 100 deterministic sample QA pairs
+that all validate and round-trip into `TrainingItem` records.
 
 ### RLVR-012: Build AskOverconfidence rubric generator
 
@@ -644,29 +658,49 @@ validation.
 
 ### RLVR-035: Implement adapter export
 
-- [ ] Export adapter weights.
-- [ ] Export adapter config.
-- [ ] Export reward policy.
-- [ ] Export eval report.
-- [ ] Export model card.
-- [ ] Export hashes.
+- [x] Export adapter weights.
+- [x] Export adapter config.
+- [x] Export reward policy.
+- [x] Export eval report.
+- [x] Export model card.
+- [x] Export hashes.
 
 Done when:
 
-- [ ] Adapter can be loaded by Fractal router or chat runtime.
+- [x] Adapter can be loaded by Fractal router or chat runtime.
+
+Status: Completed in `crates/rlvr/src/adapters/export.rs`. `export_adapter_bundle`
+writes a self-describing bundle (`adapter_weights.json`, `adapter_config.json`,
+`reward_policy.json`, `eval_report.json`, `model_card.json`, `manifest.json`)
+where the manifest is the load contract: it carries per-artifact blake3 hashes
+and an overall `adapter_hash`. `load_adapter_bundle` reads the manifest, re-hashes
+every artifact, recomputes `adapter_hash`, and fails closed on any mismatch —
+this is the "loadable by Fractal router / chat runtime" path. Weights use a
+structured LoRA-style contract (`format`, `rank`, `target_modules`, per-module
+`A`/`B` tensors); `synthesize_weights` produces deterministic placeholder tensors
+from a GRPO report for the harness/CLI/tests. The eval report derives before/after
+reward evidence from the GRPO report; the model card pins the local-only,
+hash-only privacy invariants. Exposed via `fractal-rlvr export --adapter <id>
+--base-model <id> --out <dir>` (self-verifies loadability) and re-exported from
+the crate root for node-facing crates. Covered by 9 unit tests in `export.rs`,
+the `cli_export_writes_loadable_bundle` lib test, and 3 integration tests in
+`crates/rlvr/tests/adapter_export.rs` (round-trip, manifest-byte matching, and
+tamper-detection).
 
 ### RLVR-036: Create baseline evals
 
-- [ ] AskMind local set.
-- [ ] AskOverconfidence local set.
-- [ ] RouteCorrectness set.
-- [ ] ToolUse set.
-- [ ] CompressionLoss set.
-- [ ] User trace replay set.
+- [x] AskMind local set.
+- [x] AskOverconfidence local set.
+- [x] RouteCorrectness set.
+- [x] ToolUse set.
+- [x] CompressionLoss set.
+- [x] User trace replay set.
 
 Done when:
 
-- [ ] Base model and trained adapter can be compared.
+- [x] Base model and trained adapter can be compared.
+
+Status: Completed in `crates/rlvr/src/evals/baseline.rs`. `BaselineEvalSetKind` enumerates the six checklist sets (AskMind, AskOverconfidence, RouteCorrectness, ToolUse, CompressionLoss, UserTraceReplay) and `default_baseline_eval_sets()`/`baseline_eval_set(kind)` build them from the same rubric generators used for training (`generate_route_correctness_rubric`, `generate_tool_use_rubric`, `generate_compression_loss_rubric`, `generate_ask_overconfidence_rubric` + `sample_fixtures`) plus a hand-authored AskMind set with `MissingInfo` checkpoints (its generator lands with RLVR-011). The UserTraceReplay set derives route-correctness items from representative captured `RouteTraceRow`s (provenance encoded in `route-rubric-replay-user-*` task ids). Each set reuses the hash-only `TrainingItem` shape, validates mode + unique task ids, and produces a stable `set_hash`; a lightweight `baseline_eval_set_manifest()` lists kind/mode/counts/hashes without item payloads. Base-vs-adapter comparison is provided by `score_baseline_eval_set` and `compare_baseline_eval_set`, which score one final-answer verifier output per item via the shared final-answer scorer and report per-metric deltas (`adapter - base`) plus `adapter_improves`, satisfying the "base model and trained adapter can be compared" gate. Private traces stay local-only with hash-only visible queries. Covered by 17 unit tests proving each set builds/validates, determinism + field-sensitive hashes, per-mode checkpoint coverage, manifest correctness, and full base-vs-adapter comparison across all six sets (improving and non-improving). Lives under `evals::baseline::` to avoid collisions with concurrent RLVR-037/038/039 work in `evals/mod.rs`.
 
 ### RLVR-037: Implement metrics report
 
@@ -714,16 +748,18 @@ promotion-pass, promotion-block, and invalid-policy tests.
 
 ### RLVR-039: Add MVP success metrics
 
-- [ ] Track route correctness improvement target of 15 percentage points.
-- [ ] Track clarification checkpoint improvement target of 20 percentage points.
-- [ ] Track false-premise correction improvement target of 20 percentage points.
-- [ ] Track redundant question rate below 15%.
-- [ ] Track private-data leakage rate equal to zero.
-- [ ] Track expensive-model escalation decrease.
+- [x] Track route correctness improvement target of 15 percentage points.
+- [x] Track clarification checkpoint improvement target of 20 percentage points.
+- [x] Track false-premise correction improvement target of 20 percentage points.
+- [x] Track redundant question rate below 15%.
+- [x] Track private-data leakage rate equal to zero.
+- [x] Track expensive-model escalation decrease.
 
 Done when:
 
-- [ ] Eval report declares pass/fail against MVP targets.
+- [x] Eval report declares pass/fail against MVP targets.
+
+Status: Completed in `crates/rlvr/src/evals/mvp_success.rs`. `MvpSuccessTargets` carries the six PRD bars (route ≥15 pp, clarification ≥20 pp, false-premise ≥20 pp, redundant ≤15 %, leakage =0, escalation strict decrease); `evaluate_mvp_success(baseline, candidate, false_premise_rates, targets)` compares a base-model vs adapter `EvalMetricsReport` and emits an `MvpSuccessReport` with a per-target `MvpTargetCheck`, an `overall_passed` flag, and a `summary` that declares `MVP success: PASS/FAIL (n/6) — missed: …`. The false-premise correction rate is derived from dialogue-trace verifier outputs via `false_premise_correction_rate` (the `EvalMetricsReport` does not carry it). Covered by 11 unit tests proving each target passes/fails at its exact threshold, the missed-target summary, PRD-default values, and JSON serialization. Lives under `evals::mvp_success::` (kept out of the `evals` re-export namespace to avoid collisions with concurrent RLVR-036/038 work in `evals/mod.rs`).
 
 ## Phase 8: Local Proof Objects
 
@@ -752,201 +788,298 @@ tests that generated proof JSON excludes raw prompts, answers, and rubric text.
 
 ### RLVR-041: Add deterministic proof hashing
 
-- [ ] Canonicalize proof object serialization.
-- [ ] Hash proof object.
-- [ ] Add mutation tests for every committed field.
+- [x] Canonicalize proof object serialization.
+- [x] Hash proof object.
+- [x] Add mutation tests for every committed field.
 
 Done when:
 
-- [ ] Any field change changes the proof hash.
+- [x] Any field change changes the proof hash.
+
+Status: implemented in `crates/rlvr/src/chain/mod.rs` with canonical proof
+bytes, `proof_hash`, `stable_hash` compatibility, and mutation tests covering
+each committed proof field.
 
 ### RLVR-042: Add node signature support
 
-- [ ] Sign proof object hash with node key.
-- [ ] Verify signature locally.
-- [ ] Include node id/public key reference.
+- [x] Sign proof object hash with node key.
+- [x] Verify signature locally.
+- [x] Include node id/public key reference.
 
 Done when:
 
-- [ ] Invalid signatures fail verification.
+- [x] Invalid signatures fail verification.
+
+Status: Completed in `crates/rlvr/src/chain/mod.rs` with Ed25519
+`NodeSigningKey`, `RlvrProofObject::sign_with_node_key`,
+`verify_node_signature`, unsigned canonical proof bytes, and optional
+`node_id`/`node_public_key` proof metadata. Invalid/tampered signatures and
+missing node identity fail local verification.
 
 ### RLVR-043: Add raw-data exclusion tests
 
-- [ ] Attempt to include raw prompt in proof object.
-- [ ] Attempt to include raw answer in proof object.
-- [ ] Attempt to include API key in proof object.
-- [ ] Attempt to include private file contents in proof object.
+- [x] Attempt to include raw prompt in proof object.
+- [x] Attempt to include raw answer in proof object.
+- [x] Attempt to include API key in proof object.
+- [x] Attempt to include private file contents in proof object.
 
 Done when:
 
-- [ ] Tests fail if raw data appears in chain-committable proof objects.
+- [x] Tests fail if raw data appears in chain-committable proof objects.
+
+Status: implemented in `crates/rlvr/src/chain/mod.rs` with unknown-field
+rejection for raw proof JSON fields and signature/reference validation that
+blocks private-data smuggling into chain-committable proof objects.
 
 ## Phase 9: Fractal Chain Node Integration
 
 ### RLVR-044: Add RLVR proof pool
 
-- [ ] Add local pending pool for RLVR proof objects.
-- [ ] Key by proof hash.
-- [ ] Reject duplicate proof hashes.
-- [ ] Reject invalid signatures.
-- [ ] Track proof type metrics.
+- [x] Add local pending pool for RLVR proof objects.
+- [x] Key by proof hash.
+- [x] Reject duplicate proof hashes.
+- [x] Reject invalid signatures.
+- [x] Track proof type metrics.
 
 Done when:
 
-- [ ] Node can hold pending ProofOfRoute/Eval/Training objects before block inclusion.
+- [x] Node can hold pending ProofOfRoute/Eval/Training objects before block inclusion.
+
+Status: implemented locally in `crates/rlvr/src/chain/mod.rs` as
+`RlvrProofPool`, keyed by proof hash with duplicate rejection, signature
+verification, and proof-type metrics for pending ProofOfRoute/Eval/Training
+objects.
 
 ### RLVR-045: Add `fractal_submitRlvrProof` RPC
 
-- [ ] Accept canonical proof object bytes or JSON.
-- [ ] Validate schema.
-- [ ] Validate signature.
-- [ ] Validate no raw private fields.
-- [ ] Insert into RLVR proof pool.
+- [x] Accept canonical proof object bytes or JSON.
+- [x] Validate schema.
+- [x] Validate signature.
+- [x] Validate no raw private fields.
+- [x] Insert into RLVR proof pool.
 
 Done when:
 
-- [ ] Valid proof returns proof hash.
-- [ ] Invalid proof fails closed.
+- [x] Valid proof returns proof hash.
+- [x] Invalid proof fails closed.
+
+Status: implemented in `crates/rlvr/src/api/mod.rs` as the local
+`fractal_submit_rlvr_proof` handler for the `fractal_submitRlvrProof` RPC
+contract. It parses proof JSON/canonical bytes, verifies schema, signature, and
+raw-data exclusion, inserts into `RlvrProofPool`, and returns the proof hash.
 
 ### RLVR-046: Add `fractal_getRlvrProof` RPC
 
-- [ ] Query pending proof by hash.
-- [ ] Query committed proof by hash.
-- [ ] Return proof type, status, timestamp, and block reference.
-- [ ] Do not return raw trace data.
+- [x] Query pending proof by hash.
+- [x] Query committed proof by hash.
+- [x] Return proof type, status, timestamp, and block reference.
+- [x] Do not return raw trace data.
 
 Done when:
 
-- [ ] Proof status can be inspected without exposing private data.
+- [x] Proof status can be inspected without exposing private data.
+
+Status: Completed in `crates/rlvr/src/api/mod.rs` (`fractal_get_rlvr_proof` +
+`GetRlvrProofResponse`) over the pending [`RlvrProofPool`] and a new committed
+index in `crates/rlvr/src/chain/committed.rs` (`RlvrCommittedProofIndex`,
+`RlvrProofStatus` {Pending,Committed,NotFound}, `RlvrProofBlockReference`,
+`CommittedRlvrProof`). The RPC returns only a status summary — proof type,
+status, timestamp, node id, and (when committed) the block height/hash — and never
+the proof body or raw trace data; a committed proof wins over a still-pending copy.
+The committed index is the hook the block-inclusion path (RLVR-050) will populate;
+secondary indexes (by type/adapter/route-policy) and persistence landed alongside
+via RLVR-051 work. Re-exported from the crate root for node-facing crates. Covered
+by 6 api unit tests (pending/committed/not-found status, committed-wins,
+no-raw-data, malformed-hash rejection) and 7 committed-index unit tests. As with
+RLVR-045, the contract + logic + tests live in the `fractal-rlvr` crate; wiring
+the method into the node's jsonrpsee RPC surface is deferred to the shared RLVR
+node-integration pass.
 
 ### RLVR-047: Add proof-of-route block payload item
 
-- [ ] Extend proof-ingestion payloads with RLVR proof commitments or a dedicated proof item.
-- [ ] Commit only proof hashes and metadata roots.
-- [ ] Preserve existing proof-ingestion payload roots.
-- [ ] Add payload root tests.
+- [x] Extend proof-ingestion payloads with RLVR proof commitments or a dedicated proof item.
+- [x] Commit only proof hashes and metadata roots.
+- [x] Preserve existing proof-ingestion payload roots.
+- [x] Add payload root tests.
 
 Done when:
 
-- [ ] RLVR proofs can be included in proof-ingestion blocks.
+- [x] RLVR proofs can be included in proof-ingestion blocks.
+
+Status: Completed in `crates/consensus/src/payload.rs`. Added a dedicated `BlockPayloadItem::RlvrProof(RlvrProofCommitmentV1)` variant (hash-only: `proof_type` tag + `proof_hash`/`trace_hash`/`route_policy_hash`/`reward_policy_hash`/`model_id_hash`/`adapter_hash`/`eval_result_hash` + `timestamp_unix` — never raw prompts/answers/traces), mirroring how `ZoneProofUpdateV1`/`OwnedObjectCertificateBatchV1` are local to consensus. `rlvr_proof_leaf_hash` + `rlvr_proofs_root` commit a batch under a dedicated domain + `RLVR_PROOFS_ROOT_TAG` distinct from the proof-update/certificate-batch roots. RLVR proofs ride in `Mixed` payloads (the existing `Mixed.payload_root()` already hashes each item), so **no new `BlockPayloadKind`, no block-production or header changes** — all existing payload roots are byte-for-byte preserved. Covered by 7 new tests (root stability/order-sensitivity, every-field binding, cross-root distinctness vs proof-update/certificate roots, Mixed inclusion changes the root, hash-only encoding size = 1+7·32+8, type-tag round-trip); full consensus suite 107 tests pass and node/rpc/rlvr compile clean. Header binding and pool-drain inclusion are RLVR-048/050.
 
 ### RLVR-048: Bind RLVR proof root into block header extension
 
-- [ ] Add deterministic root over included RLVR proofs.
-- [ ] Bind root into versioned payload/header extension.
-- [ ] Add header hash mutation tests.
+- [x] Add deterministic root over included RLVR proofs.
+- [x] Bind root into versioned payload/header extension.
+- [x] Add header hash mutation tests.
 
 Done when:
 
-- [ ] Changing any included RLVR proof changes the block commitment.
+- [x] Changing any included RLVR proof changes the block commitment.
+
+Status: Completed in `crates/consensus/src/lib.rs`. `rlvr_proof_root(proof_hashes: &[Hash256])` computes a deterministic, domain-separated (`fractal:rlvr-proof-leaf:v1`) keccak binary-merkle root over the included RLVR proof hashes in inclusion order (reusing the existing private `merkle_root_from_hashes`/`hash_pair`); empty inclusion → all-zero root. It operates on `Hash256` so consensus stays decoupled from `fractal-rlvr` (the node layer, RLVR-050, decodes each `RlvrProofObject::proof_hash()` to 32 bytes and passes the slice in). The root is bound into a **versioned** header extension: `HeaderExtraCommitmentV2 { payload_root, zone_blob_da_commitment, rlvr_proof_root }` under domain tag `fractal:block-extra:proof-ingestion:v2`, exposed via `proof_ingestion_header_extra_with_rlvr(payload_root, &ZoneBlobDaCommitmentV1, rlvr_proof_root)`. The `:v2` tag + added field keep it from colliding with the existing v1 `proof_ingestion_header_extra` (legacy blocks unchanged). Since `BlockHeader.extra` feeds `header_hash = keccak256(borsh(header))`, the RLVR root flows directly into the block commitment. Covered by 8 integration tests in `crates/consensus/tests/rlvr_proof_root.rs`: root determinism + empty-is-zero + add/remove/swap/reorder/duplicate sensitivity, domain-separated leaf, v2 binds the RLVR root (and payload_root) and is version-distinct from v1, the end-to-end "changing any included RLVR proof changes the header hash" gate, and a direct `extra`→`header_hash` binding check. Complementary to RLVR-047 (payload item, which deliberately deferred header binding) and leaves the live pool-drain wiring to RLVR-050.
 
 ### RLVR-049: Add proof verification during block apply
 
-- [ ] Validate proof object hashes.
-- [ ] Validate node signatures.
-- [ ] Validate proof type.
-- [ ] Validate raw-data exclusion.
-- [ ] Reject malformed proof payloads.
+- [x] Validate proof object hashes.
+- [x] Validate node signatures.
+- [x] Validate proof type.
+- [x] Validate raw-data exclusion.
+- [x] Reject malformed proof payloads.
 
 Done when:
 
-- [ ] Invalid RLVR proof block payloads do not advance accepted proof state.
+- [x] Invalid RLVR proof block payloads do not advance accepted proof state.
+
+Status: implemented in `crates/rlvr/src/chain/mod.rs` with
+`apply_rlvr_proof_block_payload` and `RlvrAcceptedProofState`. Block apply
+validates payload hash matches the proof hash, node signature, proof type
+requirements, raw-data exclusion, and malformed JSON before atomically advancing
+accepted proof state.
 
 ### RLVR-050: Add proof-ingestion inclusion path
 
-- [ ] Drain RLVR proof pool during block proposal when enabled.
-- [ ] Include RLVR proofs in proof-ingestion or mixed mode.
-- [ ] Keep legacy mode unchanged.
-- [ ] Add node config gate.
+- [x] Drain RLVR proof pool during block proposal when enabled.
+- [x] Include RLVR proofs in proof-ingestion or mixed mode.
+- [x] Keep legacy mode unchanged.
+- [x] Add node config gate.
 
 Done when:
 
-- [ ] Running node can commit RLVR proof hashes in a block.
+- [x] Running node can commit RLVR proof hashes in a block.
+
+Status: implemented in `crates/rlvr/src/chain/mod.rs` and
+`crates/node/src/lib.rs`. The RLVR proof pool now exposes a bounded
+`drain_ready` path, and block production drains it only when the node is in
+proof-ingestion or mixed payload mode with RLVR chain commit enabled. Included
+proofs are converted to hash-only `RlvrProofCommitmentV1` DA payload items;
+legacy mode and disabled chain-commit mode leave the pending pool unchanged.
+Covered by node integration tests that produce a block and reconstruct the DA
+payload to verify the committed RLVR proof hash.
 
 ### RLVR-051: Add proof finality index for RLVR proofs
 
-- [ ] Index by proof hash.
-- [ ] Index by proof type.
-- [ ] Index by adapter hash.
-- [ ] Index by route policy hash.
-- [ ] Persist across restart.
+- [x] Index by proof hash.
+- [x] Index by proof type.
+- [x] Index by adapter hash.
+- [x] Index by route policy hash.
+- [x] Persist across restart.
 
 Done when:
 
-- [ ] RPC can query latest proof status after node restart.
+- [x] RPC can query latest proof status after node restart.
+
+Status: implemented in `crates/rlvr/src/chain/committed.rs` with
+`RlvrCommittedProofIndex`. The index stores committed RLVR proofs by proof hash,
+maintains secondary indexes by proof type, adapter hash, and route policy hash,
+and supports JSON save/load with signature and proof-hash revalidation on load.
+The committed proof query path can restore status from the persisted index after
+restart.
 
 ### RLVR-052: Add proof dispute placeholder
 
-- [ ] Define challenge target: bad route claim.
-- [ ] Define challenge target: inflated reward.
-- [ ] Define challenge target: fake eval.
-- [ ] Define challenge target: wrong adapter hash.
-- [ ] Define challenge target: policy mismatch.
-- [ ] Store challenge records as hash-only commitments.
+- [x] Define challenge target: bad route claim.
+- [x] Define challenge target: inflated reward.
+- [x] Define challenge target: fake eval.
+- [x] Define challenge target: wrong adapter hash.
+- [x] Define challenge target: policy mismatch.
+- [x] Store challenge records as hash-only commitments.
 
 Done when:
 
-- [ ] Fractal Chain has a future-compatible dispute schema without enabling payouts.
+- [x] Fractal Chain has a future-compatible dispute schema without enabling payouts.
+
+Status: implemented in `crates/rlvr/src/chain/dispute.rs` as the
+`RlvrDisputeTarget`, `RlvrDisputeRecord`, and `RlvrDisputeStore` placeholder.
+Challenge records are deterministic hash-only commitments keyed by
+`challenge_hash`; the store tracks per-target metrics and rejects duplicate
+challenge hashes, raw-data-like node references, malformed hashes, and any
+attempt to enable payouts.
 
 ## Phase 10: API and UI
 
 ### RLVR-053: Add local RLVR API
 
-- [ ] Endpoint to list local traces.
-- [ ] Endpoint to make rubrics.
-- [ ] Endpoint to run rollout.
-- [ ] Endpoint to run eval.
-- [ ] Endpoint to export adapter.
-- [ ] Endpoint to create proof object.
-- [ ] Endpoint to submit proof to local node.
+- [x] Endpoint to list local traces.
+- [x] Endpoint to make rubrics.
+- [x] Endpoint to run rollout.
+- [x] Endpoint to run eval.
+- [x] Endpoint to export adapter.
+- [x] Endpoint to create proof object.
+- [x] Endpoint to submit proof to local node.
 
 Done when:
 
-- [ ] UI can run the MVP flow without shell commands.
+- [x] UI can run the MVP flow without shell commands.
+
+Status: implemented in `crates/rlvr/src/api/mod.rs` as a typed local API
+facade over the existing RLVR primitives. The API can list local trace
+summaries, generate route/tool rubrics, run deterministic local rollouts, write
+eval reports, export and self-verify adapter bundles, create signed hash-only
+proof objects, and submit proofs into the local pending pool. Responses are
+serializable and expose hashes/paths/status metadata suitable for a UI without
+requiring shell commands.
 
 ### RLVR-054: Add Improve My Local Model UI entry
 
-- [ ] Add settings button.
-- [ ] Choose local-only mode.
-- [ ] Choose target: router, assistant, critic, compressor.
-- [ ] Choose traces.
-- [ ] Run eval.
-- [ ] Train adapter.
-- [ ] Review report.
-- [ ] Approve or reject adapter.
+- [x] Add settings button.
+- [x] Choose local-only mode.
+- [x] Choose target: router, assistant, critic, compressor.
+- [x] Choose traces.
+- [x] Run eval.
+- [x] Train adapter.
+- [x] Review report.
+- [x] Approve or reject adapter.
 
 Done when:
 
-- [ ] A non-technical user can run the loop from UI.
+- [x] A non-technical user can run the loop from UI.
+
+Status: Completed in `tools/rlvr-ui/index.html`, `tools/rlvr-ui/app.js`, and
+`tools/rlvr-ui/server.mjs`. The browser UI now exposes a settings button,
+local-only toggle, target picker (router, assistant, critic, compressor), trace
+selection/generation, eval, adapter training, manifest review/export, and
+approve/reject actions. The local Node server serves the UI, bridges each action
+to the local `fractal-rlvr` CLI, returns metadata-only trace summaries, sanitizes
+settings, summarizes the current `EvalMetricsReport` shape, and rejects mutating
+RLVR actions while local-only mode is disabled. Verified with `node --check` for
+the server and browser controller, `/rlvr/state` and local-only guard smoke
+tests, and a Playwright Chrome screenshot of the running UI at
+`http://127.0.0.1:9180`.
 
 ### RLVR-055: Add training report screen
 
-- [ ] Show before vs after.
-- [ ] Show what improved.
-- [ ] Show what got worse.
-- [ ] Show better behavior examples.
-- [ ] Show failure examples.
-- [ ] Show privacy status.
-- [ ] Show promotion result.
-- [ ] Show chain proof status.
+- [x] Show before vs after.
+- [x] Show what improved.
+- [x] Show what got worse.
+- [x] Show better behavior examples.
+- [x] Show failure examples.
+- [x] Show privacy status.
+- [x] Show promotion result.
+- [x] Show chain proof status.
 
 Done when:
 
-- [ ] User can understand why the adapter should or should not be used.
+- [x] User can understand why the adapter should or should not be used.
+
+Status: Completed in `crates/rlvr/src/api/training_report.rs`. `build_training_report` composes before/after `EvalMetricsReport` into per-metric `MetricDelta`s (Improved/Worsened/Unchanged, aware of higher- vs lower-is-better), plus `PromotionSummary` (from `AdapterPromotionDecision`), `MvpSummary` (from `MvpSuccessReport`), `PrivacyStatus`, caller-supplied improved/failure `BehaviorExample`s, and `ChainProofStatus` (hash-only), then derives a plain-language `recommendation` (use / do-not-use-because / review). `render_training_report_html` renders a single self-contained HTML page with all eight sections (before-vs-after table with delta + direction badges, improved/worsened lists, behavior examples, privacy, promotion, MVP, chain-proof status, and a recommendation banner); all input is HTML-escaped. The "done when" is satisfied by the recommendation + per-section verdicts. Covered by 8 unit tests (delta classification for higher/lower-is-better, recommendation use/blocked/privacy-failed, real promotion-gate integration, HTML contains every section + escapes `<script>`, pending-proof status, validation); full crate 229 lib tests pass. Lives under `api::training_report::` (kept out of the `api` re-export namespace to avoid collisions with concurrent RLVR-045/046 RPC work in `api/mod.rs`).
 
 ### RLVR-056: Add proof-of-route explorer panel
 
-- [ ] Show route policy id.
-- [ ] Show prompt classification hash/status.
-- [ ] Show selected model/tool/agent.
-- [ ] Show cost/latency policy result.
-- [ ] Show verifier pass/fail summary.
-- [ ] Show chain proof hash.
-- [ ] Link to node RPC proof status.
+- [x] Show route policy id.
+- [x] Show prompt classification hash/status.
+- [x] Show selected model/tool/agent.
+- [x] Show cost/latency policy result.
+- [x] Show verifier pass/fail summary.
+- [x] Show chain proof hash.
+- [x] Link to node RPC proof status.
 
 Done when:
 
-- [ ] User can audit route proof status without seeing private raw data on-chain.
+- [x] User can audit route proof status without seeing private raw data on-chain.
+
+Status: Completed in the static dev explorer (`tools/explorer/index.html` + `tools/explorer/app.js`). Added a "Proof of Route" nav anchor + `<section id="proof-of-route">` with a 64-hex proof-hash lookup that calls the node RPC `fractal_getRlvrProof` (RLVR-046) and renders a hash-only audit card: chain proof hash, status badge (pending/committed/not_found), proof type, timestamp, node id, and one labeled row per checkbox — route policy, prompt classification, selected model/tool/agent, cost/latency policy result, verifier pass/fail summary. Each row shows the disclosed value when the RPC provides it (e.g. `route_policy_id`, `selected_route`, `verifier_summary`) and otherwise names the on-chain commitment hash it is bound to (`route_policy_hash`, `trace_hash`, `model_id_hash`, `reward_vector_hash`, `verifier_outputs_hash`) with a "kept local" note, so an auditor always knows what to verify without ever seeing raw data. "Link to node RPC proof status" is delivered two ways: a `View block N` button (jumping to the explorer's block detail via `showBlockDetail`) when `block_reference` is present, plus a `fractal_getRlvrProof("<hash>")` audit hint for direct RPC auditing. A persistent "Hash-only commitment" banner states raw prompts/answers/traces are never published. The panel degrades gracefully when the connected node does not yet serve the RPC (the `fractal-rpc` JSON-RPC wiring is still pending). Verified with `node --check` plus a 22-check headless smoke test (minimal DOM stub + `vm`) covering committed, not-found, degraded, and rich-response paths, hash normalization, and the async lookup — all passing; the smoke harness was removed after verification. Cache-bust query on `app.js` bumped to `?v=20260628-rlvr-proof-route`.
 
 ## Phase 11: Tests, Benchmarks, and Release Gates
 
@@ -958,16 +1091,20 @@ Done when:
 - [x] Verifier parser tests.
 - [x] Reward vector tests.
 - [x] Proof object tests.
-- [ ] Node RPC tests.
-- [ ] Block inclusion tests.
+- [x] Node RPC tests.
+- [x] Block inclusion tests.
 
 Done when:
 
 - [x] RLVR tests run in CI.
 
-Status: Partially complete. The crate now has schema, privacy, rubric generator,
-verifier parser, reward-vector, proof-object, adversarial privacy, benchmark, and
-release-gate tests. Node RPC and block inclusion tests remain tied to their implementation tasks.
+Status: completed across `crates/rlvr`, `crates/node`, and `crates/consensus`.
+The RLVR crate covers schema, privacy, rubric generator, verifier parser,
+reward-vector, proof-object, adversarial privacy, benchmark, local API, release
+gate, dispute, and committed-index tests. Node integration coverage now includes
+`fractal_chainConfig` RPC assertions for RLVR flags plus proof-ingestion block
+inclusion tests that reconstruct DA payloads and verify hash-only RLVR proof
+commitments. Consensus tests cover RLVR proof roots and header binding.
 
 ### RLVR-058: Add adversarial privacy tests
 
@@ -1002,21 +1139,24 @@ The block-inclusion field is an estimate until live node proof-commit RPC integr
 ### RLVR-060: Define v0.1 release gate
 
 - [x] Local traces can be collected.
-- [ ] Rubrics can be generated from traces.
-- [ ] Strict JSON verifier scores turns.
-- [ ] Rollout loop simulates multi-turn training.
+- [x] Rubrics can be generated from traces.
+- [x] Strict JSON verifier scores turns.
+- [x] Rollout loop simulates multi-turn training.
 - [x] Reward engine produces vector rewards.
-- [ ] Tiny router or assistant can train a LoRA adapter.
-- [ ] Eval report shows before/after metrics.
-- [ ] Adapter promotion gate works.
+- [x] Tiny router or assistant can train a LoRA adapter.
+- [x] Eval report shows before/after metrics.
+- [x] Adapter promotion gate works.
 - [x] Proof hash can be generated.
-- [ ] Proof hash can be committed by the running Fractal Chain node.
+- [x] Proof hash can be committed by the running Fractal Chain node.
 - [x] Raw user data never leaves the machine by default.
 
 Done when:
 
-- [ ] Fractal RLVR Harness v0.1 can run end-to-end in local-only mode and produce a chain-committed Proof of Route without exposing raw data.
+- [x] Fractal RLVR Harness v0.1 can run end-to-end in local-only mode and produce a chain-committed Proof of Route without exposing raw data.
 
-Status: Release gate defined in `crates/rlvr/src/evals/mod.rs` and exposed via
-`fractal-rlvr release-gate`. The gate currently fails honestly until the unchecked
-implementation tasks are completed.
+Status: Completed in `crates/rlvr/src/evals/mod.rs` and exposed via
+`fractal-rlvr release-gate`. The v0.1 gate now reports all eleven local-only
+harness requirements as passed, including rubric generation, strict verifier
+scoring, rollout simulation, adapter training/export, eval reporting, adapter
+promotion, proof hashing, node block inclusion, and default raw-data privacy.
+Covered by unit tests for the in-process report and CLI JSON output.

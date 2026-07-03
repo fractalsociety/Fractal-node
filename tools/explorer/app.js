@@ -705,9 +705,308 @@ async function lookupTx() {
   await lookupTxWithHash(raw);
 }
 
+/** RLVR-056: Proof-of-route explorer panel.
+ *
+ * Audits an RLVR Proof-of-Route / Eval / Training commitment via the node RPC
+ * `fractal_getRlvrProof`. Renders only hash-only / status fields — chain proof
+ * hash, route-policy + model references, verifier summary, block reference —
+ * never raw prompts, answers, or traces. Degrades gracefully when the connected
+ * node does not yet serve the RPC. */
+
+/** 64 hex chars, optional 0x prefix; returned lowercase WITHOUT 0x (matches the
+ * 64-char hex the node stores / validates for RLVR proof hashes). */
+function normalizeProofHash(raw) {
+  let s = String(raw == null ? "" : raw).trim();
+  if (!s) return null;
+  if (s.startsWith("0x") || s.startsWith("0X")) s = s.slice(2);
+  if (!/^[0-9a-fA-F]{64}$/.test(s)) return null;
+  return s.toLowerCase();
+}
+
+function rlvrStatusBadge(status) {
+  const badge = document.createElement("span");
+  const label =
+    status === "committed"
+      ? "Committed"
+      : status === "pending"
+        ? "Pending"
+        : status === "not_found"
+          ? "Not found"
+          : "Unknown";
+  badge.className = `pill rlvr-status rlvr-status-${status || "unknown"}`;
+  badge.textContent = label;
+  return badge;
+}
+
+function rlvrMono(text) {
+  const span = document.createElement("span");
+  span.className = "mono";
+  span.textContent = String(text);
+  return span;
+}
+
+/** First non-empty value among `keys` on `obj`, else null. Lets the panel enrich
+ * automatically as the proof RPC grows beyond the slim status view. */
+function rlvrPick(obj, keys) {
+  if (!obj || typeof obj !== "object") return null;
+  for (const k of keys) {
+    const v = obj[k];
+    if (v !== undefined && v !== null && v !== "") return { key: k, value: v };
+  }
+  return null;
+}
+
+function rlvrRow(list, label, valueEl, hint) {
+  const dt = document.createElement("dt");
+  dt.textContent = label;
+  const dd = document.createElement("dd");
+  if (valueEl) dd.appendChild(valueEl);
+  else dd.textContent = "—";
+  if (hint) {
+    const small = document.createElement("small");
+    small.className = "muted";
+    small.textContent = ` ${hint}`;
+    dd.appendChild(small);
+  }
+  list.appendChild(dt);
+  list.appendChild(dd);
+}
+
+function renderRlvrProofPanel(out, resp, queryHash) {
+  out.innerHTML = "";
+
+  const banner = document.createElement("p");
+  banner.className = "muted";
+  banner.innerHTML =
+    "<strong>Hash-only commitment.</strong> Raw prompts, answers, private files, and full traces " +
+    "are never published on-chain — only hashes, policy/model references, timestamps, and node signatures.";
+  out.appendChild(banner);
+
+  // Graceful degradation: the connected node does not serve the RPC yet.
+  if (!resp || typeof resp !== "object") {
+    const note = document.createElement("p");
+    note.className = "err";
+    note.textContent =
+      "This node did not respond to fractal_getRlvrProof. The RLVR proof RPC may not be enabled on the connected node yet.";
+    out.appendChild(note);
+    const rpcHint = document.createElement("p");
+    rpcHint.className = "muted";
+    rpcHint.textContent = "Audit directly via ";
+    const code = document.createElement("code");
+    code.textContent = `fractal_getRlvrProof("${queryHash}")`;
+    rpcHint.appendChild(code);
+    rpcHint.appendChild(document.createTextNode(" once the node serves it."));
+    out.appendChild(rpcHint);
+    return;
+  }
+
+  const card = document.createElement("article");
+  card.className = "panel";
+
+  const title = document.createElement("div");
+  title.className = "panel-title";
+  const h3 = document.createElement("h3");
+  const proofType = rlvrPick(resp, ["proof_type", "proofType"]);
+  h3.textContent = proofType ? `Proof-of-route — ${proofType.value}` : "Proof-of-route";
+  title.appendChild(h3);
+  title.appendChild(rlvrStatusBadge(resp.status));
+  card.appendChild(title);
+
+  if (resp.found === false || resp.status === "not_found") {
+    const nf = document.createElement("p");
+    nf.className = "err";
+    nf.textContent = "No pending or committed RLVR proof for this hash on the connected node.";
+    card.appendChild(nf);
+  }
+
+  const list = document.createElement("dl");
+  list.className = "rlvr-proof-dl";
+
+  // Chain proof hash (the on-chain commitment id).
+  rlvrRow(list, "Chain proof hash", rlvrMono(resp.proof_hash || queryHash));
+  // Status.
+  rlvrRow(list, "Status", rlvrStatusBadge(resp.status));
+
+  // Timestamp.
+  const ts = rlvrPick(resp, ["timestamp_ms", "timestamp"]);
+  if (ts) {
+    const ms = Number(ts.value);
+    rlvrRow(
+      list,
+      "Timestamp",
+      rlvrMono(Number.isFinite(ms) ? `${new Date(ms).toISOString()} (${ms} ms)` : String(ts.value)),
+    );
+  }
+
+  // Node.
+  const node = rlvrPick(resp, ["node_id", "nodeId"]);
+  if (node) rlvrRow(list, "Node", rlvrMono(String(node.value)));
+
+  // Route policy (id when disclosed, else the committed hash).
+  const route = rlvrPick(resp, [
+    "route_policy_id",
+    "routePolicyId",
+    "route_policy_hash",
+    "routePolicyHash",
+  ]);
+  rlvrRow(
+    list,
+    "Route policy",
+    route ? rlvrMono(String(route.value)) : null,
+    route
+      ? route.key.includes("hash")
+        ? "committed as route_policy_hash; raw policy id kept local"
+        : ""
+      : "committed on-chain as route_policy_hash; raw policy id kept local",
+  );
+
+  // Prompt classification (hash/status).
+  const prompt = rlvrPick(resp, [
+    "prompt_hash",
+    "promptHash",
+    "trace_hash",
+    "traceHash",
+    "redacted_trace_hash",
+  ]);
+  rlvrRow(
+    list,
+    "Prompt classification",
+    prompt ? rlvrMono(String(prompt.value)) : null,
+    prompt ? "" : "committed on-chain as trace_hash; raw prompt never published",
+  );
+
+  // Selected model / tool / agent.
+  const model = rlvrPick(resp, [
+    "selected_route",
+    "selectedRoute",
+    "model_id_hash",
+    "modelIdHash",
+  ]);
+  rlvrRow(
+    list,
+    "Selected model / tool / agent",
+    model ? rlvrMono(String(model.value)) : null,
+    model ? "" : "committed on-chain as model_id_hash; selection detail kept local",
+  );
+
+  // Cost / latency policy result.
+  const cost = rlvrPick(resp, [
+    "cost_estimate",
+    "costEstimate",
+    "latency_ms",
+    "latencyMs",
+    "reward_vector_hash",
+    "rewardVectorHash",
+  ]);
+  rlvrRow(
+    list,
+    "Cost / latency policy result",
+    cost ? rlvrMono(String(cost.value)) : null,
+    cost ? "" : "kept local; only reward_vector_hash is committed on-chain",
+  );
+
+  // Verifier pass/fail summary.
+  const verifier = rlvrPick(resp, [
+    "verifier_summary",
+    "verifierSummary",
+    "verifier_pass",
+    "verifierPass",
+    "verifier_outputs_hash",
+    "verifierOutputsHash",
+  ]);
+  rlvrRow(
+    list,
+    "Verifier pass/fail summary",
+    verifier ? rlvrMono(String(verifier.value)) : null,
+    verifier ? "" : "committed on-chain as verifier_outputs_hash; pass/fail detail kept local",
+  );
+
+  // Block reference + in-explorer link to node RPC proof status.
+  const blockRef = resp.block_reference || resp.blockReference;
+  if (blockRef && typeof blockRef === "object") {
+    const frag = document.createDocumentFragment();
+    const height = blockRef.block_height ?? blockRef.blockHeight;
+    const bhash = blockRef.block_hash ?? blockRef.blockHash;
+    if (height !== undefined && height !== null) {
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "ghost-link";
+      btn.textContent = `View block ${typeof height === "number" ? numToHex(height) : height}`;
+      btn.addEventListener("click", () => {
+        const tag = typeof height === "number" ? numToHex(height) : String(height);
+        const blocks = document.getElementById("blocks");
+        if (blocks) blocks.scrollIntoView({ behavior: "smooth", block: "nearest" });
+        showBlockDetail(tag);
+      });
+      frag.appendChild(btn);
+    }
+    if (bhash) {
+      const sep = document.createElement("span");
+      sep.className = "muted";
+      sep.textContent = " hash ";
+      frag.appendChild(sep);
+      frag.appendChild(rlvrMono(String(bhash)));
+    }
+    rlvrRow(list, "Block reference (proof status)", frag);
+  } else if (resp.status === "pending") {
+    rlvrRow(list, "Block reference (proof status)", null, "pending — not yet included in a block");
+  }
+
+  card.appendChild(list);
+
+  // Node RPC audit hint.
+  const rpcLine = document.createElement("p");
+  rpcLine.className = "muted";
+  rpcLine.textContent = "Audit directly via ";
+  const code = document.createElement("code");
+  code.textContent = `fractal_getRlvrProof("${resp.proof_hash || queryHash}")`;
+  rpcLine.appendChild(code);
+  rpcLine.appendChild(document.createTextNode(" on the connected node."));
+  card.appendChild(rpcLine);
+
+  out.appendChild(card);
+}
+
+async function lookupRlvrProofByHash(raw) {
+  const out = document.getElementById("rlvrProofOut");
+  if (!out) return;
+  out.textContent = "…";
+  const h = normalizeProofHash(raw);
+  if (!h) {
+    out.innerHTML =
+      '<p class="err">Enter a 64-hex RLVR proof hash (with or without a <code>0x</code> prefix).</p>';
+    return;
+  }
+  const input = document.getElementById("rlvrProofHash");
+  if (input) input.value = h;
+
+  let resp = null;
+  try {
+    resp = await rpc("fractal_getRlvrProof", [h]);
+  } catch (_e) {
+    resp = null; // node does not expose the RLVR proof RPC yet — degrade gracefully
+  }
+  renderRlvrProofPanel(out, resp, h);
+}
+
+async function lookupRlvrProof() {
+  const raw = document.getElementById("rlvrProofHash").value;
+  await lookupRlvrProofByHash(raw);
+}
+
 document.getElementById("refresh").onclick = () => refresh();
 document.getElementById("lookupAcct").onclick = lookupAccount;
 document.getElementById("lookupTx").onclick = lookupTx;
+document.getElementById("lookupRlvrProof").onclick = lookupRlvrProof;
+const rlvrProofHashInput = document.getElementById("rlvrProofHash");
+if (rlvrProofHashInput) {
+  rlvrProofHashInput.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      lookupRlvrProof();
+    }
+  });
+}
 const fillH = document.getElementById("fillHardhat0");
 if (fillH) {
   fillH.addEventListener("click", () => {

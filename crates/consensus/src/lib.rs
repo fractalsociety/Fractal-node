@@ -1641,6 +1641,62 @@ pub fn proof_ingestion_header_extra(
     Ok(keccak256(&bytes))
 }
 
+/// RLVR-048: domain-separated leaf hash for a single included RLVR proof, keyed
+/// by its 32-byte `proof_hash`. Domain separation keeps an RLVR proof hash from
+/// colliding with any other header-extra commitment input (proof-update leaf,
+/// tx hash, etc.) when fed into the shared merkle helper.
+fn rlvr_proof_leaf_hash(proof_hash: &Hash256) -> Hash256 {
+    let mut bytes = b"fractal:rlvr-proof-leaf:v1".to_vec();
+    bytes.extend_from_slice(proof_hash);
+    keccak256(&bytes)
+}
+
+/// RLVR-048: deterministic root over the RLVR proofs included in a block.
+///
+/// Each included proof is identified by its 32-byte `proof_hash` (computed off
+/// this crate — e.g. blake3 of the proof's canonical bytes in `fractal-rlvr`).
+/// The root is a keccak-based binary merkle root over domain-separated leaves,
+/// taken in inclusion order, so adding, removing, swapping, or reordering any
+/// included proof changes the root. An empty inclusion set commits to the
+/// all-zero root (the block carries no RLVR proofs).
+#[must_use]
+pub fn rlvr_proof_root(proof_hashes: &[Hash256]) -> Hash256 {
+    let leaves: Vec<Hash256> = proof_hashes.iter().map(rlvr_proof_leaf_hash).collect();
+    merkle_root_from_hashes(&leaves)
+}
+
+/// RLVR-048: versioned block-header extension commitment that additionally
+/// binds the root over included RLVR proofs. Supersedes
+/// [`HeaderExtraCommitmentV1`] for blocks that commit RLVR proofs; the distinct
+/// domain tag (`:v2`) and added `rlvr_proof_root` field keep the v1 and v2
+/// commitments from colliding.
+#[derive(BorshSerialize)]
+struct HeaderExtraCommitmentV2 {
+    payload_root: Hash256,
+    zone_blob_da_commitment: Hash256,
+    rlvr_proof_root: Hash256,
+}
+
+/// RLVR-048: produce the block-header `extra` commitment that binds the
+/// proof-ingestion `payload_root`, the zone-blob DA commitment, AND the root
+/// over included RLVR proofs. Compute the `rlvr_proof_root` argument with
+/// [`rlvr_proof_root`] from the included proof hashes (empty slice when the
+/// block includes no RLVR proofs).
+pub fn proof_ingestion_header_extra_with_rlvr(
+    payload_root: Hash256,
+    zone_blob_da_commitment: &ZoneBlobDaCommitmentV1,
+    rlvr_proof_root: Hash256,
+) -> Result<Hash256, std::io::Error> {
+    let body = HeaderExtraCommitmentV2 {
+        payload_root,
+        zone_blob_da_commitment: zone_blob_da_commitment_hash(zone_blob_da_commitment)?,
+        rlvr_proof_root,
+    };
+    let mut bytes = b"fractal:block-extra:proof-ingestion:v2".to_vec();
+    bytes.extend_from_slice(&borsh::to_vec(&body)?);
+    Ok(keccak256(&bytes))
+}
+
 pub fn verify_zone_blob_da_header(
     header: &BlockHeader,
     sidecar: &DaSidecar,

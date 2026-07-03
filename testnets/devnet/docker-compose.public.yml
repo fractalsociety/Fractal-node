@@ -1,0 +1,17 @@
+# Public devnet override for a remote FractalChain server.
+#
+# Usage:
+#   docker compose -f testnets/devnet/docker-compose.yml -f testnets/devnet/docker-compose.public.yml up -d --build node faucet
+#
+# This keeps the base local-only ports and additionally exposes the documented
+# public devnet endpoints:
+#   RPC:    http://<server>:8545
+#   Faucet: http://<server>:8088/fund
+services:
+  node:
+    ports:
+      - "8545:8545"
+
+  faucet:
+    ports:
+      - "8088:8088"
