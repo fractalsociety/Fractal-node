@@ -79,5 +79,12 @@ test = false
 doc = false
 bench = false
 
+[[bin]]
+name = "life_payout_conservation"
+path = "fuzz_targets/life_payout_conservation.rs"
+test = false
+doc = false
+bench = false
+
 [workspace]
 members = ["."]

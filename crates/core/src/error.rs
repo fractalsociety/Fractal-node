@@ -55,4 +55,10 @@ pub enum ExecError {
     BelowMinValidatorStake,
     #[error("protocol emission would exceed max supply")]
     SupplyCapExceeded,
+    #[error("intelligence payout exceeds available emission pool")]
+    InsufficientIntelligencePool,
+    #[error("provenance bond is below required minimum")]
+    BelowProvenanceBond,
+    #[error("duplicate life artifact commitment")]
+    DuplicateLifeArtifact,
 }

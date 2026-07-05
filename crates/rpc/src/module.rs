@@ -525,6 +525,11 @@ pub struct RpcSupplyResponse {
     pub provider_rollover_wei: String,
     pub consensus_rollover_wei: String,
     pub intelligence_rollover_wei: String,
+    pub life_payout_count: u64,
+    pub life_vesting_count: u64,
+    pub provenance_bond_count: u64,
+    pub feedback_artifact_count: u64,
+    pub sealed_sale_count: u64,
 }
 
 fn hash_text(value: &str) -> [u8; 32] {
@@ -1160,6 +1165,11 @@ pub trait ChainInteraction: Send {
             provider_rollover_wei: "0x0".to_string(),
             consensus_rollover_wei: "0x0".to_string(),
             intelligence_rollover_wei: "0x0".to_string(),
+            life_payout_count: 0,
+            life_vesting_count: 0,
+            provenance_bond_count: 0,
+            feedback_artifact_count: 0,
+            sealed_sale_count: 0,
         }
     }
 }

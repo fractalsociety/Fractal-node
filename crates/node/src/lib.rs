@@ -1611,6 +1611,11 @@ impl ChainInteraction for NodeInner {
                 "0x{:x}",
                 self.state.emission_intelligence_rollover_wei
             ),
+            life_payout_count: self.state.life_payouts.len() as u64,
+            life_vesting_count: self.state.life_vesting.len() as u64,
+            provenance_bond_count: self.state.life_provenance_bonds.len() as u64,
+            feedback_artifact_count: self.state.life_feedback_artifacts.len() as u64,
+            sealed_sale_count: self.state.life_sealed_sales.len() as u64,
         }
     }
 

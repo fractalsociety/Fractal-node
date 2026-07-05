@@ -66,7 +66,9 @@ async fn life_command_rpc_mines_and_indexes_events() {
 
 #[tokio::test]
 async fn life_command_rpc_accepts_extended_economic_command_kinds() {
-    let rpc_ctx: SharedChain = Arc::new(Mutex::new(NodeInner::devnet()));
+    let mut node = NodeInner::devnet();
+    node.state.emission_intelligence_pool_wei = 1_000;
+    let rpc_ctx: SharedChain = Arc::new(Mutex::new(node));
     let module = build_module(rpc_ctx);
 
     for kind in [

@@ -67,6 +67,11 @@ pub struct State {
     pub life_commands: BTreeMap<fractal_crypto::Hash256, StoredLifeCommand>,
     pub life_events: Vec<LifeChainEvent>,
     pub life_reaper_epochs: BTreeSet<u64>,
+    pub life_payouts: Vec<LifePayoutRecord>,
+    pub life_vesting: BTreeMap<fractal_crypto::Hash256, LifeVestingEntry>,
+    pub life_provenance_bonds: BTreeMap<fractal_crypto::Hash256, ProvenanceBondRecord>,
+    pub life_feedback_artifacts: BTreeMap<fractal_crypto::Hash256, FeedbackArtifactRecord>,
+    pub life_sealed_sales: BTreeMap<fractal_crypto::Hash256, SealedSaleRecord>,
     /// Monotonic versions for owned objects whose version is not already the account nonce.
     pub owned_object_versions: BTreeMap<OwnedObjectId, u64>,
     /// Protocol-native FRAC minted by emission, excluding devnet faucet premine.
@@ -114,6 +119,11 @@ impl Default for State {
             life_commands: BTreeMap::new(),
             life_events: Vec::new(),
             life_reaper_epochs: BTreeSet::new(),
+            life_payouts: Vec::new(),
+            life_vesting: BTreeMap::new(),
+            life_provenance_bonds: BTreeMap::new(),
+            life_feedback_artifacts: BTreeMap::new(),
+            life_sealed_sales: BTreeMap::new(),
             owned_object_versions: BTreeMap::new(),
             protocol_minted_wei: 0,
             protocol_burned_wei: 0,
@@ -157,6 +167,64 @@ pub struct LifeChainEvent {
     pub soul_id_hash: fractal_crypto::Hash256,
     pub epoch: u64,
     pub amount_micro_credits: u128,
+    pub payload_hash: fractal_crypto::Hash256,
+}
+
+#[derive(BorshSerialize, BorshDeserialize, Clone, Debug, PartialEq, Eq)]
+pub enum LifePayoutKind {
+    Primary,
+    Royalty,
+    Burn,
+}
+
+#[derive(BorshSerialize, BorshDeserialize, Clone, Debug, PartialEq, Eq)]
+pub struct LifePayoutRecord {
+    pub payout_id: fractal_crypto::Hash256,
+    pub command_id: fractal_crypto::Hash256,
+    pub kind: LifePayoutKind,
+    pub beneficiary_hash: fractal_crypto::Hash256,
+    pub epoch: u64,
+    pub amount_wei: u128,
+    pub vesting_release_epoch: u64,
+}
+
+#[derive(BorshSerialize, BorshDeserialize, Clone, Debug, PartialEq, Eq)]
+pub struct LifeVestingEntry {
+    pub command_id: fractal_crypto::Hash256,
+    pub beneficiary_hash: fractal_crypto::Hash256,
+    pub epoch: u64,
+    pub amount_wei: u128,
+    pub release_epoch: u64,
+    pub burned: bool,
+}
+
+#[derive(BorshSerialize, BorshDeserialize, Clone, Debug, PartialEq, Eq)]
+pub struct ProvenanceBondRecord {
+    pub command_id: fractal_crypto::Hash256,
+    pub artifact_hash: fractal_crypto::Hash256,
+    pub owner_hash: Option<fractal_crypto::Hash256>,
+    pub signer: Address,
+    pub epoch: u64,
+    pub bond_wei: u128,
+    pub burned: bool,
+}
+
+#[derive(BorshSerialize, BorshDeserialize, Clone, Debug, PartialEq, Eq)]
+pub struct FeedbackArtifactRecord {
+    pub command_id: fractal_crypto::Hash256,
+    pub artifact_hash: fractal_crypto::Hash256,
+    pub contributor_hash: Option<fractal_crypto::Hash256>,
+    pub epoch: u64,
+    pub payload_hash: fractal_crypto::Hash256,
+}
+
+#[derive(BorshSerialize, BorshDeserialize, Clone, Debug, PartialEq, Eq)]
+pub struct SealedSaleRecord {
+    pub command_id: fractal_crypto::Hash256,
+    pub artifact_hash: fractal_crypto::Hash256,
+    pub buyer_hash: Option<fractal_crypto::Hash256>,
+    pub epoch: u64,
+    pub amount_wei: u128,
     pub payload_hash: fractal_crypto::Hash256,
 }
 
@@ -857,6 +925,7 @@ impl State {
         ) {
             self.require_governance(signer)?;
         }
+        self.apply_life_command_economics(signer, command)?;
         let sequence = self.life_events.len() as u64;
         let event_id = keccak256(
             &borsh::to_vec(&(b"life.event.v1", sequence, command))
@@ -882,6 +951,187 @@ impl State {
         if bump_nonce {
             self.bump_nonce(signer)?;
         }
+        Ok(())
+    }
+
+    fn apply_life_command_economics(
+        &mut self,
+        signer: Address,
+        command: &LifeCommandV1,
+    ) -> Result<(), ExecError> {
+        match command.kind {
+            LifeCommandKind::IntelligencePayout => {
+                self.apply_intelligence_payout(command)?;
+            }
+            LifeCommandKind::ProvenanceBond => {
+                self.apply_provenance_bond(signer, command)?;
+            }
+            LifeCommandKind::FeedbackArtifact => {
+                if self
+                    .life_feedback_artifacts
+                    .contains_key(&command.payload_hash)
+                {
+                    return Err(ExecError::DuplicateLifeArtifact);
+                }
+                self.life_feedback_artifacts.insert(
+                    command.payload_hash,
+                    FeedbackArtifactRecord {
+                        command_id: command.command_id,
+                        artifact_hash: command.payload_hash,
+                        contributor_hash: command.counterparty_hash,
+                        epoch: command.epoch,
+                        payload_hash: command.payload_hash,
+                    },
+                );
+            }
+            LifeCommandKind::SealedSale => {
+                if self.life_sealed_sales.contains_key(&command.payload_hash) {
+                    return Err(ExecError::DuplicateLifeArtifact);
+                }
+                self.life_sealed_sales.insert(
+                    command.payload_hash,
+                    SealedSaleRecord {
+                        command_id: command.command_id,
+                        artifact_hash: command.soul_id_hash,
+                        buyer_hash: command.counterparty_hash,
+                        epoch: command.epoch,
+                        amount_wei: command.amount_micro_credits,
+                        payload_hash: command.payload_hash,
+                    },
+                );
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
+    fn apply_intelligence_payout(&mut self, command: &LifeCommandV1) -> Result<(), ExecError> {
+        let gross = command.amount_micro_credits;
+        if gross == 0 {
+            return Ok(());
+        }
+        if gross > self.emission_intelligence_pool_wei {
+            return Err(ExecError::InsufficientIntelligencePool);
+        }
+        self.emission_intelligence_pool_wei -= gross;
+
+        let first_hop_bps = self
+            .chain_economics
+            .emission
+            .royalty_hops_bps
+            .first()
+            .copied()
+            .unwrap_or(0);
+        let royalty = command
+            .counterparty_hash
+            .map(|_| gross.saturating_mul(u128::from(first_hop_bps)) / 10_000)
+            .unwrap_or(0);
+        let primary = gross.saturating_sub(royalty);
+        let release_epoch = command
+            .epoch
+            .saturating_add(self.chain_economics.emission.vesting_epochs);
+        if primary > 0 {
+            self.insert_life_payout(
+                command,
+                LifePayoutKind::Primary,
+                command.soul_id_hash,
+                primary,
+                release_epoch,
+            )?;
+        }
+        if let Some(beneficiary_hash) = command.counterparty_hash {
+            if royalty > 0 {
+                self.insert_life_payout(
+                    command,
+                    LifePayoutKind::Royalty,
+                    beneficiary_hash,
+                    royalty,
+                    release_epoch,
+                )?;
+            }
+        }
+        Ok(())
+    }
+
+    fn insert_life_payout(
+        &mut self,
+        command: &LifeCommandV1,
+        kind: LifePayoutKind,
+        beneficiary_hash: fractal_crypto::Hash256,
+        amount_wei: u128,
+        release_epoch: u64,
+    ) -> Result<(), ExecError> {
+        let payout_id = keccak256(
+            &borsh::to_vec(&(
+                b"life.payout.v1",
+                &command.command_id,
+                self.life_payouts.len() as u64,
+                &kind,
+                beneficiary_hash,
+                amount_wei,
+                release_epoch,
+            ))
+            .map_err(|_| ExecError::InvalidShape)?,
+        );
+        self.life_payouts.push(LifePayoutRecord {
+            payout_id,
+            command_id: command.command_id,
+            kind,
+            beneficiary_hash,
+            epoch: command.epoch,
+            amount_wei,
+            vesting_release_epoch: release_epoch,
+        });
+        self.life_vesting.insert(
+            payout_id,
+            LifeVestingEntry {
+                command_id: command.command_id,
+                beneficiary_hash,
+                epoch: command.epoch,
+                amount_wei,
+                release_epoch,
+                burned: false,
+            },
+        );
+        Ok(())
+    }
+
+    fn apply_provenance_bond(
+        &mut self,
+        signer: Address,
+        command: &LifeCommandV1,
+    ) -> Result<(), ExecError> {
+        let bond_wei = command.amount_micro_credits;
+        let minimum = self.chain_economics.emission.provenance_bond_wei;
+        if bond_wei < minimum {
+            return Err(ExecError::BelowProvenanceBond);
+        }
+        let account = self
+            .accounts
+            .get_mut(&signer)
+            .ok_or(ExecError::UnknownSigner)?;
+        if account.balance < bond_wei {
+            return Err(ExecError::InsufficientBalance);
+        }
+        if self
+            .life_provenance_bonds
+            .contains_key(&command.soul_id_hash)
+        {
+            return Err(ExecError::DuplicateLifeArtifact);
+        }
+        account.balance -= bond_wei;
+        self.life_provenance_bonds.insert(
+            command.soul_id_hash,
+            ProvenanceBondRecord {
+                command_id: command.command_id,
+                artifact_hash: command.soul_id_hash,
+                owner_hash: command.counterparty_hash,
+                signer,
+                epoch: command.epoch,
+                bond_wei,
+                burned: false,
+            },
+        );
         Ok(())
     }
 
@@ -1267,5 +1517,155 @@ mod tests {
         };
 
         assert_eq!(state.apply_transaction(&tx), Err(ExecError::NotAuthorized));
+    }
+
+    #[test]
+    fn intelligence_payout_debits_pool_and_creates_vesting_and_royalty_records() {
+        let mut state = funded_state();
+        state.governance = signer();
+        state.chain_economics = crate::ChainEconomicsParams::mainnet();
+        state.emission_intelligence_pool_wei = 10_000;
+        let command = LifeCommandV1 {
+            command_id: [1u8; 32],
+            kind: LifeCommandKind::IntelligencePayout,
+            soul_id_hash: [2u8; 32],
+            counterparty_hash: Some([3u8; 32]),
+            epoch: 11,
+            amount_micro_credits: 1_000,
+            payload_hash: [4u8; 32],
+        };
+        let tx = Transaction {
+            signer: signer(),
+            nonce: 0,
+            vm: VmKind::Native,
+            body: TxBody::Native(NativeCall::LifeCommandV1(command)),
+        };
+
+        state.apply_transaction(&tx).unwrap();
+
+        assert_eq!(state.emission_intelligence_pool_wei, 9_000);
+        assert_eq!(state.life_payouts.len(), 2);
+        assert_eq!(state.life_vesting.len(), 2);
+        assert_eq!(state.life_payouts[0].kind, LifePayoutKind::Primary);
+        assert_eq!(state.life_payouts[0].beneficiary_hash, [2u8; 32]);
+        assert_eq!(state.life_payouts[0].amount_wei, 900);
+        assert_eq!(state.life_payouts[1].kind, LifePayoutKind::Royalty);
+        assert_eq!(state.life_payouts[1].beneficiary_hash, [3u8; 32]);
+        assert_eq!(state.life_payouts[1].amount_wei, 100);
+        assert_eq!(state.life_payouts[0].vesting_release_epoch, 179);
+        assert_eq!(state.life_events.len(), 1);
+        assert_eq!(state.accounts[&signer()].nonce, 1);
+    }
+
+    #[test]
+    fn intelligence_payout_rejects_pool_overdraft_without_recording_event() {
+        let mut state = funded_state();
+        state.governance = signer();
+        state.emission_intelligence_pool_wei = 99;
+        let tx = Transaction {
+            signer: signer(),
+            nonce: 0,
+            vm: VmKind::Native,
+            body: TxBody::Native(NativeCall::LifeCommandV1(LifeCommandV1 {
+                command_id: [1u8; 32],
+                kind: LifeCommandKind::IntelligencePayout,
+                soul_id_hash: [2u8; 32],
+                counterparty_hash: None,
+                epoch: 1,
+                amount_micro_credits: 100,
+                payload_hash: [4u8; 32],
+            })),
+        };
+
+        assert_eq!(
+            state.apply_transaction(&tx),
+            Err(ExecError::InsufficientIntelligencePool)
+        );
+        assert!(state.life_events.is_empty());
+        assert!(state.life_payouts.is_empty());
+        assert_eq!(state.accounts[&signer()].nonce, 0);
+    }
+
+    #[test]
+    fn provenance_bond_debits_signer_and_dedupes_artifact() {
+        let mut state = funded_state();
+        state.chain_economics.emission.provenance_bond_wei = 500;
+        let command = LifeCommandV1 {
+            command_id: [9u8; 32],
+            kind: LifeCommandKind::ProvenanceBond,
+            soul_id_hash: [8u8; 32],
+            counterparty_hash: Some([7u8; 32]),
+            epoch: 3,
+            amount_micro_credits: 500,
+            payload_hash: [6u8; 32],
+        };
+        let tx = Transaction {
+            signer: signer(),
+            nonce: 0,
+            vm: VmKind::Native,
+            body: TxBody::Native(NativeCall::LifeCommandV1(command.clone())),
+        };
+
+        state.apply_transaction(&tx).unwrap();
+
+        assert_eq!(state.accounts[&signer()].balance, 999_500);
+        assert_eq!(state.life_provenance_bonds.len(), 1);
+        assert_eq!(
+            state.life_provenance_bonds[&[8u8; 32]].owner_hash,
+            Some([7u8; 32])
+        );
+
+        let duplicate = Transaction {
+            signer: signer(),
+            nonce: 1,
+            vm: VmKind::Native,
+            body: TxBody::Native(NativeCall::LifeCommandV1(LifeCommandV1 {
+                command_id: [10u8; 32],
+                ..command
+            })),
+        };
+        assert_eq!(
+            state.apply_transaction(&duplicate),
+            Err(ExecError::DuplicateLifeArtifact)
+        );
+    }
+
+    #[test]
+    fn feedback_and_sealed_sale_records_are_hash_deduped() {
+        let mut state = funded_state();
+        let feedback = Transaction {
+            signer: signer(),
+            nonce: 0,
+            vm: VmKind::Native,
+            body: TxBody::Native(NativeCall::LifeCommandV1(LifeCommandV1 {
+                command_id: [1u8; 32],
+                kind: LifeCommandKind::FeedbackArtifact,
+                soul_id_hash: [2u8; 32],
+                counterparty_hash: Some([3u8; 32]),
+                epoch: 5,
+                amount_micro_credits: 0,
+                payload_hash: [4u8; 32],
+            })),
+        };
+        state.apply_transaction(&feedback).unwrap();
+        assert_eq!(state.life_feedback_artifacts.len(), 1);
+
+        let sale = Transaction {
+            signer: signer(),
+            nonce: 1,
+            vm: VmKind::Native,
+            body: TxBody::Native(NativeCall::LifeCommandV1(LifeCommandV1 {
+                command_id: [5u8; 32],
+                kind: LifeCommandKind::SealedSale,
+                soul_id_hash: [6u8; 32],
+                counterparty_hash: Some([7u8; 32]),
+                epoch: 6,
+                amount_micro_credits: 123,
+                payload_hash: [8u8; 32],
+            })),
+        };
+        state.apply_transaction(&sale).unwrap();
+        assert_eq!(state.life_sealed_sales.len(), 1);
+        assert_eq!(state.life_sealed_sales[&[8u8; 32]].amount_wei, 123);
     }
 }

@@ -37,7 +37,10 @@ pub use native_gas::{
 };
 pub use native_types::*;
 pub use state::EvmLog;
-pub use state::{Account, ConsensusUnbondEntry, State};
+pub use state::{
+    Account, ConsensusUnbondEntry, FeedbackArtifactRecord, LifePayoutKind, LifePayoutRecord,
+    LifeVestingEntry, ProvenanceBondRecord, SealedSaleRecord, State,
+};
 pub use tx::{
     LifeCommandKind, LifeCommandV1, NativeCall, OwnedObjectCertificate,
     OwnedObjectCertificateError, OwnedObjectCertificateEvidenceError,
