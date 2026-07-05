@@ -1616,6 +1616,23 @@ impl ChainInteraction for NodeInner {
             provenance_bond_count: self.state.life_provenance_bonds.len() as u64,
             feedback_artifact_count: self.state.life_feedback_artifacts.len() as u64,
             sealed_sale_count: self.state.life_sealed_sales.len() as u64,
+            provider_reward_count: self.state.provider_rewards.len() as u64,
+            provider_subsidy_income_wei: format!(
+                "0x{:x}",
+                self.state
+                    .provider_subsidy_income_wei
+                    .values()
+                    .copied()
+                    .sum::<u128>()
+            ),
+            provider_organic_income_wei: format!(
+                "0x{:x}",
+                self.state
+                    .provider_organic_income_wei
+                    .values()
+                    .copied()
+                    .sum::<u128>()
+            ),
         }
     }
 

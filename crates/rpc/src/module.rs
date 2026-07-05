@@ -530,6 +530,9 @@ pub struct RpcSupplyResponse {
     pub provenance_bond_count: u64,
     pub feedback_artifact_count: u64,
     pub sealed_sale_count: u64,
+    pub provider_reward_count: u64,
+    pub provider_subsidy_income_wei: String,
+    pub provider_organic_income_wei: String,
 }
 
 fn hash_text(value: &str) -> [u8; 32] {
@@ -1170,6 +1173,9 @@ pub trait ChainInteraction: Send {
             provenance_bond_count: 0,
             feedback_artifact_count: 0,
             sealed_sale_count: 0,
+            provider_reward_count: 0,
+            provider_subsidy_income_wei: "0x0".to_string(),
+            provider_organic_income_wei: "0x0".to_string(),
         }
     }
 }

@@ -39,7 +39,7 @@ pub use native_types::*;
 pub use state::EvmLog;
 pub use state::{
     Account, ConsensusUnbondEntry, FeedbackArtifactRecord, LifePayoutKind, LifePayoutRecord,
-    LifeVestingEntry, ProvenanceBondRecord, SealedSaleRecord, State,
+    LifeVestingEntry, ProvenanceBondRecord, ProviderRewardRecord, SealedSaleRecord, State,
 };
 pub use tx::{
     LifeCommandKind, LifeCommandV1, NativeCall, OwnedObjectCertificate,

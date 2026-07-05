@@ -24,7 +24,7 @@
     "graceEpochs": 2
   },
   "death": {
-    "insuranceAccountId": "life-insurance-reserve",
+    "burnAccountId": "life-burn-sink",
     "naturalLifeEpochs": 100,
     "insolvencyGraceEpochs": 2
   },

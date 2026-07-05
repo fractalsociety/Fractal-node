@@ -72,6 +72,9 @@ pub struct State {
     pub life_provenance_bonds: BTreeMap<fractal_crypto::Hash256, ProvenanceBondRecord>,
     pub life_feedback_artifacts: BTreeMap<fractal_crypto::Hash256, FeedbackArtifactRecord>,
     pub life_sealed_sales: BTreeMap<fractal_crypto::Hash256, SealedSaleRecord>,
+    pub provider_rewards: Vec<ProviderRewardRecord>,
+    pub provider_organic_income_wei: BTreeMap<u64, u128>,
+    pub provider_subsidy_income_wei: BTreeMap<u64, u128>,
     /// Monotonic versions for owned objects whose version is not already the account nonce.
     pub owned_object_versions: BTreeMap<OwnedObjectId, u64>,
     /// Protocol-native FRAC minted by emission, excluding devnet faucet premine.
@@ -124,6 +127,9 @@ impl Default for State {
             life_provenance_bonds: BTreeMap::new(),
             life_feedback_artifacts: BTreeMap::new(),
             life_sealed_sales: BTreeMap::new(),
+            provider_rewards: Vec::new(),
+            provider_organic_income_wei: BTreeMap::new(),
+            provider_subsidy_income_wei: BTreeMap::new(),
             owned_object_versions: BTreeMap::new(),
             protocol_minted_wei: 0,
             protocol_burned_wei: 0,
@@ -226,6 +232,17 @@ pub struct SealedSaleRecord {
     pub epoch: u64,
     pub amount_wei: u128,
     pub payload_hash: fractal_crypto::Hash256,
+}
+
+#[derive(BorshSerialize, BorshDeserialize, Clone, Debug, PartialEq, Eq)]
+pub struct ProviderRewardRecord {
+    pub reward_id: fractal_crypto::Hash256,
+    pub receipt_id: fractal_crypto::Hash256,
+    pub worker: u64,
+    pub organic_income_wei: u128,
+    pub compute_subsidy_wei: u128,
+    pub tx_count_subsidy_wei: u128,
+    pub storage_rollover_wei: u128,
 }
 
 #[derive(BorshSerialize, BorshDeserialize, Clone, Debug, PartialEq, Eq)]
@@ -641,6 +658,7 @@ impl State {
                     return Err(ExecError::DuplicateReceipt);
                 }
                 self.receipts.insert(r.receipt_id, r.clone());
+                self.distribute_provider_pool_for_receipts(std::slice::from_ref(r))?;
                 if bump_nonce {
                     self.bump_nonce(signer)?;
                 }
@@ -899,8 +917,92 @@ impl State {
         for r in &p.receipts {
             self.receipts.insert(r.receipt_id, r.clone());
         }
+        self.distribute_provider_pool_for_receipts(&p.receipts)?;
         if bump_nonce {
             self.bump_nonce(signer)?;
+        }
+        Ok(())
+    }
+
+    fn distribute_provider_pool_for_receipts(
+        &mut self,
+        receipts: &[OnChainTaskReceipt],
+    ) -> Result<(), ExecError> {
+        if receipts.is_empty() {
+            return Ok(());
+        }
+        for receipt in receipts {
+            let entry = self
+                .provider_organic_income_wei
+                .entry(receipt.worker)
+                .or_insert(0);
+            *entry = entry.saturating_add(receipt.payout_amount);
+        }
+        let pool = self.emission_provider_pool_wei;
+        if pool == 0 {
+            return Ok(());
+        }
+        let params = &self.chain_economics.emission;
+        let storage_budget = pool.saturating_mul(u128::from(params.provider_storage_bps)) / 10_000;
+        let compute_budget = pool.saturating_mul(u128::from(params.provider_compute_bps)) / 10_000;
+        let tx_budget = pool
+            .saturating_sub(storage_budget)
+            .saturating_sub(compute_budget);
+        self.emission_provider_pool_wei = 0;
+        self.emission_provider_rollover_wei = self
+            .emission_provider_rollover_wei
+            .saturating_add(storage_budget);
+
+        let total_score: u128 = receipts
+            .iter()
+            .map(|receipt| u128::from(receipt.score.max(1)))
+            .sum();
+        let count = receipts.len() as u128;
+        let mut paid_compute = 0u128;
+        let mut paid_tx = 0u128;
+        for (idx, receipt) in receipts.iter().enumerate() {
+            let is_last = idx + 1 == receipts.len();
+            let compute = if is_last {
+                compute_budget.saturating_sub(paid_compute)
+            } else {
+                compute_budget.saturating_mul(u128::from(receipt.score.max(1))) / total_score
+            };
+            paid_compute = paid_compute.saturating_add(compute);
+            let tx_count = if is_last {
+                tx_budget.saturating_sub(paid_tx)
+            } else {
+                tx_budget / count
+            };
+            paid_tx = paid_tx.saturating_add(tx_count);
+            let subsidy = compute.saturating_add(tx_count);
+            if subsidy > 0 {
+                let entry = self
+                    .provider_subsidy_income_wei
+                    .entry(receipt.worker)
+                    .or_insert(0);
+                *entry = entry.saturating_add(subsidy);
+            }
+            let reward_id = keccak256(
+                &borsh::to_vec(&(
+                    b"provider.reward.v1",
+                    self.provider_rewards.len() as u64,
+                    receipt.receipt_id,
+                    receipt.worker,
+                    compute,
+                    tx_count,
+                    storage_budget,
+                ))
+                .map_err(|_| ExecError::InvalidShape)?,
+            );
+            self.provider_rewards.push(ProviderRewardRecord {
+                reward_id,
+                receipt_id: receipt.receipt_id,
+                worker: receipt.worker,
+                organic_income_wei: receipt.payout_amount,
+                compute_subsidy_wei: compute,
+                tx_count_subsidy_wei: tx_count,
+                storage_rollover_wei: if idx == 0 { storage_budget } else { 0 },
+            });
         }
         Ok(())
     }
@@ -1667,5 +1769,33 @@ mod tests {
         state.apply_transaction(&sale).unwrap();
         assert_eq!(state.life_sealed_sales.len(), 1);
         assert_eq!(state.life_sealed_sales[&[8u8; 32]].amount_wei, 123);
+    }
+
+    #[test]
+    fn provider_pool_distribution_records_subsidy_organic_income_and_rollover() {
+        let mut state = funded_state();
+        state.chain_economics = crate::ChainEconomicsParams::mainnet();
+        state.emission_provider_pool_wei = 1_000;
+        let mut work = receipt([9u8; 32]);
+        work.worker = 42;
+        work.score = 100;
+        work.payout_amount = 77;
+        let tx = Transaction {
+            signer: signer(),
+            nonce: 0,
+            vm: VmKind::Native,
+            body: TxBody::Native(NativeCall::SettleReceipt(work)),
+        };
+
+        state.apply_transaction(&tx).unwrap();
+
+        assert_eq!(state.emission_provider_pool_wei, 0);
+        assert_eq!(state.emission_provider_rollover_wei, 400);
+        assert_eq!(state.provider_organic_income_wei[&42], 77);
+        assert_eq!(state.provider_subsidy_income_wei[&42], 600);
+        assert_eq!(state.provider_rewards.len(), 1);
+        assert_eq!(state.provider_rewards[0].compute_subsidy_wei, 400);
+        assert_eq!(state.provider_rewards[0].tx_count_subsidy_wei, 200);
+        assert_eq!(state.provider_rewards[0].storage_rollover_wei, 400);
     }
 }

@@ -72,7 +72,8 @@ pub struct LoanParams {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct DeathParams {
-    pub insurance_account_id: String,
+    #[serde(default, alias = "insuranceAccountId")]
+    pub burn_account_id: String,
     pub natural_life_epochs: u64,
     pub insolvency_grace_epochs: u64,
 }
@@ -156,7 +157,8 @@ pub struct InheritanceSettlement {
     pub dead_soul_id: String,
     pub epoch: u64,
     pub heirs: Vec<(String, u64)>,
-    pub insurance_remainder_micro_credits: u64,
+    #[serde(alias = "insuranceRemainderMicroCredits")]
+    pub burned_remainder_micro_credits: u64,
     pub settlement_hash: String,
 }
 
@@ -826,14 +828,14 @@ fn inheritance_settlement(
     heirs: Vec<(String, u64)>,
     remainder: u64,
 ) -> InheritanceSettlement {
-    let body = serde_json::json!({ "deadSoulId": dead_soul_id, "epoch": epoch, "heirs": heirs, "insuranceRemainderMicroCredits": remainder });
+    let body = serde_json::json!({ "deadSoulId": dead_soul_id, "epoch": epoch, "heirs": heirs, "burnedRemainderMicroCredits": remainder });
     let settlement_hash = hash_json(&body);
     InheritanceSettlement {
         settlement_id: format!("inheritance_{}", &settlement_hash[..20]),
         dead_soul_id: dead_soul_id.to_string(),
         epoch,
         heirs,
-        insurance_remainder_micro_credits: remainder,
+        burned_remainder_micro_credits: remainder,
         settlement_hash,
     }
 }
