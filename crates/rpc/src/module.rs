@@ -8,7 +8,7 @@ use http::Method;
 use jsonrpsee::server::{ServerBuilder, ServerHandle};
 use jsonrpsee::types::{ErrorObjectOwned, Params};
 use jsonrpsee::RpcModule;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
 use tower::ServiceBuilder;
 use tower_http::cors::{Any, CorsLayer};
@@ -455,6 +455,144 @@ pub struct RlmfAttestationResponse {
     pub block_number: u64,
     pub finalized: bool,
     pub attestation: RlmfAttestationRecord,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RpcLifeCommandInput {
+    pub command_id: Option<String>,
+    pub kind: String,
+    pub soul_id: String,
+    pub counterparty_id: Option<String>,
+    pub epoch: u64,
+    #[serde(default)]
+    pub amount_micro_credits: u128,
+    #[serde(default)]
+    pub payload: serde_json::Value,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RpcLifeCommandRecord {
+    pub command_id: String,
+    pub kind: String,
+    pub soul_id_hash: String,
+    pub counterparty_hash: Option<String>,
+    pub epoch: u64,
+    pub amount_micro_credits: String,
+    pub payload_hash: String,
+    pub signer: Option<String>,
+    pub sequence: Option<u64>,
+    pub transaction_hash: Option<String>,
+    pub block_number: Option<u64>,
+    pub finalized: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RpcLifeCommandResponse {
+    pub network: String,
+    pub transaction_hash: String,
+    pub block_number: u64,
+    pub finalized: bool,
+    pub command: RpcLifeCommandRecord,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RpcLifeEventRecord {
+    pub event_id: String,
+    pub command_id: String,
+    pub kind: String,
+    pub soul_id_hash: String,
+    pub epoch: u64,
+    pub amount_micro_credits: String,
+    pub payload_hash: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RpcSupplyResponse {
+    pub network: String,
+    pub block_number: String,
+    pub max_supply_wei: String,
+    pub protocol_minted_wei: String,
+    pub protocol_burned_wei: String,
+    pub circulating_supply_wei: String,
+    pub provider_pool_wei: String,
+    pub consensus_pool_wei: String,
+    pub intelligence_pool_wei: String,
+    pub provider_rollover_wei: String,
+    pub consensus_rollover_wei: String,
+    pub intelligence_rollover_wei: String,
+}
+
+fn hash_text(value: &str) -> [u8; 32] {
+    keccak256(value.as_bytes())
+}
+
+fn parse_life_command_kind(kind: &str) -> Result<fractal_core::LifeCommandKind, &'static str> {
+    use fractal_core::LifeCommandKind::*;
+    match kind {
+        "birth_grant" | "birthGrant" => Ok(BirthGrant),
+        "birth_spawn" | "birthSpawn" => Ok(BirthSpawn),
+        "birth_player_funded" | "birthPlayerFunded" => Ok(BirthPlayerFunded),
+        "rent_charge" | "rentCharge" => Ok(RentCharge),
+        "loan_open" | "loanOpen" => Ok(LoanOpen),
+        "loan_accept" | "loanAccept" => Ok(LoanAccept),
+        "loan_repay" | "loanRepay" => Ok(LoanRepay),
+        "extension_purchase" | "extensionPurchase" => Ok(ExtensionPurchase),
+        "will_register" | "willRegister" => Ok(WillRegister),
+        "will_update" | "willUpdate" => Ok(WillUpdate),
+        "owner_topup" | "ownerTopUp" => Ok(OwnerTopUp),
+        "withdrawal_request" | "withdrawalRequest" => Ok(WithdrawalRequest),
+        "withdrawal_settlement" | "withdrawalSettlement" => Ok(WithdrawalSettlement),
+        "sii_commit" | "siiCommit" => Ok(SiiCommit),
+        "ladder_commit" | "ladderCommit" => Ok(LadderCommit),
+        "benchmark_freeze" | "benchmarkFreeze" => Ok(BenchmarkFreeze),
+        "intelligence_payout" | "intelligencePayout" => Ok(IntelligencePayout),
+        "provenance_bond" | "provenanceBond" => Ok(ProvenanceBond),
+        "feedback_artifact" | "feedbackArtifact" => Ok(FeedbackArtifact),
+        "sealed_sale" | "sealedSale" => Ok(SealedSale),
+        "reaper_epoch" | "reaperEpoch" => Ok(ReaperEpoch),
+        _ => Err("unknown life command kind"),
+    }
+}
+
+fn build_life_command(
+    input: RpcLifeCommandInput,
+) -> Result<fractal_core::LifeCommandV1, ErrorObjectOwned> {
+    let kind = parse_life_command_kind(&input.kind).map_err(err_invalid_params)?;
+    let soul_id_hash = hash_text(&input.soul_id);
+    let counterparty_hash = input.counterparty_id.as_deref().map(hash_text);
+    let payload_bytes = serde_json::to_vec(&input.payload)
+        .map_err(|_| err_invalid_params("life payload must be JSON serializable"))?;
+    let payload_hash = keccak256(&payload_bytes);
+    let command_id = if let Some(raw) = input.command_id {
+        parse_hash32_hex(&raw).map_err(|_| err_invalid_params("invalid commandId hex"))?
+    } else {
+        keccak256(
+            &borsh::to_vec(&(
+                b"life.command.v1",
+                &kind,
+                soul_id_hash,
+                counterparty_hash,
+                input.epoch,
+                input.amount_micro_credits,
+                payload_hash,
+            ))
+            .map_err(|_| err_invalid_params("life command encode failed"))?,
+        )
+    };
+    Ok(fractal_core::LifeCommandV1 {
+        command_id,
+        kind,
+        soul_id_hash,
+        counterparty_hash,
+        epoch: input.epoch,
+        amount_micro_credits: input.amount_micro_credits,
+        payload_hash,
+    })
 }
 
 fn parse_hash32_hex(value: &str) -> Result<[u8; 32], &'static str> {
@@ -986,6 +1124,43 @@ pub trait ChainInteraction: Send {
         _limit: usize,
     ) -> Vec<RlmfAttestationStored> {
         Vec::new()
+    }
+
+    fn submit_life_command(
+        &mut self,
+        _command: fractal_core::LifeCommandV1,
+    ) -> Result<RpcLifeCommandResponse, String> {
+        Err("fractal_submitLifeCommand not supported on this node".to_string())
+    }
+
+    fn life_command_by_id(&self, _command_id: [u8; 32]) -> Option<RpcLifeCommandRecord> {
+        None
+    }
+
+    fn list_life_events(
+        &self,
+        _kind: Option<&str>,
+        _epoch: Option<u64>,
+        _limit: usize,
+    ) -> Vec<RpcLifeEventRecord> {
+        Vec::new()
+    }
+
+    fn supply(&self) -> RpcSupplyResponse {
+        RpcSupplyResponse {
+            network: "unsupported".to_string(),
+            block_number: "0x0".to_string(),
+            max_supply_wei: "0x0".to_string(),
+            protocol_minted_wei: "0x0".to_string(),
+            protocol_burned_wei: "0x0".to_string(),
+            circulating_supply_wei: "0x0".to_string(),
+            provider_pool_wei: "0x0".to_string(),
+            consensus_pool_wei: "0x0".to_string(),
+            intelligence_pool_wei: "0x0".to_string(),
+            provider_rollover_wei: "0x0".to_string(),
+            consensus_rollover_wei: "0x0".to_string(),
+            intelligence_rollover_wei: "0x0".to_string(),
+        }
     }
 }
 
@@ -2144,6 +2319,106 @@ pub fn build_module(ctx: SharedChain) -> RpcModule<SharedChain> {
         .expect("register fractal_listRlmfAttestations");
 
     module
+        .register_async_method(
+            "fractal_submitLifeCommand",
+            |params: Params<'static>, ctx, _| {
+                let ctx = ctx.clone();
+                async move {
+                    let arr: Vec<serde_json::Value> = params
+                        .parse()
+                        .map_err(|_| err_invalid_params("expected life command object"))?;
+                    let obj = arr
+                        .first()
+                        .cloned()
+                        .ok_or(err_invalid_params("expected life command object"))?;
+                    let input: RpcLifeCommandInput = serde_json::from_value(obj)
+                        .map_err(|_| err_invalid_params("malformed life command"))?;
+                    let command = build_life_command(input)?;
+                    let mut g = ctx.lock().await;
+                    let response = g
+                        .submit_life_command(command)
+                        .map_err(|e| ErrorObjectOwned::owned(-32603, e, None::<()>))?;
+                    Ok::<RpcLifeCommandResponse, ErrorObjectOwned>(response)
+                }
+            },
+        )
+        .expect("register fractal_submitLifeCommand");
+
+    module
+        .register_async_method("fractal_getSupply", |_: Params<'static>, ctx, _| {
+            let ctx = ctx.clone();
+            async move {
+                let g = ctx.lock().await;
+                Ok::<RpcSupplyResponse, ErrorObjectOwned>(g.supply())
+            }
+        })
+        .expect("register fractal_getSupply");
+
+    module
+        .register_async_method(
+            "fractal_getLifeCommand",
+            |params: Params<'static>, ctx, _| {
+                let ctx = ctx.clone();
+                async move {
+                    let arr: Vec<serde_json::Value> = params
+                        .parse()
+                        .map_err(|_| err_invalid_params("expected command id"))?;
+                    let obj = arr
+                        .first()
+                        .ok_or(err_invalid_params("expected command id"))?;
+                    let raw = obj
+                        .get("commandId")
+                        .and_then(|v| v.as_str())
+                        .or_else(|| obj.as_str())
+                        .ok_or(err_invalid_params("missing commandId string"))?;
+                    let command_id = parse_hash32_hex(raw)
+                        .map_err(|_| err_invalid_params("invalid commandId hex"))?;
+                    let g = ctx.lock().await;
+                    Ok::<Option<RpcLifeCommandRecord>, ErrorObjectOwned>(
+                        g.life_command_by_id(command_id),
+                    )
+                }
+            },
+        )
+        .expect("register fractal_getLifeCommand");
+
+    module
+        .register_async_method(
+            "fractal_listLifeEvents",
+            |params: Params<'static>, ctx, _| {
+                let ctx = ctx.clone();
+                async move {
+                    let arr: Vec<serde_json::Value> = params.parse().unwrap_or_default();
+                    let filter = arr.first().cloned().unwrap_or(serde_json::Value::Null);
+                    let kind = filter
+                        .get("kind")
+                        .and_then(|v| v.as_str())
+                        .map(str::to_string);
+                    let epoch = filter.get("epoch").and_then(|v| {
+                        v.as_u64().or_else(|| {
+                            v.as_str().and_then(|raw| {
+                                let raw = raw.strip_prefix("0x").unwrap_or(raw);
+                                u64::from_str_radix(raw, 16).ok()
+                            })
+                        })
+                    });
+                    let limit = filter
+                        .get("limit")
+                        .and_then(|v| v.as_u64())
+                        .map(|v| v.min(512) as usize)
+                        .unwrap_or(128);
+                    let g = ctx.lock().await;
+                    Ok::<Vec<RpcLifeEventRecord>, ErrorObjectOwned>(g.list_life_events(
+                        kind.as_deref(),
+                        epoch,
+                        limit,
+                    ))
+                }
+            },
+        )
+        .expect("register fractal_listLifeEvents");
+
+    module
 }
 
 fn rpc_tx_scope(tx: &fractal_core::Transaction, tx_hash: &[u8; 32]) -> RpcTxScope {
@@ -2188,6 +2463,9 @@ fn rpc_owned_object_id(object_id: &OwnedObjectId) -> String {
         }
         OwnedObjectId::ProofCommitment(proof_hash) => {
             format!("proofCommitment:{}", hash_hex(proof_hash))
+        }
+        OwnedObjectId::LifeCommand(command_id) => {
+            format!("lifeCommand:{}", hash_hex(command_id))
         }
     }
 }

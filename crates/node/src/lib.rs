@@ -41,9 +41,10 @@ use fractal_rlvr::{
 use fractal_rpc::{
     logs_bloom_256, make_rpc_log, ChainInteraction, ProofCommitmentResponse, RlmfAttestationRecord,
     RlmfAttestationResponse, RlmfAttestationStored, RpcChainConfig, RpcConsensusDiagnostics,
-    RpcDaMetrics, RpcMempoolLaneMetrics, RpcOwnedObjectCertificate, RpcOwnedObjectCountersignature,
+    RpcDaMetrics, RpcLifeCommandRecord, RpcLifeCommandResponse, RpcLifeEventRecord,
+    RpcMempoolLaneMetrics, RpcOwnedObjectCertificate, RpcOwnedObjectCountersignature,
     RpcOwnedObjectPrecheck, RpcProofMetrics, RpcProofRejectionMetric, RpcProofUpdateSubmission,
-    RpcRoutingDiagnostics,
+    RpcRoutingDiagnostics, RpcSupplyResponse,
 };
 use fractal_storage::{
     ProofFinalityStore, StoredProofFinalityRecord, StoredZoneProofFinalityRecord,
@@ -1593,6 +1594,26 @@ impl ChainInteraction for NodeInner {
         self.state.accounts.get(addr).map(|a| a.nonce).unwrap_or(0)
     }
 
+    fn supply(&self) -> RpcSupplyResponse {
+        RpcSupplyResponse {
+            network: format!("fractalchain-{}", self.chain_id()),
+            block_number: format!("0x{:x}", self.block_number()),
+            max_supply_wei: format!("0x{:x}", fractal_core::MAX_SUPPLY_WEI),
+            protocol_minted_wei: format!("0x{:x}", self.state.protocol_minted_wei),
+            protocol_burned_wei: format!("0x{:x}", self.state.protocol_burned_wei),
+            circulating_supply_wei: format!("0x{:x}", self.state.circulating_supply_wei()),
+            provider_pool_wei: format!("0x{:x}", self.state.emission_provider_pool_wei),
+            consensus_pool_wei: format!("0x{:x}", self.state.emission_consensus_pool_wei),
+            intelligence_pool_wei: format!("0x{:x}", self.state.emission_intelligence_pool_wei),
+            provider_rollover_wei: format!("0x{:x}", self.state.emission_provider_rollover_wei),
+            consensus_rollover_wei: format!("0x{:x}", self.state.emission_consensus_rollover_wei),
+            intelligence_rollover_wei: format!(
+                "0x{:x}",
+                self.state.emission_intelligence_rollover_wei
+            ),
+        }
+    }
+
     fn submit_raw_tx(&mut self, raw: &[u8]) -> Result<(), String> {
         // Dev stub: accept either (a) borsh-encoded internal txs, or (b) real Ethereum EIP-1559
         // signed tx bytes (type 0x02) for Hardhat/MetaMask compatibility.
@@ -2227,6 +2248,103 @@ impl ChainInteraction for NodeInner {
         records
     }
 
+    fn submit_life_command(
+        &mut self,
+        command: fractal_core::LifeCommandV1,
+    ) -> Result<RpcLifeCommandResponse, String> {
+        if let Some(existing) = self.state.life_commands.get(&command.command_id) {
+            return Ok(RpcLifeCommandResponse {
+                network: format!("fractalchain-{}", self.chain_id()),
+                transaction_hash: self
+                    .life_command_tx_hash(&command.command_id)
+                    .unwrap_or_else(|| format!("0x{}", hex::encode(command.command_id))),
+                block_number: 0,
+                finalized: true,
+                command: life_command_record(
+                    &existing.command,
+                    Some(&existing.signer),
+                    Some(existing.sequence),
+                    None,
+                    None,
+                    true,
+                ),
+            });
+        }
+        let block_number = self.block_number();
+        let signer = HARDHAT_DEFAULT_SIGNER_0;
+        let tx = Transaction {
+            signer,
+            nonce: self.transaction_count(&signer),
+            vm: VmKind::Native,
+            body: TxBody::Native(NativeCall::LifeCommandV1(command.clone())),
+        };
+        let raw =
+            borsh::to_vec(&tx).map_err(|err| format!("failed to encode life command tx: {err}"))?;
+        let tx_hash = keccak256(&raw);
+        self.pending_txs.insert(tx_hash, tx.clone());
+        self.mempool.insert(PooledTx {
+            tx,
+            max_priority_fee_per_gas: 1,
+            max_fee_per_gas: u128::MAX,
+            eth_signed_raw: None,
+        });
+        Ok(RpcLifeCommandResponse {
+            network: format!("fractalchain-{}", self.chain_id()),
+            transaction_hash: format!("0x{}", hex::encode(tx_hash)),
+            block_number,
+            finalized: true,
+            command: life_command_record(
+                &command,
+                Some(&signer),
+                None,
+                Some(format!("0x{}", hex::encode(tx_hash))),
+                Some(block_number),
+                true,
+            ),
+        })
+    }
+
+    fn life_command_by_id(&self, command_id: [u8; 32]) -> Option<RpcLifeCommandRecord> {
+        let stored = self.state.life_commands.get(&command_id)?;
+        Some(life_command_record(
+            &stored.command,
+            Some(&stored.signer),
+            Some(stored.sequence),
+            self.life_command_tx_hash(&command_id),
+            None,
+            true,
+        ))
+    }
+
+    fn list_life_events(
+        &self,
+        kind: Option<&str>,
+        epoch: Option<u64>,
+        limit: usize,
+    ) -> Vec<RpcLifeEventRecord> {
+        let mut records = self
+            .state
+            .life_events
+            .iter()
+            .filter(|event| {
+                kind.is_none_or(|wanted| life_kind_str(&event.kind) == wanted)
+                    && epoch.is_none_or(|wanted| event.epoch == wanted)
+            })
+            .map(|event| RpcLifeEventRecord {
+                event_id: format!("0x{}", hex::encode(event.event_id)),
+                command_id: format!("0x{}", hex::encode(event.command_id)),
+                kind: life_kind_str(&event.kind).to_string(),
+                soul_id_hash: format!("0x{}", hex::encode(event.soul_id_hash)),
+                epoch: event.epoch,
+                amount_micro_credits: event.amount_micro_credits.to_string(),
+                payload_hash: format!("0x{}", hex::encode(event.payload_hash)),
+            })
+            .collect::<Vec<_>>();
+        records.reverse();
+        records.truncate(limit.min(512));
+        records
+    }
+
     fn submit_proof_update(
         &mut self,
         update: ZoneProofUpdateV1,
@@ -2320,6 +2438,9 @@ fn rpc_owned_object_id(object_id: &fractal_core::OwnedObjectId) -> String {
         fractal_core::OwnedObjectId::ProofCommitment(proof_hash) => {
             format!("proofCommitment:{}", hash_hex(proof_hash))
         }
+        fractal_core::OwnedObjectId::LifeCommand(command_id) => {
+            format!("lifeCommand:{}", hash_hex(command_id))
+        }
     }
 }
 
@@ -2336,6 +2457,27 @@ fn decode_borsh_tx(raw_tx: &[u8]) -> Result<Transaction, String> {
 }
 
 impl NodeInner {
+    fn life_command_tx_hash(&self, command_id: &[u8; 32]) -> Option<String> {
+        for (tx_hash, tx) in &self.pending_txs {
+            if let TxBody::Native(NativeCall::LifeCommandV1(command)) = &tx.body {
+                if &command.command_id == command_id {
+                    return Some(format!("0x{}", hex::encode(tx_hash)));
+                }
+            }
+        }
+        for (tx_hash, (_bn, _bh, _idx)) in &self.mined_txs {
+            let Some(tx) = self.tx_by_hash(tx_hash) else {
+                continue;
+            };
+            if let TxBody::Native(NativeCall::LifeCommandV1(command)) = &tx.body {
+                if &command.command_id == command_id {
+                    return Some(format!("0x{}", hex::encode(tx_hash)));
+                }
+            }
+        }
+        None
+    }
+
     fn owned_object_precheck_response(
         &self,
         raw_tx: &[u8],
@@ -2765,6 +2907,59 @@ pub async fn run_dev() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     tokio::signal::ctrl_c().await?;
     handle.stop()?;
     Ok(())
+}
+
+fn life_kind_str(kind: &fractal_core::LifeCommandKind) -> &'static str {
+    use fractal_core::LifeCommandKind::*;
+    match kind {
+        BirthGrant => "birth_grant",
+        BirthSpawn => "birth_spawn",
+        BirthPlayerFunded => "birth_player_funded",
+        RentCharge => "rent_charge",
+        LoanOpen => "loan_open",
+        LoanAccept => "loan_accept",
+        LoanRepay => "loan_repay",
+        ExtensionPurchase => "extension_purchase",
+        WillRegister => "will_register",
+        WillUpdate => "will_update",
+        OwnerTopUp => "owner_topup",
+        WithdrawalRequest => "withdrawal_request",
+        WithdrawalSettlement => "withdrawal_settlement",
+        SiiCommit => "sii_commit",
+        LadderCommit => "ladder_commit",
+        BenchmarkFreeze => "benchmark_freeze",
+        IntelligencePayout => "intelligence_payout",
+        ProvenanceBond => "provenance_bond",
+        FeedbackArtifact => "feedback_artifact",
+        SealedSale => "sealed_sale",
+        ReaperEpoch => "reaper_epoch",
+    }
+}
+
+fn life_command_record(
+    command: &fractal_core::LifeCommandV1,
+    signer: Option<&Address>,
+    sequence: Option<u64>,
+    transaction_hash: Option<String>,
+    block_number: Option<u64>,
+    finalized: bool,
+) -> RpcLifeCommandRecord {
+    RpcLifeCommandRecord {
+        command_id: format!("0x{}", hex::encode(command.command_id)),
+        kind: life_kind_str(&command.kind).to_string(),
+        soul_id_hash: format!("0x{}", hex::encode(command.soul_id_hash)),
+        counterparty_hash: command
+            .counterparty_hash
+            .map(|hash| format!("0x{}", hex::encode(hash))),
+        epoch: command.epoch,
+        amount_micro_credits: command.amount_micro_credits.to_string(),
+        payload_hash: format!("0x{}", hex::encode(command.payload_hash)),
+        signer: signer.map(|addr| format!("0x{}", hex::encode(addr))),
+        sequence,
+        transaction_hash,
+        block_number,
+        finalized,
+    }
 }
 
 /// Follower: JSON-RPC + sync from `FRACTAL_BOOTSTRAP`; optionally sample DA from

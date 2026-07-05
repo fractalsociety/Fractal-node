@@ -34,6 +34,19 @@ pub struct TxRow {
 }
 
 #[derive(Clone, Debug)]
+pub struct LifeEventRow {
+    pub tx_hash: String,
+    pub block_number: u64,
+    pub tx_index: u32,
+    pub command_id: String,
+    pub kind: String,
+    pub soul_id_hash: String,
+    pub epoch: u64,
+    pub amount_micro_credits: String,
+    pub payload_hash: String,
+}
+
+#[derive(Clone, Debug)]
 pub enum SearchResult {
     Block(BlockRow),
     Transaction(TxRow),
@@ -61,6 +74,7 @@ pub struct IndexerStatus {
     pub tx_count: u64,
     pub wallet_event_count: u64,
     pub reputation_row_count: u64,
+    pub life_event_count: u64,
 }
 
 impl IndexerDb {
@@ -129,6 +143,7 @@ impl IndexerDb {
         .map_err(|e| e.to_string())?;
         Self::migrate_v2_conn(&conn)?;
         Self::migrate_v3_conn(&conn)?;
+        Self::migrate_v4_conn(&conn)?;
         Ok(())
     }
 
@@ -164,6 +179,38 @@ impl IndexerDb {
             "#,
         );
         conn.execute("PRAGMA user_version = 3", [])
+            .map_err(|e| e.to_string())?;
+        Ok(())
+    }
+
+    fn migrate_v4_conn(conn: &Connection) -> Result<(), String> {
+        let version: i64 = conn
+            .query_row("PRAGMA user_version", [], |r| r.get(0))
+            .unwrap_or(0);
+        if version >= 4 {
+            return Ok(());
+        }
+        conn.execute_batch(
+            r#"
+            CREATE TABLE IF NOT EXISTS life_events (
+              tx_hash TEXT PRIMARY KEY,
+              block_number INTEGER NOT NULL,
+              tx_index INTEGER NOT NULL,
+              command_id TEXT NOT NULL,
+              kind TEXT NOT NULL,
+              soul_id_hash TEXT NOT NULL,
+              epoch INTEGER NOT NULL,
+              amount_micro_credits TEXT NOT NULL,
+              payload_hash TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_life_events_kind ON life_events(kind);
+            CREATE INDEX IF NOT EXISTS idx_life_events_epoch ON life_events(epoch);
+            CREATE INDEX IF NOT EXISTS idx_life_events_soul ON life_events(soul_id_hash);
+            CREATE INDEX IF NOT EXISTS idx_life_events_command ON life_events(command_id);
+            "#,
+        )
+        .map_err(|e| e.to_string())?;
+        conn.execute("PRAGMA user_version = 4", [])
             .map_err(|e| e.to_string())?;
         Ok(())
     }
@@ -279,12 +326,100 @@ impl IndexerDb {
         let reputation_row_count: i64 = conn
             .query_row("SELECT COUNT(*) FROM reputation_rows", [], |r| r.get(0))
             .map_err(|e| e.to_string())?;
+        let life_event_count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM life_events", [], |r| r.get(0))
+            .map_err(|e| e.to_string())?;
         Ok(IndexerStatus {
             last_indexed_block,
             tx_count: tx_count.max(0) as u64,
             wallet_event_count: wallet_event_count.max(0) as u64,
             reputation_row_count: reputation_row_count.max(0) as u64,
+            life_event_count: life_event_count.max(0) as u64,
         })
+    }
+
+    pub fn insert_life_event(&self, row: &LifeEventRow) -> Result<(), String> {
+        let conn = self.lock()?;
+        conn.execute(
+            "INSERT OR REPLACE INTO life_events
+             (tx_hash, block_number, tx_index, command_id, kind, soul_id_hash, epoch, amount_micro_credits, payload_hash)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+            params![
+                row.tx_hash,
+                row.block_number,
+                row.tx_index,
+                row.command_id,
+                row.kind,
+                row.soul_id_hash,
+                row.epoch,
+                row.amount_micro_credits,
+                row.payload_hash,
+            ],
+        )
+        .map_err(|e| e.to_string())?;
+        Ok(())
+    }
+
+    pub fn life_events(
+        &self,
+        limit: i64,
+        offset: i64,
+        kind: Option<&str>,
+        epoch: Option<u64>,
+    ) -> Result<Vec<LifeEventRow>, String> {
+        let conn = self.lock()?;
+        let (sql, bind_kind, bind_epoch) = match (kind, epoch) {
+            (Some(_), Some(_)) => (
+                "SELECT tx_hash, block_number, tx_index, command_id, kind, soul_id_hash, epoch, amount_micro_credits, payload_hash
+                 FROM life_events WHERE kind = ?3 AND epoch = ?4 ORDER BY block_number DESC, tx_index DESC LIMIT ?1 OFFSET ?2",
+                true,
+                true,
+            ),
+            (Some(_), None) => (
+                "SELECT tx_hash, block_number, tx_index, command_id, kind, soul_id_hash, epoch, amount_micro_credits, payload_hash
+                 FROM life_events WHERE kind = ?3 ORDER BY block_number DESC, tx_index DESC LIMIT ?1 OFFSET ?2",
+                true,
+                false,
+            ),
+            (None, Some(_)) => (
+                "SELECT tx_hash, block_number, tx_index, command_id, kind, soul_id_hash, epoch, amount_micro_credits, payload_hash
+                 FROM life_events WHERE epoch = ?3 ORDER BY block_number DESC, tx_index DESC LIMIT ?1 OFFSET ?2",
+                false,
+                true,
+            ),
+            (None, None) => (
+                "SELECT tx_hash, block_number, tx_index, command_id, kind, soul_id_hash, epoch, amount_micro_credits, payload_hash
+                 FROM life_events ORDER BY block_number DESC, tx_index DESC LIMIT ?1 OFFSET ?2",
+                false,
+                false,
+            ),
+        };
+        let mut stmt = conn.prepare(sql).map_err(|e| e.to_string())?;
+        let mapper = |row: &rusqlite::Row<'_>| {
+            Ok(LifeEventRow {
+                tx_hash: row.get(0)?,
+                block_number: row.get(1)?,
+                tx_index: row.get(2)?,
+                command_id: row.get(3)?,
+                kind: row.get(4)?,
+                soul_id_hash: row.get(5)?,
+                epoch: row.get(6)?,
+                amount_micro_credits: row.get(7)?,
+                payload_hash: row.get(8)?,
+            })
+        };
+        let rows = match (bind_kind, bind_epoch) {
+            (true, true) => stmt.query_map(
+                params![limit, offset, kind.unwrap(), epoch.unwrap()],
+                mapper,
+            ),
+            (true, false) => stmt.query_map(params![limit, offset, kind.unwrap()], mapper),
+            (false, true) => stmt.query_map(params![limit, offset, epoch.unwrap()], mapper),
+            (false, false) => stmt.query_map(params![limit, offset], mapper),
+        }
+        .map_err(|e| e.to_string())?;
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(|e| e.to_string())
     }
 
     pub fn block(&self, number: u64) -> Result<Option<BlockRow>, String> {

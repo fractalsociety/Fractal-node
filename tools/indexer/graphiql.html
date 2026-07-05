@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Fractal Indexer GraphQL</title>
+    <style>
+      body {
+        margin: 0;
+        font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        background: #101418;
+        color: #eef3f8;
+      }
+      main {
+        max-width: 920px;
+        margin: 0 auto;
+        padding: 40px 24px;
+      }
+      code,
+      pre {
+        background: #182028;
+        border: 1px solid #2a3642;
+        border-radius: 6px;
+      }
+      code {
+        padding: 2px 5px;
+      }
+      pre {
+        padding: 16px;
+        overflow: auto;
+      }
+      a {
+        color: #8ac5ff;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>Fractal Indexer GraphQL</h1>
+      <p>POST GraphQL queries to <code>/graphql</code>. Health is available at <code>/healthz</code>.</p>
+      <pre>{
+  transactions(limit: 10) {
+    hash
+    blockNumber
+    callKind
+  }
+  lifeEvents(limit: 10) {
+    kind
+    soulIdHash
+    epoch
+  }
+}</pre>
+    </main>
+  </body>
+</html>

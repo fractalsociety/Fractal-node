@@ -3,12 +3,11 @@
 use std::collections::BTreeSet;
 
 use fractal_core::OnChainTaskReceipt;
-use fractal_wallet::{
-    provider_id_from_onchain_worker_agent, ReputationLedgerSummary, SettlementEvent, ToolClass,
-};
+use fractal_wallet::{ReputationLedgerSummary, SettlementEvent, ToolClass};
 
 /// `final_status == 1` matches MVP / M3 samples for a completed paid receipt.
 pub const ONCHAIN_RECEIPT_SUCCESS_STATUS: u8 = 1;
+pub const DEFAULT_RECEIPT_TOOL_CLASS: u8 = 0;
 
 #[derive(Clone, Debug, Default)]
 pub struct SettlementLedgerSide {
@@ -28,7 +27,8 @@ impl SettlementLedgerSide {
 
 #[inline]
 pub fn tool_class_from_receipt(receipt: &OnChainTaskReceipt) -> ToolClass {
-    ToolClass::from_discriminant(receipt.tool_class).unwrap_or(ToolClass::Browser)
+    let _ = receipt;
+    ToolClass::from_discriminant(DEFAULT_RECEIPT_TOOL_CLASS).unwrap_or(ToolClass::Browser)
 }
 
 /// Merge one [`OnChainTaskReceipt`] into a §10.4 summary (`now_ms` should be chain / block time).
@@ -63,13 +63,19 @@ pub fn row_key_for_settlement(provider_id: &[u8; 32], tool_class: u8) -> String 
 
 pub fn provider_and_key_from_receipt(receipt: &OnChainTaskReceipt) -> ([u8; 32], String) {
     let pid = provider_id_from_onchain_worker_agent(receipt.worker);
-    let key = row_key_for_settlement(&pid, receipt.tool_class);
+    let key = row_key_for_settlement(&pid, DEFAULT_RECEIPT_TOOL_CLASS);
     (pid, key)
 }
 
 pub fn row_key_for_worker_agent(worker: u64, tool_class: u8) -> String {
     let pid = provider_id_from_onchain_worker_agent(worker);
     row_key_for_settlement(&pid, tool_class)
+}
+
+pub fn provider_id_from_onchain_worker_agent(worker: u64) -> [u8; 32] {
+    let mut out = [0u8; 32];
+    out[24..32].copy_from_slice(&worker.to_be_bytes());
+    out
 }
 
 /// Governance [`fractal_core::NativeCall::ResolveDispute`] with [`fractal_core::DISPUTE_RESOLUTION_PROVIDER_FAULT`].
@@ -81,12 +87,10 @@ pub fn apply_wallet_task_finalize_to_summary(
     side: &mut SettlementLedgerSide,
     available_stake: u128,
 ) {
-    summary.tool_class = ToolClass::from_discriminant(event.tool_class).unwrap_or(ToolClass::Browser);
+    summary.tool_class =
+        ToolClass::from_discriminant(event.tool_class).unwrap_or(ToolClass::Browser);
     summary.now_ms = now_ms;
-    summary.first_seen_ms = summary
-        .first_seen_ms
-        .min(event.finalized_at_ms)
-        .min(now_ms);
+    summary.first_seen_ms = summary.first_seen_ms.min(event.finalized_at_ms).min(now_ms);
     side.insert_requester(&event.requester);
     side.sync_into_summary(summary);
     summary.available_stake = available_stake;
@@ -123,7 +127,7 @@ pub fn apply_dispute_slash_to_summary(
 mod tests {
     use super::*;
 
-    fn sample_receipt(final_status: u8, payout: u128, tool_class: u8) -> OnChainTaskReceipt {
+    fn sample_receipt(final_status: u8, payout: u128) -> OnChainTaskReceipt {
         let mut rid = [0u8; 32];
         rid[31] = 7;
         OnChainTaskReceipt {
@@ -141,7 +145,6 @@ mod tests {
             final_status,
             finalized_at: 10_000,
             schema_version: 2,
-            tool_class,
         }
     }
 
@@ -158,7 +161,7 @@ mod tests {
             distinct_client_count: 0,
         };
         let mut side = SettlementLedgerSide::default();
-        let r = sample_receipt(ONCHAIN_RECEIPT_SUCCESS_STATUS, 500, 0);
+        let r = sample_receipt(ONCHAIN_RECEIPT_SUCCESS_STATUS, 500);
         apply_onchain_receipt_to_summary(&mut s, &r, 20_000, &mut side, 99);
         assert_eq!(s.successful.len(), 1);
         assert_eq!(s.successful[0].weight, 500);
@@ -180,16 +183,16 @@ mod tests {
             distinct_client_count: 0,
         };
         let mut side = SettlementLedgerSide::default();
-        let r = sample_receipt(0, 0, 0);
+        let r = sample_receipt(0, 0);
         apply_onchain_receipt_to_summary(&mut s, &r, 20_000, &mut side, 0);
         assert!(s.successful.is_empty());
         assert_eq!(s.failed_settlements, 1);
     }
 
     #[test]
-    fn tool_class_one_maps_llm() {
-        let r = sample_receipt(ONCHAIN_RECEIPT_SUCCESS_STATUS, 1, 1);
-        assert_eq!(tool_class_from_receipt(&r), ToolClass::LlmInference);
+    fn current_receipts_default_to_browser_tool_class() {
+        let r = sample_receipt(ONCHAIN_RECEIPT_SUCCESS_STATUS, 1);
+        assert_eq!(tool_class_from_receipt(&r), ToolClass::Browser);
     }
 
     #[test]

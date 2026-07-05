@@ -19,9 +19,11 @@ pub mod wallet_anchor;
 
 pub use address::{create_contract_address, Address};
 pub use chain_economics::{
-    forced_inclusion_penalty_wei, prover_reward_wei, sequencer_reward_wei, ChainEconomicsParams,
+    emission_budget_for_quarter, emission_for_block, forced_inclusion_penalty_wei,
+    load_emission_params_from_life_genesis, projected_emission_total, prover_reward_wei,
+    quarter_of, sequencer_reward_wei, ChainEconomicsParams, EmissionBlock, EmissionParams,
     ProtocolPhaseConfig, ProverRewardParams, ProverWorkReceipt, SequencerRewardParams,
-    SequencerWorkReceipt, ValidatorRegistryEntry,
+    SequencerWorkReceipt, ValidatorRegistryEntry, MAX_SUPPLY_WEI,
 };
 pub use devnet_accounts::{
     DEVNET_FAUCET_TREASURY, HARDHAT_DEFAULT_SIGNER_0, HARDHAT_DEFAULT_SIGNER_1,
@@ -35,13 +37,14 @@ pub use native_gas::{
 };
 pub use native_types::*;
 pub use state::EvmLog;
-pub use state::{Account, State};
+pub use state::{Account, ConsensusUnbondEntry, State};
 pub use tx::{
-    NativeCall, OwnedObjectCertificate, OwnedObjectCertificateError,
-    OwnedObjectCertificateEvidenceError, OwnedObjectCertificateSignBody,
-    OwnedObjectConflictingCertificateEvidence, OwnedObjectConflictingCertificateFinding,
-    OwnedObjectId, OwnedObjectPrecheck, OwnedObjectPrecheckError, OwnedObjectValidatorSignature,
-    OwnedObjectVersion, Transaction, TxBody, TxExecutionScope, VmKind,
+    LifeCommandKind, LifeCommandV1, NativeCall, OwnedObjectCertificate,
+    OwnedObjectCertificateError, OwnedObjectCertificateEvidenceError,
+    OwnedObjectCertificateSignBody, OwnedObjectConflictingCertificateEvidence,
+    OwnedObjectConflictingCertificateFinding, OwnedObjectId, OwnedObjectPrecheck,
+    OwnedObjectPrecheckError, OwnedObjectValidatorSignature, OwnedObjectVersion, Transaction,
+    TxBody, TxExecutionScope, VmKind,
 };
 
 use fractal_crypto::hash::{commit_borsh, keccak256};

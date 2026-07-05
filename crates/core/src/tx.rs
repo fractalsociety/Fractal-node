@@ -83,6 +83,46 @@ pub enum NativeCall {
     ProofCommitmentV1 {
         proof_hash: Hash256,
     },
+    /// RealLifeAI / Agent Life command. The chain stores a deterministic,
+    /// hash-bound command envelope; indexers and Fractalwork retain the rich
+    /// payload body off-chain.
+    LifeCommandV1(LifeCommandV1),
+}
+
+#[derive(BorshSerialize, BorshDeserialize, Clone, Debug, PartialEq, Eq)]
+pub enum LifeCommandKind {
+    BirthGrant,
+    BirthSpawn,
+    BirthPlayerFunded,
+    RentCharge,
+    LoanOpen,
+    LoanAccept,
+    LoanRepay,
+    ExtensionPurchase,
+    WillRegister,
+    WillUpdate,
+    OwnerTopUp,
+    WithdrawalRequest,
+    WithdrawalSettlement,
+    SiiCommit,
+    LadderCommit,
+    BenchmarkFreeze,
+    IntelligencePayout,
+    ProvenanceBond,
+    FeedbackArtifact,
+    SealedSale,
+    ReaperEpoch,
+}
+
+#[derive(BorshSerialize, BorshDeserialize, Clone, Debug, PartialEq, Eq)]
+pub struct LifeCommandV1 {
+    pub command_id: Hash256,
+    pub kind: LifeCommandKind,
+    pub soul_id_hash: Hash256,
+    pub counterparty_hash: Option<Hash256>,
+    pub epoch: u64,
+    pub amount_micro_credits: u128,
+    pub payload_hash: Hash256,
 }
 
 #[derive(BorshSerialize, BorshDeserialize, Clone, Debug, PartialEq, Eq)]
@@ -116,6 +156,7 @@ pub enum OwnedObjectId {
     Receipt(Hash256),
     WalletTaskReceipt(Hash256),
     ProofCommitment(Hash256),
+    LifeCommand(Hash256),
 }
 
 #[derive(BorshSerialize, BorshDeserialize, Clone, Debug, PartialEq, Eq)]
@@ -517,6 +558,9 @@ impl Transaction {
             ) => owned(vec![OwnedObjectId::WalletTaskReceipt(*commitment)]),
             (VmKind::Native, TxBody::Native(NativeCall::ProofCommitmentV1 { proof_hash })) => {
                 owned(vec![OwnedObjectId::ProofCommitment(*proof_hash)])
+            }
+            (VmKind::Native, TxBody::Native(NativeCall::LifeCommandV1(command))) => {
+                mixed(vec![OwnedObjectId::LifeCommand(command.command_id)])
             }
             (VmKind::Native, TxBody::Native(NativeCall::NoOp)) => owned(Vec::new()),
             _ => TxExecutionScope::Consensus,

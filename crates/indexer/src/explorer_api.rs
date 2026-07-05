@@ -10,7 +10,7 @@ use axum::{
 use serde::Serialize;
 use serde_json::Value;
 
-use crate::db::{BlockRow, IndexerDb, SearchResult, TxRow};
+use crate::db::{BlockRow, IndexerDb, LifeEventRow, SearchResult, TxRow};
 
 #[derive(Clone)]
 pub struct ExplorerApiState {
@@ -24,6 +24,7 @@ pub struct ExplorerStatusJson {
     pub tx_count: u64,
     pub wallet_event_count: u64,
     pub reputation_row_count: u64,
+    pub life_event_count: u64,
     pub chain_rpc_url: String,
 }
 
@@ -51,6 +52,19 @@ pub struct ExplorerTxJson {
 }
 
 #[derive(Serialize)]
+pub struct ExplorerLifeEventJson {
+    pub tx_hash: String,
+    pub block_number: u64,
+    pub tx_index: u32,
+    pub command_id: String,
+    pub kind: String,
+    pub soul_id_hash: String,
+    pub epoch: u64,
+    pub amount_micro_credits: String,
+    pub payload_hash: String,
+}
+
+#[derive(Serialize)]
 #[serde(tag = "kind")]
 pub enum ExplorerSearchHit {
     #[serde(rename = "block")]
@@ -68,6 +82,8 @@ pub enum ExplorerSearchHit {
 pub struct ListQuery {
     pub first: Option<i32>,
     pub skip: Option<i32>,
+    pub kind: Option<String>,
+    pub epoch: Option<u64>,
 }
 
 fn limit_skip(q: &ListQuery) -> (i64, i64) {
@@ -101,6 +117,20 @@ fn tx_json(r: &TxRow) -> ExplorerTxJson {
     }
 }
 
+fn life_event_json(r: LifeEventRow) -> ExplorerLifeEventJson {
+    ExplorerLifeEventJson {
+        tx_hash: r.tx_hash,
+        block_number: r.block_number,
+        tx_index: r.tx_index,
+        command_id: r.command_id,
+        kind: r.kind,
+        soul_id_hash: r.soul_id_hash,
+        epoch: r.epoch,
+        amount_micro_credits: r.amount_micro_credits,
+        payload_hash: r.payload_hash,
+    }
+}
+
 pub async fn explorer_status(
     State(st): State<ExplorerApiState>,
 ) -> Result<Json<ExplorerStatusJson>, StatusCode> {
@@ -113,8 +143,21 @@ pub async fn explorer_status(
         tx_count: s.tx_count,
         wallet_event_count: s.wallet_event_count,
         reputation_row_count: s.reputation_row_count,
+        life_event_count: s.life_event_count,
         chain_rpc_url: st.rpc_url.clone(),
     }))
+}
+
+pub async fn explorer_life_events(
+    State(st): State<ExplorerApiState>,
+    Query(q): Query<ListQuery>,
+) -> Result<Json<Vec<ExplorerLifeEventJson>>, StatusCode> {
+    let (limit, offset) = limit_skip(&q);
+    let rows = st
+        .db
+        .life_events(limit, offset, q.kind.as_deref(), q.epoch)
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    Ok(Json(rows.into_iter().map(life_event_json).collect()))
 }
 
 pub async fn explorer_blocks(
@@ -242,6 +285,7 @@ pub fn explorer_router(state: ExplorerApiState) -> axum::Router {
             get(explorer_block_transactions),
         )
         .route("/transactions/{hash}", get(explorer_transaction))
+        .route("/life/events", get(explorer_life_events))
         .route(
             "/address/{address}/transactions",
             get(explorer_address_transactions),

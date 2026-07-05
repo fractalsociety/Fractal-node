@@ -5,15 +5,15 @@ use fractal_crypto::hash::keccak256;
 use fractal_crypto::verify_message;
 
 use crate::address::Address;
-use crate::chain_economics::ChainEconomicsParams;
+use crate::chain_economics::{emission_for_block, ChainEconomicsParams, MAX_SUPPLY_WEI};
 use crate::error::ExecError;
 use crate::merkle::{merkle_root, verify_merkle_proof};
 use crate::native_types::{
     AgentRecord, DisputeRecord, OnChainTaskReceipt, PayoutEntry, SettleBatchPayload, StoredBatch,
 };
 use crate::tx::{
-    NativeCall, OwnedObjectId, OwnedObjectPrecheck, OwnedObjectPrecheckError, OwnedObjectVersion,
-    Transaction, TxBody, TxExecutionScope, VmKind,
+    LifeCommandKind, LifeCommandV1, NativeCall, OwnedObjectId, OwnedObjectPrecheck,
+    OwnedObjectPrecheckError, OwnedObjectVersion, Transaction, TxBody, TxExecutionScope, VmKind,
 };
 use crate::tx_gas_limit;
 use crate::EvmEngine;
@@ -62,8 +62,30 @@ pub struct State {
     pub wallet_task_receipt_anchors: BTreeMap<fractal_crypto::Hash256, Address>,
     /// Fractal Society research proof/package commitments anchored as native transactions.
     pub proof_commitments: BTreeMap<fractal_crypto::Hash256, Address>,
+    /// RealLifeAI command ledger. Full bodies remain in Fractalwork/DataEvol;
+    /// this chain state stores hash-bound command envelopes and signer.
+    pub life_commands: BTreeMap<fractal_crypto::Hash256, StoredLifeCommand>,
+    pub life_events: Vec<LifeChainEvent>,
+    pub life_reaper_epochs: BTreeSet<u64>,
     /// Monotonic versions for owned objects whose version is not already the account nonce.
     pub owned_object_versions: BTreeMap<OwnedObjectId, u64>,
+    /// Protocol-native FRAC minted by emission, excluding devnet faucet premine.
+    pub protocol_minted_wei: u128,
+    /// Protocol-native FRAC burned by fees, fraud, slashing, or kinless residue.
+    pub protocol_burned_wei: u128,
+    pub emission_provider_pool_wei: u128,
+    pub emission_consensus_pool_wei: u128,
+    pub emission_intelligence_pool_wei: u128,
+    pub emission_provider_rollover_wei: u128,
+    pub emission_consensus_rollover_wei: u128,
+    pub emission_intelligence_rollover_wei: u128,
+    pub consensus_stakes: BTreeMap<fractal_crypto::Hash256, u128>,
+    pub consensus_stake_shares: BTreeMap<(Address, fractal_crypto::Hash256), u128>,
+    pub consensus_commission_bps: BTreeMap<fractal_crypto::Hash256, u16>,
+    pub consensus_reward_credits: BTreeMap<(Address, fractal_crypto::Hash256), u128>,
+    pub consensus_unbonding: Vec<ConsensusUnbondEntry>,
+    pub validator_registry:
+        BTreeMap<fractal_crypto::Hash256, crate::chain_economics::ValidatorRegistryEntry>,
     pub chain_economics: ChainEconomicsParams,
 }
 
@@ -89,10 +111,53 @@ impl Default for State {
             evm_tx_success: BTreeMap::new(),
             wallet_task_receipt_anchors: BTreeMap::new(),
             proof_commitments: BTreeMap::new(),
+            life_commands: BTreeMap::new(),
+            life_events: Vec::new(),
+            life_reaper_epochs: BTreeSet::new(),
             owned_object_versions: BTreeMap::new(),
+            protocol_minted_wei: 0,
+            protocol_burned_wei: 0,
+            emission_provider_pool_wei: 0,
+            emission_consensus_pool_wei: 0,
+            emission_intelligence_pool_wei: 0,
+            emission_provider_rollover_wei: 0,
+            emission_consensus_rollover_wei: 0,
+            emission_intelligence_rollover_wei: 0,
+            consensus_stakes: BTreeMap::new(),
+            consensus_stake_shares: BTreeMap::new(),
+            consensus_commission_bps: BTreeMap::new(),
+            consensus_reward_credits: BTreeMap::new(),
+            consensus_unbonding: Vec::new(),
+            validator_registry: BTreeMap::new(),
             chain_economics: ChainEconomicsParams::default(),
         }
     }
+}
+
+#[derive(BorshSerialize, BorshDeserialize, Clone, Debug, PartialEq, Eq)]
+pub struct ConsensusUnbondEntry {
+    pub owner: Address,
+    pub validator_fingerprint: fractal_crypto::Hash256,
+    pub amount: u128,
+    pub release_ms: u64,
+}
+
+#[derive(BorshSerialize, BorshDeserialize, Clone, Debug, PartialEq, Eq)]
+pub struct StoredLifeCommand {
+    pub signer: Address,
+    pub command: LifeCommandV1,
+    pub sequence: u64,
+}
+
+#[derive(BorshSerialize, BorshDeserialize, Clone, Debug, PartialEq, Eq)]
+pub struct LifeChainEvent {
+    pub event_id: fractal_crypto::Hash256,
+    pub command_id: fractal_crypto::Hash256,
+    pub kind: LifeCommandKind,
+    pub soul_id_hash: fractal_crypto::Hash256,
+    pub epoch: u64,
+    pub amount_micro_credits: u128,
+    pub payload_hash: fractal_crypto::Hash256,
 }
 
 #[derive(BorshSerialize, BorshDeserialize, Clone, Debug, PartialEq, Eq)]
@@ -103,6 +168,48 @@ pub struct EvmLog {
 }
 
 impl State {
+    #[must_use]
+    pub fn circulating_supply_wei(&self) -> u128 {
+        self.protocol_minted_wei
+            .saturating_sub(self.protocol_burned_wei)
+    }
+
+    #[must_use]
+    pub fn consensus_stake_total_for_fingerprint(
+        &self,
+        validator_fingerprint: &fractal_crypto::Hash256,
+    ) -> u128 {
+        self.consensus_stakes
+            .get(validator_fingerprint)
+            .copied()
+            .unwrap_or(0)
+    }
+
+    pub fn mint_protocol_emission_for_block(&mut self, height: u64) -> Result<u128, ExecError> {
+        let emission = emission_for_block(height, &self.chain_economics.emission);
+        if emission.total_wei == 0 {
+            return Ok(0);
+        }
+        let new_minted = self
+            .protocol_minted_wei
+            .checked_add(emission.total_wei)
+            .ok_or(ExecError::SupplyCapExceeded)?;
+        if new_minted > MAX_SUPPLY_WEI {
+            return Err(ExecError::SupplyCapExceeded);
+        }
+        self.protocol_minted_wei = new_minted;
+        self.emission_provider_pool_wei = self
+            .emission_provider_pool_wei
+            .saturating_add(emission.provider_pool_wei);
+        self.emission_consensus_pool_wei = self
+            .emission_consensus_pool_wei
+            .saturating_add(emission.consensus_pool_wei);
+        self.emission_intelligence_pool_wei = self
+            .emission_intelligence_pool_wei
+            .saturating_add(emission.intelligence_pool_wei);
+        Ok(emission.total_wei)
+    }
+
     pub fn owned_object_version(&self, object_id: &OwnedObjectId) -> u64 {
         match object_id {
             OwnedObjectId::AccountNonce(address) => {
@@ -646,6 +753,9 @@ impl State {
                 }
                 Ok(())
             }
+            NativeCall::LifeCommandV1(command) => {
+                self.apply_life_command(signer, command, bump_nonce)
+            }
             NativeCall::NoOp => {
                 if bump_nonce {
                     self.bump_nonce(signer)?;
@@ -721,6 +831,54 @@ impl State {
         for r in &p.receipts {
             self.receipts.insert(r.receipt_id, r.clone());
         }
+        if bump_nonce {
+            self.bump_nonce(signer)?;
+        }
+        Ok(())
+    }
+
+    fn apply_life_command(
+        &mut self,
+        signer: Address,
+        command: &LifeCommandV1,
+        bump_nonce: bool,
+    ) -> Result<(), ExecError> {
+        if self.life_commands.contains_key(&command.command_id) {
+            return Err(ExecError::DuplicateLifeCommand);
+        }
+        if matches!(
+            command.kind,
+            LifeCommandKind::WithdrawalSettlement
+                | LifeCommandKind::SiiCommit
+                | LifeCommandKind::LadderCommit
+                | LifeCommandKind::BenchmarkFreeze
+                | LifeCommandKind::IntelligencePayout
+                | LifeCommandKind::ReaperEpoch
+        ) {
+            self.require_governance(signer)?;
+        }
+        let sequence = self.life_events.len() as u64;
+        let event_id = keccak256(
+            &borsh::to_vec(&(b"life.event.v1", sequence, command))
+                .map_err(|_| ExecError::InvalidShape)?,
+        );
+        self.life_commands.insert(
+            command.command_id,
+            StoredLifeCommand {
+                signer,
+                command: command.clone(),
+                sequence,
+            },
+        );
+        self.life_events.push(LifeChainEvent {
+            event_id,
+            command_id: command.command_id,
+            kind: command.kind.clone(),
+            soul_id_hash: command.soul_id_hash,
+            epoch: command.epoch,
+            amount_micro_credits: command.amount_micro_credits,
+            payload_hash: command.payload_hash,
+        });
         if bump_nonce {
             self.bump_nonce(signer)?;
         }

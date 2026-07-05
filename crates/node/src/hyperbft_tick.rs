@@ -146,6 +146,13 @@ impl NodeInner {
             block_reward_wei,
             base_fee_per_gas: base,
             evm_gas_used: evm_gas,
+            life_reaper_enabled: std::env::var("FRACTAL_LIFE_REAPER_ENABLED")
+                .map(|v| matches!(v.trim(), "1" | "true" | "TRUE" | "yes"))
+                .unwrap_or(false),
+            life_epoch_length_ms: std::env::var("FRACTAL_LIFE_EPOCH_LENGTH_MS")
+                .ok()
+                .and_then(|s| s.trim().parse().ok())
+                .unwrap_or(60_000),
         };
 
         let block = match execute_and_build_block(

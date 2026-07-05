@@ -20,11 +20,11 @@ use axum::{
     routing::{get, post},
     Router,
 };
+use fractal_indexer::db::IndexerDb;
 use fractal_indexer::explorer_api::{explorer_router, ExplorerApiState};
 use fractal_indexer::graphql::{build_schema, AppState};
 use fractal_indexer::reputation::ReputationSyncConfig;
 use fractal_indexer::sync::{sync_to_head, SyncConfig};
-use fractal_indexer::db::IndexerDb;
 use tower_http::cors::CorsLayer;
 
 /// Unset or empty → **true** (merge `SettleBatch` / `SettleReceipt` into `reputation_rows`). Use `0`, `false`, `no`, or `off` to disable.
@@ -81,8 +81,8 @@ async fn graphiql() -> impl axum::response::IntoResponse {
 async fn main() {
     let rpc_url =
         std::env::var("INDEXER_RPC_URL").unwrap_or_else(|_| "http://127.0.0.1:8545".into());
-    let db_path = std::env::var("INDEXER_DB_PATH")
-        .unwrap_or_else(|_| "./target/fractal_indexer.db".into());
+    let db_path =
+        std::env::var("INDEXER_DB_PATH").unwrap_or_else(|_| "./target/fractal_indexer.db".into());
     let bind = std::env::var("INDEXER_GRAPHQL_BIND").unwrap_or_else(|_| "0.0.0.0:8088".into());
     let poll_ms: u64 = std::env::var("INDEXER_POLL_MS")
         .ok()
@@ -99,10 +99,8 @@ async fn main() {
     let merge_settlements = env_reputation_merge_settlements();
     let merge_wallet_tasks = env_reputation_merge_wallet_tasks();
 
-    let db = Arc::new(
-        IndexerDb::open(PathBuf::from(&db_path).as_path())
-            .expect("open INDEXER_DB_PATH"),
-    );
+    let db =
+        Arc::new(IndexerDb::open(PathBuf::from(&db_path).as_path()).expect("open INDEXER_DB_PATH"));
     db.set_meta("chain_rpc_url", &rpc_url)
         .expect("meta chain_rpc_url");
 
@@ -118,14 +116,12 @@ async fn main() {
 
     let db_sync = db.clone();
     let cfg_sync = cfg.clone();
-    std::thread::spawn(move || {
-        loop {
-            match sync_to_head(&db_sync, &cfg_sync) {
-                Ok(h) => eprintln!("fractal-indexer: synced to block {h}"),
-                Err(e) => eprintln!("fractal-indexer: sync error: {e}"),
-            }
-            std::thread::sleep(Duration::from_millis(poll_ms));
+    std::thread::spawn(move || loop {
+        match sync_to_head(&db_sync, &cfg_sync) {
+            Ok(h) => eprintln!("fractal-indexer: synced to block {h}"),
+            Err(e) => eprintln!("fractal-indexer: sync error: {e}"),
         }
+        std::thread::sleep(Duration::from_millis(poll_ms));
     });
 
     let schema = build_schema(AppState {

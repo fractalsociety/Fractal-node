@@ -3,7 +3,7 @@
 use std::sync::Arc;
 
 use async_graphql::Request;
-use fractal_indexer::db::{BlockRow, IndexerDb, TxRow};
+use fractal_indexer::db::{BlockRow, IndexerDb, LifeEventRow, TxRow};
 use fractal_indexer::graphql::{build_schema, AppState};
 
 #[tokio::test]
@@ -35,6 +35,18 @@ async fn indexer_status_query() {
         true,
     )
     .unwrap();
+    db.insert_life_event(&LifeEventRow {
+        tx_hash: "0xlife".into(),
+        block_number: 42,
+        tx_index: 1,
+        command_id: "0xcmd".into(),
+        kind: "ladder_commit".into(),
+        soul_id_hash: "0xsoul".into(),
+        epoch: 4,
+        amount_micro_credits: "10".into(),
+        payload_hash: "0xpayload".into(),
+    })
+    .unwrap();
 
     let schema = build_schema(AppState {
         db,
@@ -43,7 +55,7 @@ async fn indexer_status_query() {
     let resp = schema
         .execute(
             Request::new(
-                r#"{ indexerStatus { lastIndexedBlock txCount walletEventCount reputationRowCount chainRpcUrl } }"#,
+                r#"{ indexerStatus { lastIndexedBlock txCount walletEventCount reputationRowCount lifeEventCount chainRpcUrl } lifeEvents(kind:"ladder_commit", epoch:4) { kind amountMicroCredits } }"#,
             ),
         )
         .await;
@@ -53,4 +65,6 @@ async fn indexer_status_query() {
     assert_eq!(data["indexerStatus"]["txCount"], 1);
     assert_eq!(data["indexerStatus"]["walletEventCount"], 1);
     assert_eq!(data["indexerStatus"]["reputationRowCount"], 0);
+    assert_eq!(data["indexerStatus"]["lifeEventCount"], 1);
+    assert_eq!(data["lifeEvents"][0]["kind"], "ladder_commit");
 }

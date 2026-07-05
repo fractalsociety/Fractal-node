@@ -21,9 +21,11 @@ members = [
     "crates/sdk-rust",
     "crates/mvp-backend",
     "crates/faucet",
+    "crates/indexer",
     "crates/indexer-stub",
     "crates/benchmarks",
     "crates/fractal-society",
+    "crates/agent-life",
     "tools/load-tps",
 ]
 exclude = [

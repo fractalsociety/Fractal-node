@@ -7,6 +7,6 @@ mod indexer_mirror;
 mod ledger_merge;
 pub mod native_decode;
 pub mod reputation;
-pub mod wallet_task_mirror;
 pub mod rpc;
 pub mod sync;
+pub mod wallet_task_mirror;

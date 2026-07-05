@@ -5,8 +5,10 @@ use std::sync::Arc;
 use fractal_core::{Transaction, TxBody};
 use serde_json::Value;
 
-use crate::db::{BlockRow, IndexerDb, TxRow};
-use crate::native_decode::{is_wallet_native, native_call_kind, tx_payload_json, vm_kind_label};
+use crate::db::{BlockRow, IndexerDb, LifeEventRow, TxRow};
+use crate::native_decode::{
+    is_wallet_native, life_kind, native_call_kind, tx_payload_json, vm_kind_label,
+};
 use crate::reputation::{process_tx_for_reputation, ReputationSyncConfig};
 use crate::rpc::{block_timestamp_ms, decode_tx_from_rpc, head_number, rpc_post};
 
@@ -137,6 +139,19 @@ fn ingest_tx(
         },
         is_wallet,
     )?;
+    if let TxBody::Native(fractal_core::NativeCall::LifeCommandV1(command)) = &tx.body {
+        db.insert_life_event(&LifeEventRow {
+            tx_hash: hash.to_string(),
+            block_number,
+            tx_index,
+            command_id: format!("0x{}", hex::encode(command.command_id)),
+            kind: life_kind(&command.kind).to_string(),
+            soul_id_hash: format!("0x{}", hex::encode(command.soul_id_hash)),
+            epoch: command.epoch,
+            amount_micro_credits: command.amount_micro_credits.to_string(),
+            payload_hash: format!("0x{}", hex::encode(command.payload_hash)),
+        })?;
+    }
     process_tx_for_reputation(db, block_number, block_ts_ms, tx_index, hash, tx, rep_cfg)?;
     Ok(())
 }
@@ -174,7 +189,10 @@ mod tests {
             signer: [1u8; 20],
             nonce: 0,
             vm: VmKind::Native,
-            body: TxBody::Native(NativeCall::WalletCloseBudgetAccountV1 { budget: 3 }),
+            body: TxBody::Native(NativeCall::WalletTaskReceiptAnchorV1 {
+                commitment: [3u8; 32],
+                receipt_witness: vec![],
+            }),
         };
         ingest_tx(
             &db,
@@ -189,5 +207,44 @@ mod tests {
         .unwrap();
         let st = db.status().unwrap();
         assert_eq!(st.wallet_event_count, 1);
+    }
+
+    #[test]
+    fn ingest_life_command_projects_life_event() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("life.db");
+        let db = IndexerDb::open(&path).unwrap();
+        let tx = Transaction {
+            signer: [2u8; 20],
+            nonce: 0,
+            vm: VmKind::Native,
+            body: TxBody::Native(NativeCall::LifeCommandV1(fractal_core::LifeCommandV1 {
+                command_id: [3u8; 32],
+                kind: fractal_core::LifeCommandKind::LadderCommit,
+                soul_id_hash: [4u8; 32],
+                counterparty_hash: None,
+                epoch: 7,
+                amount_micro_credits: 99,
+                payload_hash: [5u8; 32],
+            })),
+        };
+        ingest_tx(
+            &db,
+            7,
+            0,
+            1,
+            "0xlife",
+            &tx,
+            None,
+            &ReputationSyncConfig::default(),
+        )
+        .unwrap();
+        let st = db.status().unwrap();
+        assert_eq!(st.life_event_count, 1);
+        let rows = db
+            .life_events(10, 0, Some("ladder_commit"), Some(7))
+            .unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].amount_micro_credits, "99");
     }
 }

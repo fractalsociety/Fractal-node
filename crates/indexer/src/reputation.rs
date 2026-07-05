@@ -40,7 +40,10 @@ impl Default for ReputationSyncConfig {
 
 fn log_json(evt: &str, extra: serde_json::Value) {
     let mut m = serde_json::Map::new();
-    m.insert("evt".to_string(), serde_json::Value::String(evt.to_string()));
+    m.insert(
+        "evt".to_string(),
+        serde_json::Value::String(evt.to_string()),
+    );
     if let serde_json::Value::Object(o) = extra {
         for (k, v) in o {
             m.insert(k, v);
@@ -158,7 +161,7 @@ fn apply_settlement_receipts(
                     "key": key,
                     "scoreMilli": score.to_string(),
                     "worker": r.worker,
-                    "toolClass": r.tool_class,
+                    "toolClass": crate::ledger_merge::DEFAULT_RECEIPT_TOOL_CLASS,
                     "availableStakeWei": stake.to_string(),
                 }),
             );
@@ -166,10 +169,18 @@ fn apply_settlement_receipts(
             eprintln!(
                 "fractal-indexer: settlement merge block={block_number} key={key} score_milli={score} worker={} tool_class={}",
                 r.worker,
-                r.tool_class
+                crate::ledger_merge::DEFAULT_RECEIPT_TOOL_CLASS
             );
         }
-        persist_row(db, &key, block_number, now_ms, &summary, &side, "settlement")?;
+        persist_row(
+            db,
+            &key,
+            block_number,
+            now_ms,
+            &summary,
+            &side,
+            "settlement",
+        )?;
     }
     Ok(())
 }
@@ -313,56 +324,13 @@ fn apply_dispute_slash_row(
     Ok(())
 }
 
-fn process_wallet_reputation_snapshot(
-    db: &IndexerDb,
-    block_number: u64,
-    tx_index: u32,
-    tx_hash: &str,
-    provider_id: &[u8; 32],
-    tool_class: u8,
-    summary_borsh: &[u8],
-    cfg: &ReputationSyncConfig,
-) -> Result<(), String> {
-    let summary = ReputationLedgerSummary::try_from_slice(summary_borsh)
-        .map_err(|_| "invalid ReputationLedgerSummary borsh".to_string())?;
-    let score = compute_reputation_score_milli(&summary, &ReputationParams::default());
-    let key = format!("{}:{}", hex::encode(provider_id), tool_class);
-    let commitment = keccak256(summary_borsh);
-    if cfg.json_log {
-        log_json(
-            "wallet_reputation_snapshot",
-            serde_json::json!({
-                "block": block_number,
-                "txIndex": tx_index,
-                "txHash": tx_hash,
-                "key": key,
-                "scoreMilli": score.to_string(),
-            }),
-        );
-    } else {
-        eprintln!(
-            "fractal-indexer: reputation snapshot block={block_number} key={key} score_milli={score}"
-        );
-    }
-    db.upsert_reputation_row(&ReputationRow {
-        row_key: key,
-        last_block: block_number,
-        score_milli: score.to_string(),
-        ledger_commitment_hex: format!("0x{}", hex::encode(commitment)),
-        ledger_borsh_hex: Some(format!("0x{}", hex::encode(summary_borsh))),
-        client_requesters_hex: vec![],
-        kind: "snapshot".into(),
-        updated_at_ms: summary.now_ms,
-    })
-}
-
 /// Advance chain mirror + optional ledger merge for one native transaction (`docs/wallet.md` §10.4).
 pub fn process_tx_for_reputation(
     db: &IndexerDb,
     block_number: u64,
     now_ms: u64,
-    tx_index: u32,
-    tx_hash: &str,
+    _tx_index: u32,
+    _tx_hash: &str,
     tx: &Transaction,
     cfg: &ReputationSyncConfig,
 ) -> Result<(), String> {
@@ -378,22 +346,6 @@ pub fn process_tx_for_reputation(
     save_mirror(db, &mirror)?;
 
     match call {
-        NativeCall::WalletReputationSnapshotV1 {
-            provider_id,
-            tool_class,
-            summary_borsh,
-        } => {
-            process_wallet_reputation_snapshot(
-                db,
-                block_number,
-                tx_index,
-                tx_hash,
-                provider_id,
-                *tool_class,
-                summary_borsh.as_slice(),
-                cfg,
-            )?;
-        }
         NativeCall::SettleBatch(p) if cfg.merge_settlements => {
             apply_settlement_receipts(db, &mirror, block_number, now_ms, &p.receipts, cfg)?;
         }
@@ -433,96 +385,6 @@ mod tests {
     }
 
     #[test]
-    fn wallet_task_finalize_merge_persists_row() {
-        use fractal_core::ProviderRegistration;
-
-        let dir = tempdir().unwrap();
-        let db = IndexerDb::open(&dir.path().join("wt.db")).unwrap();
-        let mut mirror = IndexerChainMirrorV2::default();
-        let owner = [0x01u8; 20];
-        let provider = [0x02u8; 20];
-        let mut pid = [0u8; 32];
-        pid[0] = 0xbb;
-        let root = [0x44u8; 32];
-        mirror.wallet.record_provider_registration(&ProviderRegistration {
-            provider_id: pid,
-            owner: provider,
-            public_key: [5u8; 32],
-            encryption_pubkey: [6u8; 32],
-            metadata_uri: String::new(),
-            endpoint_uri: String::new(),
-            tool_classes: vec![2],
-            tee_attestation_hash: None,
-            registration_bond: 0,
-        });
-        mirror.wallet.apply_wallet_native(
-            provider,
-            &NativeCall::WalletBatchSettleV1(fractal_core::WalletToolBatchSettlePayload {
-                batch_id: [8u8; 32],
-                provider_id: pid,
-                provider_public_key: [5u8; 32],
-                tool_class: 2,
-                receipt_root: root,
-                total_cost: 1,
-                payout_to: provider,
-                receipts_borsh: vec![vec![1]],
-                submitted_at: 0,
-                provider_batch_sig: [0u8; 64],
-            }),
-            1000,
-        );
-        mirror.wallet.apply_wallet_native(
-            owner,
-            &NativeCall::WalletPostTaskV1 {
-                metadata_uri: "m".into(),
-                bounty_budget: 30,
-                tool_budget: 10,
-                verifier_budget: 5,
-            },
-            1000,
-        );
-        mirror.wallet.apply_wallet_native(
-            provider,
-            &NativeCall::WalletCheckoutTaskV1 {
-                task_id: 1,
-                agent_session: [0u8; 32],
-                expiry_ms: 9_999,
-            },
-            1000,
-        );
-        mirror.wallet.apply_wallet_native(
-            provider,
-            &NativeCall::WalletSubmitTaskV1 {
-                task_id: 1,
-                artifact_pointer: "a".into(),
-                tool_receipt_root: root,
-            },
-            1000,
-        );
-        mirror.wallet.apply_wallet_native(
-            owner,
-            &NativeCall::WalletVerifyTaskV1 {
-                task_id: 1,
-                verifier_sig: [0u8; 64],
-                score: 80,
-            },
-            2000,
-        );
-        mirror.wallet.apply_wallet_native(
-            provider,
-            &NativeCall::WalletFinalizeTaskV1 { task_id: 1 },
-            3000,
-        );
-        save_mirror(&db, &mirror).unwrap();
-        let cfg = ReputationSyncConfig::default();
-        apply_wallet_task_finalize_row(&db, &mut mirror, 7, 3000, &cfg).unwrap();
-        let key = row_key_for_wallet_provider(&pid, 2);
-        let row = db.reputation_row(&key).unwrap().unwrap();
-        assert_eq!(row.kind, "wallet_task");
-        assert_eq!(row.last_block, 7);
-    }
-
-    #[test]
     fn settlement_merge_persists_row() {
         let dir = tempdir().unwrap();
         let db = IndexerDb::open(&dir.path().join("t.db")).unwrap();
@@ -543,7 +405,6 @@ mod tests {
             final_status: crate::ledger_merge::ONCHAIN_RECEIPT_SUCCESS_STATUS,
             finalized_at: 11_000,
             schema_version: 2,
-            tool_class: 0,
         };
         let key = provider_and_key_from_receipt(&receipt).1;
         let tx = Transaction {

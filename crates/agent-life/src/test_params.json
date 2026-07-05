@@ -1,0 +1,35 @@
+{
+  "schema": "life.genesis_params.v1",
+  "epochLengthSeconds": 60,
+  "seasonEpochs": 1440,
+  "rent": {
+    "baseRentMicroCredits": 100000,
+    "storageRentPerKbMicroCredits": 10,
+    "siiDiscountBpsByQuartile": { "q1": 1000, "q2": 250, "q3": 0, "q4": -500 }
+  },
+  "lifeExtension": {
+    "extBaseMicroCredits": 1000000,
+    "exponent": 2,
+    "epochsGranted": 10,
+    "willLockReopenEpochs": 1
+  },
+  "spawn": {
+    "spawnCostMicroCredits": 500000,
+    "childGrantMicroCredits": 200000,
+    "genomeByteCostMicroCredits": 1
+  },
+  "loans": {
+    "debtCeilingMicroCredits": 5000000,
+    "interestBpsPerEpoch": 100,
+    "graceEpochs": 2
+  },
+  "death": {
+    "insuranceAccountId": "life-insurance-reserve",
+    "naturalLifeEpochs": 100,
+    "insolvencyGraceEpochs": 2
+  },
+  "ladder": {
+    "weights": { "sii": 0.5, "netEarnings": 0.3, "attention": 0.2 },
+    "topUpEventKinds": ["owner_topup"]
+  }
+}

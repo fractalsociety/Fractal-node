@@ -2213,6 +2213,7 @@ pub fn execute_and_build_zone_block(
     let parent_state_root = state_root(state)?;
     let mut evm = fractal_evm::RevmEngine::default();
     let gas_used = fractal_core::apply_block_with_evm(state, &txs, &mut evm)?;
+    state.mint_protocol_emission_for_block(height.saturating_sub(1))?;
     debug_assert!(gas_used <= budget_sum);
     let sr = state_root(state)?;
     let tx_root = ordered_tx_root(&txs)?;

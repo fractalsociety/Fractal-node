@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
-use fractal_indexer::db::{BlockRow, IndexerDb, TxRow};
+use fractal_indexer::db::{BlockRow, IndexerDb, LifeEventRow, TxRow};
 use fractal_indexer::explorer_api::{explorer_router, ExplorerApiState};
 use tower::ServiceExt;
 
@@ -35,6 +35,18 @@ async fn explorer_api_blocks_and_search() {
         },
         false,
     )
+    .unwrap();
+    db.insert_life_event(&LifeEventRow {
+        tx_hash: "0xlife12".into(),
+        block_number: 12,
+        tx_index: 1,
+        command_id: "0xcmd".into(),
+        kind: "sii_commit".into(),
+        soul_id_hash: "0xsoul".into(),
+        epoch: 3,
+        amount_micro_credits: "0".into(),
+        payload_hash: "0xpayload".into(),
+    })
     .unwrap();
 
     let app = explorer_router(ExplorerApiState {
@@ -70,6 +82,23 @@ async fn explorer_api_blocks_and_search() {
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
+
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/life/events?kind=sii_commit&epoch=3")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let life_events: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(life_events[0]["kind"], "sii_commit");
 
     let resp = app
         .oneshot(

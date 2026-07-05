@@ -2,9 +2,12 @@
 
 use std::collections::BTreeMap;
 
-use fractal_core::{Address, NativeCall, OnChainTaskReceipt, DISPUTE_RESOLUTION_PROVIDER_FAULT};
+use fractal_core::{Address, NativeCall, OnChainTaskReceipt};
 use serde::{Deserialize, Serialize};
 
+use crate::ledger_merge::DEFAULT_RECEIPT_TOOL_CLASS;
+
+const DISPUTE_RESOLUTION_PROVIDER_FAULT: u8 = 1;
 pub(crate) fn addr_hex(a: &Address) -> String {
     format!("0x{}", hex::encode(a.as_slice()))
 }
@@ -66,7 +69,7 @@ impl IndexerChainMirror {
             rid,
             ReceiptMetaWire {
                 worker: r.worker,
-                tool_class: r.tool_class,
+                tool_class: DEFAULT_RECEIPT_TOOL_CLASS,
             },
         );
     }

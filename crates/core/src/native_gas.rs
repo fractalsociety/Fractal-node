@@ -57,6 +57,7 @@ fn native_base_gas(call: &NativeCall) -> u64 {
         NativeCall::WithdrawRewards { .. } => 8_000,
         NativeCall::WalletTaskReceiptAnchorV1 { .. } => 6_000,
         NativeCall::ProofCommitmentV1 { .. } => 6_000,
+        NativeCall::LifeCommandV1(_) => 9_000,
         NativeCall::NoOp => 100,
         NativeCall::SetChainEconomics { .. } => 10_000,
     }

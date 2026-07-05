@@ -45,10 +45,14 @@ pub enum ExecError {
     DuplicateWalletAnchor,
     #[error("duplicate proof commitment")]
     DuplicateProofCommitment,
+    #[error("duplicate life command")]
+    DuplicateLifeCommand,
     #[error("permissionless validator entry is disabled")]
     PermissionlessEntryDisabled,
     #[error("validator fingerprint is already registered")]
     ValidatorAlreadyRegistered,
     #[error("bonded stake is below minimum validator stake")]
     BelowMinValidatorStake,
+    #[error("protocol emission would exceed max supply")]
+    SupplyCapExceeded,
 }

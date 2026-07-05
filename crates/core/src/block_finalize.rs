@@ -4,6 +4,8 @@ use crate::address::Address;
 use crate::consensus_stake::distribute_fingerprint_block_reward;
 use crate::error::ExecError;
 use crate::state::{ConsensusUnbondEntry, State};
+use crate::tx::{LifeCommandKind, LifeCommandV1};
+use fractal_crypto::hash::keccak256;
 
 /// Inputs for [`finalize_block_hooks`] (deterministic; uses `block_timestamp_ms`, not wall clock).
 #[derive(Clone, Debug)]
@@ -19,6 +21,10 @@ pub struct BlockFinalizeContext<'a> {
     /// When `State.chain_economics.evm_base_fee_burn`, destroy `base_fee_per_gas * evm_gas_used` (mainnet).
     pub base_fee_per_gas: u128,
     pub evm_gas_used: u64,
+    /// Devnet feature flag for RealLifeAI epoch automation.
+    pub life_reaper_enabled: bool,
+    /// Epoch length used by the Life Reaper. Zero disables epoch detection.
+    pub life_epoch_length_ms: u64,
 }
 
 /// Per-validator bonded weight for stake-weighted QC (`docs/prd.md` §12.2).
@@ -53,6 +59,43 @@ pub fn finalize_block_hooks(
             if let Some(treasury) = state.accounts.get_mut(&ctx.treasury) {
                 treasury.balance = treasury.balance.saturating_sub(burn.min(treasury.balance));
             }
+        }
+    }
+
+    if ctx.life_reaper_enabled && ctx.life_epoch_length_ms > 0 {
+        let epoch = now / ctx.life_epoch_length_ms;
+        if epoch > 0 && state.life_reaper_epochs.insert(epoch) {
+            let payload_hash = keccak256(&epoch.to_le_bytes());
+            let command = LifeCommandV1 {
+                command_id: keccak256(
+                    &borsh::to_vec(&(b"life.reaper.v1", epoch, payload_hash))
+                        .map_err(|_| ExecError::InvalidShape)?,
+                ),
+                kind: LifeCommandKind::ReaperEpoch,
+                soul_id_hash: [0u8; 32],
+                counterparty_hash: None,
+                epoch,
+                amount_micro_credits: 0,
+                payload_hash,
+            };
+            let event_id = keccak256(
+                &borsh::to_vec(&(b"life.event.v1", state.life_events.len() as u64, &command))
+                    .map_err(|_| ExecError::InvalidShape)?,
+            );
+            state.life_commands.insert(command.command_id, crate::state::StoredLifeCommand {
+                signer: ctx.treasury,
+                command: command.clone(),
+                sequence: state.life_events.len() as u64,
+            });
+            state.life_events.push(crate::state::LifeChainEvent {
+                event_id,
+                command_id: command.command_id,
+                kind: command.kind,
+                soul_id_hash: command.soul_id_hash,
+                epoch: command.epoch,
+                amount_micro_credits: 0,
+                payload_hash: command.payload_hash,
+            });
         }
     }
 
@@ -165,6 +208,8 @@ mod tests {
             block_reward_wei: 1,
             base_fee_per_gas: 0,
             evm_gas_used: 0,
+            life_reaper_enabled: false,
+            life_epoch_length_ms: 0,
         };
 
         let err = finalize_block_hooks(&mut state, &ctx).unwrap_err();
