@@ -2,6 +2,7 @@
 # Build from repository root context is not used here; compose build context is `../..`.
 services:
   node:
+    restart: unless-stopped
     build:
       context: ../..
       dockerfile: testnets/devnet/Dockerfile
@@ -12,6 +13,9 @@ services:
       FRACTAL_RPC_ADDR: "0.0.0.0:8545"
       FRACTAL_P2P_LISTEN: "/ip4/0.0.0.0/udp/9010/quic-v1"
       FRACTAL_P2P_IDENTITY_PATH: "/data/p2p.key"
+      FRACTAL_BLOCK_RETENTION: "20000"
+      FRACTAL_NODE_SNAPSHOT_PATH: "/data/node.snapshot"
+      FRACTAL_SNAPSHOT_INTERVAL_BLOCKS: "1200"
     volumes:
       - node-data:/data
     networks:
@@ -30,8 +34,14 @@ services:
       timeout: 5s
       retries: 12
       start_period: 30s
+    logging:
+      driver: json-file
+      options:
+        max-size: "25m"
+        max-file: "3"
 
   faucet:
+    restart: unless-stopped
     build:
       context: ../..
       dockerfile: testnets/devnet/Dockerfile.faucet
@@ -42,6 +52,11 @@ services:
       FAUCET_BIND: "0.0.0.0:8088"
     depends_on:
       - node
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
 
   node1:
     profiles: ["multi"]

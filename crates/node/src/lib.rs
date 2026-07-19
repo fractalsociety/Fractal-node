@@ -6,11 +6,13 @@ pub mod p2p;
 pub use fractal_consensus::ValidatorSet;
 
 use std::collections::BTreeMap;
+use std::io::Write;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use borsh::BorshDeserialize;
+use borsh::{BorshDeserialize, BorshSerialize};
 use fractal_consensus::payload::{RlvrProofCommitmentV1, RlvrProofTypeTag};
 use fractal_consensus::{
     build_zone_blob_da_sidecar, coverage_manifest_for_circuit_version, da_encoded_bytes,
@@ -55,6 +57,27 @@ use thiserror::Error;
 use tokio::sync::Mutex;
 
 pub type NodeHandle = Arc<Mutex<NodeInner>>;
+
+const DEFAULT_BLOCK_RETENTION: usize = 100_000;
+const DEFAULT_SNAPSHOT_INTERVAL_BLOCKS: u64 = 1_200;
+const BLOCK_PRUNE_BATCH: usize = 1_024;
+const VOTE_RETENTION_BLOCKS: u64 = 128;
+const NODE_DISK_SNAPSHOT_VERSION: u8 = 1;
+
+#[derive(BorshSerialize, BorshDeserialize)]
+struct NodeDiskSnapshotV1 {
+    version: u8,
+    chain_id: u64,
+    shard_id: u32,
+    shard_count: u32,
+    height: u64,
+    view: u64,
+    head_hash: fractal_crypto::Hash256,
+    parent_qc_hash: fractal_crypto::Hash256,
+    state: State,
+    blocks: Vec<Block>,
+    base_fee: u128,
+}
 
 #[derive(Debug, Error)]
 pub enum SyncApplyError {
@@ -543,6 +566,12 @@ pub struct NodeInner {
     pub gas_limit: u64,
     pub fee_params: BaseFeeParams,
     pub blocks: Vec<Block>,
+    /// Maximum recent blocks retained in RAM. Historical execution data belongs in durable
+    /// storage; keeping an unbounded `Vec<Block>` eventually exhausts small validator hosts.
+    pub block_retention: usize,
+    /// Optional atomic state snapshot used by the standalone devnet deployment.
+    pub snapshot_path: Option<PathBuf>,
+    pub snapshot_interval_blocks: u64,
     pub pending_txs: BTreeMap<fractal_crypto::Hash256, Transaction>,
     pub mined_txs: BTreeMap<fractal_crypto::Hash256, (u64, fractal_crypto::Hash256, u32)>,
     /// Signed EIP-1559 bytes keyed by `keccak256(raw)` (RPC tx hash).
@@ -647,6 +676,9 @@ impl NodeInner {
             gas_limit: 60_000_000,
             fee_params: BaseFeeParams::default(),
             blocks: Vec::new(),
+            block_retention: DEFAULT_BLOCK_RETENTION,
+            snapshot_path: None,
+            snapshot_interval_blocks: DEFAULT_SNAPSHOT_INTERVAL_BLOCKS,
             pending_txs: BTreeMap::new(),
             mined_txs: BTreeMap::new(),
             eth_signed_raw: BTreeMap::new(),
@@ -665,6 +697,167 @@ impl NodeInner {
             p2p_connected_peers: AtomicU64::new(0),
             qc_diagnostics: QcDiagnostics::default(),
             route_trace_logger: None,
+        }
+    }
+
+    fn configure_history_from_env(&mut self) -> Result<(), String> {
+        self.block_retention = std::env::var("FRACTAL_BLOCK_RETENTION")
+            .ok()
+            .map(|raw| {
+                raw.trim()
+                    .parse::<usize>()
+                    .map_err(|e| format!("invalid FRACTAL_BLOCK_RETENTION={raw:?}: {e}"))
+            })
+            .transpose()?
+            .unwrap_or(DEFAULT_BLOCK_RETENTION)
+            .max(1);
+        self.snapshot_interval_blocks = std::env::var("FRACTAL_SNAPSHOT_INTERVAL_BLOCKS")
+            .ok()
+            .map(|raw| {
+                raw.trim()
+                    .parse::<u64>()
+                    .map_err(|e| format!("invalid FRACTAL_SNAPSHOT_INTERVAL_BLOCKS={raw:?}: {e}"))
+            })
+            .transpose()?
+            .unwrap_or(DEFAULT_SNAPSHOT_INTERVAL_BLOCKS)
+            .max(1);
+        self.snapshot_path = std::env::var_os("FRACTAL_NODE_SNAPSHOT_PATH").map(PathBuf::from);
+        Ok(())
+    }
+
+    fn retained_block(&self, height: u64) -> Option<&Block> {
+        self.blocks
+            .binary_search_by_key(&height, |block| block.header.height)
+            .ok()
+            .and_then(|index| self.blocks.get(index))
+    }
+
+    fn restore_disk_snapshot(&mut self) -> Result<bool, String> {
+        let Some(path) = self.snapshot_path.clone() else {
+            return Ok(false);
+        };
+        if !path.exists() {
+            return Ok(false);
+        }
+        let bytes = std::fs::read(&path)
+            .map_err(|e| format!("read node snapshot {}: {e}", path.display()))?;
+        let snapshot: NodeDiskSnapshotV1 = borsh::from_slice(&bytes)
+            .map_err(|e| format!("decode node snapshot {}: {e}", path.display()))?;
+        if snapshot.version != NODE_DISK_SNAPSHOT_VERSION {
+            return Err(format!(
+                "node snapshot {} version {} is unsupported",
+                path.display(),
+                snapshot.version
+            ));
+        }
+        if snapshot.chain_id != self.chain_id
+            || snapshot.shard_id != self.shard_id
+            || snapshot.shard_count != self.shard_count
+        {
+            return Err(format!(
+                "node snapshot {} network mismatch (chain={} shard={}/{})",
+                path.display(),
+                snapshot.chain_id,
+                snapshot.shard_id,
+                snapshot.shard_count
+            ));
+        }
+        if snapshot.height > 0 {
+            let tip = snapshot
+                .blocks
+                .last()
+                .ok_or_else(|| format!("node snapshot {} has no tip block", path.display()))?;
+            let tip_hash = header_hash(&tip.header)
+                .map_err(|e| format!("node snapshot {} tip hash: {e}", path.display()))?;
+            if tip.header.height != snapshot.height || tip_hash != snapshot.head_hash {
+                return Err(format!("node snapshot {} tip mismatch", path.display()));
+            }
+        }
+
+        self.height = snapshot.height;
+        self.view = snapshot.view;
+        self.head_hash = snapshot.head_hash;
+        self.parent_qc_hash = snapshot.parent_qc_hash;
+        self.state = snapshot.state;
+        self.blocks = snapshot.blocks;
+        self.base_fee = snapshot.base_fee;
+        self.vote_pool = VotePool::new();
+        self.pending_txs.clear();
+        self.mined_txs.clear();
+        self.eth_signed_raw.clear();
+        self.eth_rpc_to_internal_tx_hash.clear();
+        self.eth_internal_to_rpc_tx_hash.clear();
+        for block in self.blocks.clone() {
+            self.sync_rpc_index_from_block(&block);
+        }
+        self.prune_runtime_history();
+        Ok(true)
+    }
+
+    fn persist_disk_snapshot(&self, path: &Path) -> Result<(), String> {
+        let snapshot = NodeDiskSnapshotV1 {
+            version: NODE_DISK_SNAPSHOT_VERSION,
+            chain_id: self.chain_id,
+            shard_id: self.shard_id,
+            shard_count: self.shard_count,
+            height: self.height,
+            view: self.view,
+            head_hash: self.head_hash,
+            parent_qc_hash: self.parent_qc_hash,
+            state: self.state.clone(),
+            blocks: self.blocks.clone(),
+            base_fee: self.base_fee,
+        };
+        let bytes = borsh::to_vec(&snapshot).map_err(|e| format!("encode node snapshot: {e}"))?;
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)
+                .map_err(|e| format!("create snapshot directory {}: {e}", parent.display()))?;
+        }
+        let temporary = PathBuf::from(format!("{}.tmp", path.display()));
+        let mut file = std::fs::File::create(&temporary)
+            .map_err(|e| format!("create node snapshot {}: {e}", temporary.display()))?;
+        file.write_all(&bytes)
+            .map_err(|e| format!("write node snapshot {}: {e}", temporary.display()))?;
+        file.sync_all()
+            .map_err(|e| format!("sync node snapshot {}: {e}", temporary.display()))?;
+        std::fs::rename(&temporary, path).map_err(|e| {
+            format!(
+                "replace node snapshot {} with {}: {e}",
+                path.display(),
+                temporary.display()
+            )
+        })?;
+        Ok(())
+    }
+
+    fn prune_runtime_history(&mut self) {
+        if self.blocks.len() > self.block_retention {
+            let drop_count = self.blocks.len().saturating_sub(self.block_retention);
+            self.blocks.drain(..drop_count);
+        }
+        let min_vote_height = self
+            .height
+            .saturating_sub(VOTE_RETENTION_BLOCKS.saturating_sub(1));
+        self.vote_pool.prune_below_height(min_vote_height);
+    }
+
+    fn maintain_runtime_history_after_commit(&mut self) {
+        if self.height % BLOCK_PRUNE_BATCH as u64 == 0 {
+            self.prune_runtime_history();
+        }
+        if self.height % self.snapshot_interval_blocks == 0 {
+            if let Some(path) = self.snapshot_path.as_deref() {
+                if let Err(error) = self.persist_disk_snapshot(path) {
+                    eprintln!("fractal-node: snapshot persist failed: {error}");
+                } else {
+                    eprintln!(
+                        "fractal-node: snapshot persisted height={} blocks={} path={}",
+                        self.height,
+                        self.blocks.len(),
+                        path.display()
+                    );
+                }
+            }
         }
     }
 
@@ -1052,7 +1245,9 @@ impl NodeInner {
         let header_hash = vote.header_hash;
         let outcome = self.vote_pool.record(vote, &self.validators);
         let count = self.vote_pool.count(view, header_hash);
-        if height == 2 || matches!(outcome, RecordVoteOutcome::ReachedQuorum) {
+        if height <= 2
+            || (matches!(outcome, RecordVoteOutcome::ReachedQuorum) && height % 1_000 == 0)
+        {
             let signers = self.vote_pool.signer_indices(view, header_hash);
             eprintln!(
                 "fractal-node: vote_pool height={height} view={view} header_hash={} votes={count}/{} signers={signers:?} outcome={outcome:?}",
@@ -1385,7 +1580,9 @@ impl NodeInner {
         let expected_parent_qc = if self.height == 0 {
             hash_qc(&genesis_parent_qc())?
         } else {
-            let parent_block = &self.blocks[(self.height - 1) as usize];
+            let parent_block = self
+                .retained_block(self.height)
+                .ok_or(SyncApplyError::ParentHash)?;
             expected_parent_qc_for_parent_header(&parent_block.header)?
         };
         if block.header.parent_qc_hash != expected_parent_qc {
@@ -1453,6 +1650,7 @@ impl NodeInner {
         self.record_committed_da_metrics(block);
         self.sync_rpc_index_from_block(block);
         self.forward_vote_after_commit(block);
+        self.maintain_runtime_history_after_commit();
         Ok(())
     }
 
@@ -1514,10 +1712,7 @@ impl NodeInner {
 
     /// Sum of log counts for transactions before `tx_index` in `block_number`.
     fn log_index_base_in_block(&self, block_number: u64, tx_index: u32) -> u64 {
-        let Some(idx) = block_number.checked_sub(1).map(|x| x as usize) else {
-            return 0;
-        };
-        let Some(block) = self.blocks.get(idx) else {
+        let Some(block) = self.retained_block(block_number) else {
             return 0;
         };
         let mut n = 0u64;
@@ -1683,8 +1878,7 @@ impl ChainInteraction for NodeInner {
         if number == 0 {
             return Some(genesis_parent_hash());
         }
-        let idx = number.checked_sub(1)? as usize;
-        let b = self.blocks.get(idx)?;
+        let b = self.retained_block(number)?;
         header_hash(&b.header).ok()
     }
 
@@ -1788,8 +1982,7 @@ impl ChainInteraction for NodeInner {
             if *bn == 0 {
                 return None;
             }
-            let bi = (*bn as usize).checked_sub(1)?;
-            let block = self.blocks.get(bi)?;
+            let block = self.retained_block(*bn)?;
             return block.transactions.get(*idx as usize).cloned();
         }
         for b in &self.blocks {
@@ -1877,11 +2070,7 @@ impl ChainInteraction for NodeInner {
         let end = filter.to_block.max(1);
 
         for height in start..=end {
-            let idx = match height.checked_sub(1) {
-                Some(i) => i as usize,
-                None => continue,
-            };
-            let Some(block) = self.blocks.get(idx) else {
+            let Some(block) = self.retained_block(height) else {
                 continue;
             };
             let bh = match header_hash(&block.header) {
@@ -2835,6 +3024,7 @@ pub async fn try_produce_one_tick(node: &NodeHandle) -> ProduceTickOutcome {
             n.forward_vote_after_commit(&block);
             n.record_committed_da_metrics(&block);
             n.blocks.push(block);
+            n.maintain_runtime_history_after_commit();
             ProduceTickOutcome::Produced(n.height)
         }
         Err(e) => {
@@ -2871,6 +3061,23 @@ pub async fn run_dev() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     inner.shard_id = shard_id_from_env();
     inner.shard_count = shard_count_from_env();
     inner.consensus_mode = consensus_mode_from_env();
+    inner
+        .configure_history_from_env()
+        .map_err(std::io::Error::other)?;
+    if inner
+        .restore_disk_snapshot()
+        .map_err(std::io::Error::other)?
+    {
+        eprintln!(
+            "fractal-node: restored snapshot height={} retained_blocks={} path={}",
+            inner.height,
+            inner.blocks.len(),
+            inner
+                .snapshot_path
+                .as_deref()
+                .map_or_else(|| "disabled".into(), |path| path.display().to_string())
+        );
+    }
     let proof_required = proof_required_settlement_from_env();
     inner.set_protocol_phase_config(protocol_phase_config_from_env());
     inner.set_native_transition_proofs_enabled(native_transition_proofs_enabled_from_env());
@@ -2884,7 +3091,7 @@ pub async fn run_dev() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     attach_rlvr_route_trace_logger(&mut inner, "fractal-node");
     inner.set_vote_sink(Some(vote_tx));
     eprintln!(
-        "fractal-node: settlement_finality={} block_payload_mode={} rlvr_enabled={} rlvr_chain_commit_enabled={} rlvr_raw_data_on_chain={}",
+        "fractal-node: settlement_finality={} block_payload_mode={} rlvr_enabled={} rlvr_chain_commit_enabled={} rlvr_raw_data_on_chain={} block_retention={} snapshot_interval_blocks={}",
         if inner.settlement_requires_proof() {
             "proof"
         } else {
@@ -2893,7 +3100,9 @@ pub async fn run_dev() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         inner.block_payload_mode().as_str(),
         inner.chain_config.rlvr.enabled,
         inner.chain_config.rlvr.chain_commit_enabled,
-        inner.chain_config.rlvr.raw_data_on_chain
+        inner.chain_config.rlvr.raw_data_on_chain,
+        inner.block_retention,
+        inner.snapshot_interval_blocks
     );
     inner.log_startup_consensus_diagnostics("fractal-node");
     let node: NodeHandle = Arc::new(Mutex::new(inner));
@@ -3012,6 +3221,19 @@ pub async fn run_follower() -> Result<(), Box<dyn std::error::Error + Send + Syn
     inner.shard_id = shard_id_from_env();
     inner.shard_count = shard_count_from_env();
     inner.consensus_mode = consensus_mode_from_env();
+    inner
+        .configure_history_from_env()
+        .map_err(std::io::Error::other)?;
+    if inner
+        .restore_disk_snapshot()
+        .map_err(std::io::Error::other)?
+    {
+        eprintln!(
+            "fractal-node follower: restored snapshot height={} retained_blocks={}",
+            inner.height,
+            inner.blocks.len()
+        );
+    }
     let proof_required = proof_required_settlement_from_env();
     inner.set_protocol_phase_config(protocol_phase_config_from_env());
     inner.set_native_transition_proofs_enabled(native_transition_proofs_enabled_from_env());
@@ -3055,4 +3277,76 @@ pub async fn run_follower() -> Result<(), Box<dyn std::error::Error + Send + Syn
     tokio::signal::ctrl_c().await?;
     handle.stop()?;
     Ok(())
+}
+
+#[cfg(test)]
+mod operational_storage_tests {
+    use super::*;
+
+    fn append_empty_block(node: &mut NodeInner) {
+        let height = node.height + 1;
+        let view = node.view;
+        let block = execute_and_build_block(
+            node.chain_id,
+            height,
+            view,
+            node.head_hash,
+            node.parent_qc_hash,
+            node.validators.expected_proposer(view),
+            height * 500,
+            node.gas_limit,
+            &mut node.state,
+            Vec::new(),
+            Vec::new(),
+        )
+        .expect("build empty block");
+        let hash = header_hash(&block.header).expect("header hash");
+        node.height = height;
+        node.view = view + 1;
+        node.head_hash = hash;
+        node.parent_qc_hash =
+            next_parent_qc_hash_after_commit(&block.header, hash).expect("next parent QC");
+        node.blocks.push(block);
+    }
+
+    #[test]
+    fn runtime_history_retains_only_recent_blocks_by_height() {
+        let mut node = NodeInner::devnet();
+        node.block_retention = 2;
+        for _ in 0..5 {
+            append_empty_block(&mut node);
+        }
+
+        node.prune_runtime_history();
+
+        assert_eq!(node.blocks.len(), 2);
+        assert_eq!(node.blocks[0].header.height, 4);
+        assert!(node.retained_block(1).is_none());
+        assert_eq!(node.retained_block(5).unwrap().header.height, 5);
+    }
+
+    #[test]
+    fn disk_snapshot_round_trip_restores_tip_state() {
+        let unique = format!("fractal-node-snapshot-{}-{}", std::process::id(), now_ms());
+        let path = std::env::temp_dir().join(unique);
+        let mut node = NodeInner::devnet();
+        node.snapshot_path = Some(path.clone());
+        node.block_retention = 2;
+        for _ in 0..3 {
+            append_empty_block(&mut node);
+        }
+        node.prune_runtime_history();
+        node.persist_disk_snapshot(&path).expect("persist snapshot");
+
+        let mut restored = NodeInner::devnet();
+        restored.snapshot_path = Some(path.clone());
+        restored.block_retention = 2;
+        assert!(restored.restore_disk_snapshot().expect("restore snapshot"));
+        assert_eq!(restored.height, node.height);
+        assert_eq!(restored.head_hash, node.head_hash);
+        assert_eq!(restored.state, node.state);
+        assert_eq!(restored.blocks, node.blocks);
+
+        std::fs::remove_file(path).expect("remove test snapshot");
+    }
 }
